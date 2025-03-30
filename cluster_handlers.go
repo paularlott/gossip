@@ -12,6 +12,7 @@ func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandler(indirectPingAckMsg, false, c.handleIndirectPingAck)
 
 	c.handlers.registerConnHandler(nodeJoinMsg, c.handleJoin)
+	c.handlers.registerHandler(nodeJoiningMsg, true, c.handleJoining)
 	c.handlers.registerConnHandler(pushPullStateMsg, c.handlePushPullState)
 
 	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
@@ -83,7 +84,16 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 		// Add the node to our list of peers
 		c.nodes.addIfNotExists(targetNode)
 
-		// TODO if added then gossip the node to our peers?
+		// Gossip the node to our peers
+		join := joinMessage{
+			ID:             ping.TargetID,
+			AdvertisedAddr: ping.AdvertisedAddr,
+		}
+		packet, err := c.transport.buildPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
+		if err != nil {
+			return err
+		}
+		c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, ping.TargetID, packet.SenderID})
 	}
 
 	return nil
@@ -127,7 +137,23 @@ func (c *Cluster) handleJoin(conn net.Conn, sender *Node, packet *Packet) error 
 	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
 	c.nodes.addOrUpdate(node)
 
-	// TODO Gossip the new node to our peers
+	// Gossip the node to our peers
+	packet.MessageType = nodeJoiningMsg
+	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
+
+	return nil
+}
+
+func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
+	var joinMsg joinMessage
+
+	err := packet.Unmarshal(&joinMsg)
+	if err != nil {
+		return err
+	}
+
+	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
+	c.nodes.addOrUpdate(node)
 
 	return nil
 }

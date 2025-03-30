@@ -34,33 +34,6 @@ type Config struct {
 	PingTimeout                   time.Duration // Timeout for ping operations, should be less than HealthCheckInterval
 	MaxParallelSuspectEvaluations int           // Max number of parallel evaluations for suspect nodes
 	TTLMultiplier                 float64       // Multiplier for TTL, used to determine how many hops a message can take
-
-	/*
-		   // GarbageCollectionInterval is the duration between garbage collection operations
-		   GarbageCollectionInterval time.Duration
-
-		   // HealthCheckInterval is the duration between health checks
-		   HealthCheckInterval time.Duration
-
-		   // MinPeersToCheck is the minimum number of peers to check in a health check cycle
-		   MinPeersToCheck int
-
-
-		   // SuspectFailureMultiplier is the multiplier for the number of suspect states before a node is considered dead
-		   SuspectFailureMultiplier float64
-
-		   // DeadMultiplier is the multiplier for the number of dead states before a node is removed
-		   DeadMultiplier float64
-
-		   // LeaveTimeout is the duration to wait for a leave message to be sent
-		   LeaveTimeout time.Duration
-
-		// PushInterval is the duration between push operations
-		PushInterval time.Duration
-
-
-
-	*/
 }
 
 // MergeDefault merges the default config with the given config to ensure all fields are set
@@ -139,32 +112,6 @@ func (c *Config) MergeDefault() *Config {
 		c.TTLMultiplier = defaultConfig.TTLMultiplier
 	}
 
-	/*	if c.GarbageCollectionInterval == 0 {
-			c.GarbageCollectionInterval = defaultConfig.GarbageCollectionInterval
-		}
-		if c.HealthCheckInterval == 0 {
-			c.HealthCheckInterval = defaultConfig.HealthCheckInterval
-		}
-		if c.MinPeersToCheck == 0 {
-			c.MinPeersToCheck = defaultConfig.MinPeersToCheck
-		}
-		if c.PingTimeout == 0 {
-			c.PingTimeout = defaultConfig.PingTimeout
-		}
-		if c.SuspectFailureMultiplier == 0 {
-			c.SuspectFailureMultiplier = defaultConfig.SuspectFailureMultiplier
-		}
-		if c.DeadMultiplier == 0 {
-			c.DeadMultiplier = defaultConfig.DeadMultiplier
-		}
-		if c.LeaveTimeout == 0 {
-			c.LeaveTimeout = defaultConfig.LeaveTimeout
-		}
-
-		if c.PushInterval == 0 {
-			c.PushInterval = defaultConfig.PushInterval
-		}
-	*/
 	return c
 }
 
@@ -195,14 +142,5 @@ func DefaultConfig() *Config {
 		PingTimeout:                   500 * time.Millisecond,
 		MaxParallelSuspectEvaluations: 4,
 		TTLMultiplier:                 2,
-
-		/* 		GarbageCollectionInterval: 2 * time.Second,
-		   		HealthCheckInterval:       1 * time.Second,
-		   		MinPeersToCheck:           10,
-		   		SuspectFailureMultiplier:  4,
-		   		DeadMultiplier:            10,
-		   		LeaveTimeout:              5 * time.Second,
-		   		SendWorkers:               4,
-		   		PushInterval:              30 * time.Second, */
 	}
 }

@@ -18,6 +18,7 @@ const (
 	indirectPingAckMsg                     // Sent in response to an indirect ping message
 	nodeJoinMsg                            // Sent by peers when they are joining the network, as doing a push / pull state transfer
 	nodeJoinAckMsg                         // Sent by the node that is handling join to acknowledge the joiner
+	nodeJoiningMsg                         // Sent by the node that is handling join to announce the joiner to the cluster
 	pushPullStateMsg                       // Sent by peers when pushing / pulling state
 	pushPullStateAckMsg                    // Acknowledgement of the push state message
 	aliveMsg                               // Sent to announce a node is alive
