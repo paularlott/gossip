@@ -232,20 +232,20 @@ func TestForAllInState(t *testing.T) {
 
 	// Test forAllInState for alive nodes
 	count := 0
-	nl.forAllInState(nodeAlive, func(node *Node) bool {
+	nl.forAllInStates([]NodeState{nodeAlive}, func(node *Node) bool {
 		if node.state != nodeAlive {
-			t.Errorf("forAllInState(nodeAlive) called with node in state %v", node.state)
+			t.Errorf("forAllInStates(nodeAlive) called with node in state %v", node.state)
 		}
 		count++
 		return true
 	})
 	if got, want := count, 4; got != want {
-		t.Errorf("forAllInState(nodeAlive) processed %v nodes, want %v", got, want)
+		t.Errorf("forAllInStates(nodeAlive) processed %v nodes, want %v", got, want)
 	}
 
 	// Test early termination
 	count = 0
-	nl.forAllInState(nodeSuspect, func(node *Node) bool {
+	nl.forAllInStates([]NodeState{nodeSuspect}, func(node *Node) bool {
 		count++
 		return count < 2 // Stop after processing 1 node
 	})

@@ -34,7 +34,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	// Merge the config with the default so all fields are set
 	if config == nil {
-		config = defaultConfig()
+		config = DefaultConfig()
 	} else {
 		config.MergeDefault()
 	}
@@ -82,7 +82,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	// Start the workers
-	for i := 0; i < config.SendWorkers; i++ {
+	for range config.NumSendWorkers {
 		go cluster.broadcastWorker()
 	}
 	go cluster.acceptPackets()
@@ -99,6 +99,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 }
 
 func (c *Cluster) Stop() {
+	if c.localNode.state != nodeLeaving {
+		c.Leave()
+	}
+
 	if c.healthMonitor != nil {
 		c.healthMonitor.stop()
 	}
@@ -176,6 +180,22 @@ func (c *Cluster) Join(peers []string) error {
 	return nil
 }
 
+// MMarks the local node as leaving and broadcasts this state to the cluster
+func (c *Cluster) Leave() {
+	log.Info().Msg("Local node is leaving the cluster")
+
+	c.healthMonitor.MarkNodeLeaving(c.localNode)
+
+	// Broadcast leaving message multiple times to increase chance of delivery
+	for i := 0; i < 3; i++ {
+		c.healthMonitor.broadcastLeaving(c.localNode)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Give some time for the message to propagate
+	time.Sleep(200 * time.Millisecond)
+}
+
 func (c *Cluster) acceptPackets() {
 	for {
 		select {
@@ -208,8 +228,6 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 	h := c.handlers.getHandler(packet.MessageType)
 	if h != nil {
 		if h.forward {
-			log.Debug().Msgf("Forwarding message: %d from %s", packet.MessageType, packet.SenderID)
-
 			var transportType TransportType
 			if incomingPacket.conn != nil {
 				transportType = TransportReliable
@@ -251,12 +269,7 @@ func (c *Cluster) getMaxTTL() uint8 {
 
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node) error {
-	// TODO implement state exchange
-	log.Debug().Msg("State exchange not implemented yet")
-
-	nodes := c.nodes.getRandomNodes(10, []NodeID{c.localNode.ID})
-	fmt.Println("Random nodes:", nodes)
-	fmt.Println("to get ", c.nodes.getLiveCount(), c.getPeerSubsetSize(c.nodes.getLiveCount(), c.config.StatePushPullMultiplier), "nodes")
+	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), []NodeID{})
 
 	var peerStates []pushPullState
 	for _, n := range nodes {
@@ -264,7 +277,7 @@ func (c *Cluster) exchangeState(node *Node) error {
 			ID:              n.ID,
 			AdvertisedAddr:  n.advertisedAddr,
 			State:           n.state,
-			LastStateUpdate: time.Now().UnixNano(), // TODO this needs to be from the state
+			StateChangeTime: n.stateChangeTime.UnixNano(),
 		})
 	}
 
@@ -273,10 +286,7 @@ func (c *Cluster) exchangeState(node *Node) error {
 		return err
 	}
 
-	fmt.Println("Received push pull state from", node.ID, "with", len(peerStates), "states")
-
-	// TODO implement state merge
-	// if node is suspect then add a vote from the peer we're exchanging with
+	c.healthMonitor.combineRemoteNodeState(node, peerStates)
 
 	return nil
 }
@@ -312,12 +322,6 @@ func (c *Cluster) broadcastWorker() {
 					log.Warn().Err(err).Msgf("Failed to send packet to peer %s", peer.ID)
 				}
 			}
-
-			// TODO Implement waiting for leave message
-			/* 			// If this node sent a leave packet then notify that it has been sent
-			   			if item.packet.MessageType == peerLeaveMsg && item.packet.SenderID == cluster.localPeer.ID {
-			   				c.leaveSent <- struct{}{}
-			   			} */
 
 		case <-c.shutdownContext.Done():
 			return

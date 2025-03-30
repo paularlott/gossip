@@ -347,24 +347,20 @@ func (nl *nodeList) getLiveCount() int {
 	return int(nl.liveCount.Load())
 }
 
-// forAllInState executes a function for all nodes in the specified state
+// forAllInState executes a function for all nodes in the specified states
 // The callback function can return false to stop iteration
-func (nl *nodeList) forAllInState(state NodeState, callback func(*Node) bool) {
+func (nl *nodeList) forAllInStates(states []NodeState, callback func(*Node) bool) {
 	for _, shard := range nl.shards {
 		shard.mutex.RLock()
 
-		// Get the map of nodes in the specified state
-		nodes, exists := shard.byState[state]
-		if !exists || len(nodes) == 0 {
-			shard.mutex.RUnlock()
-			continue // Skip this shard if it has no nodes in this state
-		}
-
-		// Create a copy of the nodes to avoid holding the lock during callback execution
-		// This prevents potential deadlocks if the callback modifies the node list
-		nodesCopy := make([]*Node, 0, len(nodes))
-		for _, node := range nodes {
-			nodesCopy = append(nodesCopy, node)
+		// Collect nodes from all specified states
+		nodesCopy := make([]*Node, 0)
+		for _, state := range states {
+			if nodesInState, exists := shard.byState[state]; exists {
+				for _, node := range nodesInState {
+					nodesCopy = append(nodesCopy, node)
+				}
+			}
 		}
 
 		shard.mutex.RUnlock()
@@ -378,10 +374,10 @@ func (nl *nodeList) forAllInState(state NodeState, callback func(*Node) bool) {
 	}
 }
 
-func (nl *nodeList) getAllInState(state NodeState) []*Node {
+func (nl *nodeList) getAllInStates(states []NodeState) []*Node {
 	nodes := make([]*Node, 0)
 
-	nl.forAllInState(state, func(node *Node) bool {
+	nl.forAllInStates(states, func(node *Node) bool {
 		nodes = append(nodes, node)
 		return true
 	})

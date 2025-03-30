@@ -3,7 +3,6 @@ package gossip
 import (
 	"fmt"
 	"net"
-	"time"
 )
 
 func (c *Cluster) registerSystemHandlers() {
@@ -17,13 +16,10 @@ func (c *Cluster) registerSystemHandlers() {
 
 	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
 	c.handlers.registerHandler(suspicionMsg, true, c.healthMonitor.handleSuspicion)
+	c.handlers.registerHandler(leavingMsg, true, c.healthMonitor.handleLeaving)
 }
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
 	ping := pingMessage{}
 	if err := packet.Unmarshal(&ping); err != nil {
 		return err
@@ -32,6 +28,12 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 	// Check if the ping is for us
 	if ping.TargetID != c.localNode.ID {
 		return nil
+	}
+
+	// If we don't know the sender then generate a temporary node and add it to our list of peers
+	if sender == nil {
+		sender = newNode(packet.SenderID, ping.FromAddr)
+		c.nodes.addIfNotExists(sender)
 	}
 
 	// Echo the ping back to the sender
@@ -55,10 +57,6 @@ func (c *Cluster) handlePingAck(sender *Node, packet *Packet) error {
 func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	var err error
 
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
 	ping := indirectPingMessage{}
 	if err = packet.Unmarshal(&ping); err != nil {
 		return err
@@ -67,6 +65,12 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	// Create a temporary node for the target
 	targetNode := newNode(ping.TargetID, ping.AdvertisedAddr)
 	ping.Ok, err = c.healthMonitor.pingNode(targetNode)
+
+	// If we don't know the sender then generate a temporary node and add it to our list of peers
+	if sender == nil {
+		sender = newNode(packet.SenderID, ping.FromAddr)
+		c.nodes.addIfNotExists(sender)
+	}
 
 	// Respond to the sender with the ping acknowledgment
 	err = c.transport.sendMessage(TransportBestEffort, sender, c.localNode.ID, indirectPingAckMsg, 1, &ping)
@@ -140,13 +144,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 		return err
 	}
 
-	fmt.Println("Received push pull state from", sender.ID, "with", len(peerStates), "states")
-
-	// TODO Finish this
-
-	nodes := c.nodes.getRandomNodes(10, []NodeID{sender.ID})
-	fmt.Println("Random nodes:", nodes)
-	fmt.Println("to get ", c.nodes.getLiveCount(), c.getPeerSubsetSize(c.nodes.getLiveCount(), c.config.StatePushPullMultiplier), "nodes")
+	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), []NodeID{})
 
 	var localStates []pushPullState
 	for _, n := range nodes {
@@ -154,7 +152,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 			ID:              n.ID,
 			AdvertisedAddr:  n.advertisedAddr,
 			State:           n.state,
-			LastStateUpdate: time.Now().UnixNano(), // TODO this needs to be from the state
+			StateChangeTime: n.stateChangeTime.UnixNano(),
 		})
 	}
 
@@ -163,20 +161,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 		return err
 	}
 
-	// TODO merge states
+	c.healthMonitor.combineRemoteNodeState(sender, peerStates)
 
 	return nil
-
-	/*
-		 	// Return our list of peers
-			selfPeerStates := cluster.getPeerStateList()
-			err = cluster.transport.WriteMessage(conn, cluster.localPeer.ID, pushPullStateAckMsg, &selfPeerStates)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to send push state message")
-				return
-			}
-
-			// Combine the peer states with the current node's state
-			cluster.combinePeerList(peerStates)
-	*/
 }

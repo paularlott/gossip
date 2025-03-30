@@ -21,7 +21,7 @@ type Config struct {
 	MsgHistoryShardCount          int           // MessageHistoryShardCount is the number of shards to use for storing message history, 16 for up to 50 nodes, 32 for up to 500 nodes and 64 for larger clusters.
 	NodeShardCount                int           // NodeShardCount is the number of shards to use for storing node information, 4 for up to 50 nodes, 16 for up to 500 nodes and 32 for larger clusters.
 	StatePushPullMultiplier       float64       // StatePushPullMultiplier is the multiplier for the number of states to push/pull at a time
-	SendWorkers                   int           // SendWorkers is the number of workers to use for sending messages
+	NumSendWorkers                int           // The number of workers to use for sending messages
 	SendQueueSize                 int           // SendQueueSize is the size of the send queue
 	HealthCheckInterval           time.Duration // How often to perform health checks
 	HealthCheckSampleSize         int           // Number of random nodes to check each interval
@@ -65,7 +65,7 @@ type Config struct {
 
 // MergeDefault merges the default config with the given config to ensure all fields are set
 func (c *Config) MergeDefault() *Config {
-	defaultConfig := defaultConfig()
+	defaultConfig := DefaultConfig()
 	if c.BindAddr == "" {
 		c.BindAddr = defaultConfig.BindAddr
 	}
@@ -102,8 +102,8 @@ func (c *Config) MergeDefault() *Config {
 	if c.StatePushPullMultiplier == 0 {
 		c.StatePushPullMultiplier = defaultConfig.StatePushPullMultiplier
 	}
-	if c.SendWorkers == 0 {
-		c.SendWorkers = defaultConfig.SendWorkers
+	if c.NumSendWorkers == 0 {
+		c.NumSendWorkers = defaultConfig.NumSendWorkers
 	}
 	if c.SendQueueSize == 0 {
 		c.SendQueueSize = defaultConfig.SendQueueSize
@@ -168,7 +168,7 @@ func (c *Config) MergeDefault() *Config {
 	return c
 }
 
-func defaultConfig() *Config {
+func DefaultConfig() *Config {
 	return &Config{
 		BindAddr:                      "127.0.0.1:8000",
 		AdvertiseAddr:                 "",
@@ -182,7 +182,7 @@ func defaultConfig() *Config {
 		MsgHistoryShardCount:          16,
 		NodeShardCount:                4,
 		StatePushPullMultiplier:       2.5,
-		SendWorkers:                   4,
+		NumSendWorkers:                4,
 		SendQueueSize:                 128,
 		HealthCheckInterval:           1 * time.Second,
 		HealthCheckSampleSize:         7,
