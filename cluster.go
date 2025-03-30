@@ -35,8 +35,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Merge the config with the default so all fields are set
 	if config == nil {
 		config = DefaultConfig()
-	} else {
-		config.MergeDefault()
+	}
+
+	if config.AdvertiseAddr == "" {
+		config.AdvertiseAddr = config.BindAddr
 	}
 
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.

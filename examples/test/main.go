@@ -30,11 +30,12 @@ func main() {
 		peers = strings.Split(*peersArg, ",")
 	}
 
-	cluster, err := gossip.NewCluster(&gossip.Config{
-		BindAddr:      fmt.Sprintf("127.0.0.1:%d", *port),
-		AdvertiseAddr: "",
-		EncryptionKey: "1234567890123456",
-	})
+	config := gossip.DefaultConfig()
+	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
+	config.AdvertiseAddr = ""
+	config.EncryptionKey = "1234567890123456"
+
+	cluster, err := gossip.NewCluster(config)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
