@@ -152,26 +152,10 @@ func (c *Cluster) Join(peers []string) error {
 		node.ID = joinMsg.ID
 		node.advertisedAddr = joinMsg.AdvertisedAddr
 		if c.nodes.addIfNotExists(node) {
-
-			// TODO implement node state exchange
-			log.Debug().Msg("do a state exchange here")
-
 			err = c.exchangeState(node)
 			if err != nil {
 				log.Warn().Err(err).Msgf("Failed to exchange state with peer %s", peerAddr)
 			}
-
-			// TODO testing ping
-			alive, err := c.healthMonitor.pingNode(node)
-			if err != nil {
-				log.Warn().Err(err).Msgf("Failed to ping peer %s", peerAddr)
-			}
-			if alive {
-				log.Debug().Msgf("Ping to peer %s was successful", peerAddr)
-			} else {
-				log.Warn().Msgf("Ping to peer %s failed", peerAddr)
-			}
-
 		}
 
 		log.Info().Msgf("Joined peer: %s", peerAddr)

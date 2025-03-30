@@ -63,15 +63,22 @@ func (hm *healthMonitor) stop() {
 	hm.shutdownCancel()
 }
 
+func (hm *healthMonitor) cleanNodeState(nodeID NodeID) {
+	hm.suspicionMap.Delete(nodeID)
+	hm.nodeFailures.Delete(nodeID)
+}
+
 func (hm *healthMonitor) healthCheckLoop() {
 	// Create a ticker for periodic health checks
 	checkTicker := time.NewTicker(hm.config.HealthCheckInterval)
 	suspectTicker := time.NewTicker(hm.config.SuspectTimeout)
 	deadNodeTicker := time.NewTicker(hm.config.DeadNodeTimeout)
+	cleanupTicker := time.NewTicker(hm.config.DeadNodeTimeout * 5)
 
 	defer checkTicker.Stop()
 	defer suspectTicker.Stop()
 	defer deadNodeTicker.Stop()
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -86,7 +93,48 @@ func (hm *healthMonitor) healthCheckLoop() {
 
 		case <-deadNodeTicker.C:
 			hm.cleanupDeadNodes()
+
+		case <-cleanupTicker.C:
+			hm.cleanupNodeFailures()
 		}
+	}
+}
+
+// cleanupNodeFailures removes entries from the nodeFailures map that
+// are no longer needed (nodes are healthy or no longer in the cluster)
+func (hm *healthMonitor) cleanupNodeFailures() {
+	// Track nodes to clean
+	var nodesToClean []NodeID
+
+	// First pass: find candidates for removal
+	hm.nodeFailures.Range(func(key, value interface{}) bool {
+		nodeID := key.(NodeID)
+		failTracker := value.(*nodeFailureCount)
+
+		// Check if node exists
+		node := hm.cluster.nodes.get(nodeID)
+		if node == nil {
+			// Node doesn't exist, mark for cleanup
+			nodesToClean = append(nodesToClean, nodeID)
+			return true
+		}
+
+		// If node is healthy and failure count is 0, clean it up
+		if node.state == nodeAlive && failTracker.count.Load() == 0 {
+			nodesToClean = append(nodesToClean, nodeID)
+		}
+
+		return true
+	})
+
+	// Second pass: delete entries
+	for _, nodeID := range nodesToClean {
+		hm.nodeFailures.Delete(nodeID)
+	}
+
+	if len(nodesToClean) > 0 {
+		log.Debug().Int("cleaned_count", len(nodesToClean)).
+			Msg("Cleaned up node failure trackers")
 	}
 }
 
@@ -105,6 +153,66 @@ func (hm *healthMonitor) checkRandomNodes() {
 
 // Check health for a single node
 func (hm *healthMonitor) checkNodeHealth(node *Node) {
+	// Skip if node is already marked dead or leaving
+	if node.state == nodeDead || node.state == nodeLeaving {
+		return
+	}
+
+	alive, err := hm.pingAny(node)
+	if alive {
+		if _, exists := hm.nodeFailures.Load(node.ID); exists {
+			hm.nodeFailures.Delete(node.ID)
+		}
+
+		// If node was suspect, restore to alive
+		if node.state == nodeSuspect {
+			log.Info().Str("node", node.ID.String()).Msg("Suspect node is now reachable, marking as alive")
+			hm.cluster.nodes.updateState(node.ID, nodeAlive)
+
+			hm.cleanNodeState(node.ID)
+		}
+
+		return
+	}
+
+	// Get or create failure tracker
+	failCountObj, _ := hm.nodeFailures.LoadOrStore(
+		node.ID,
+		&nodeFailureCount{},
+	)
+	failTracker := failCountObj.(*nodeFailureCount)
+
+	// Update last check time
+	failTracker.lastCheckTime.Store(time.Now().Unix())
+
+	// Both direct and indirect pings failed
+	currentFailures := failTracker.count.Add(1)
+
+	// Log the failure
+	if err != nil {
+		log.Debug().Err(err).Str("node", node.ID.String()).
+			Int32("failures", currentFailures).
+			Msg("Node health check failed")
+	} else {
+		log.Debug().Str("node", node.ID.String()).
+			Int32("failures", currentFailures).
+			Msg("Node did not respond to health check")
+	}
+
+	// Mark node as suspect after sufficient failures
+	if currentFailures >= int32(hm.config.SuspectThreshold) && node.state == nodeAlive {
+		log.Info().Str("node", node.ID.String()).
+			Int32("failures", currentFailures).
+			Msg("Node exceeded failure threshold, marking as suspect")
+
+		hm.cluster.nodes.updateState(node.ID, nodeSuspect)
+
+		// Broadcast the suspect status
+		hm.broadcastSuspicion(node)
+	}
+}
+
+func (hm *healthMonitor) XXXXXXXXcheckNodeHealth(node *Node) {
 	// Skip if node is already marked dead or leaving
 	if node.state == nodeDead || node.state == nodeLeaving {
 		return
@@ -131,7 +239,7 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 			hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
 			// Clean up any suspicion evidence
-			hm.suspicionMap.Delete(node.ID)
+			hm.cleanNodeState(node.ID)
 		}
 		return
 	}
@@ -249,6 +357,9 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 			Msg("Suspect node reported alive by multiple peers, restoring to alive")
 
 		hm.cluster.nodes.updateState(node.ID, nodeAlive)
+
+		// Clean up any suspicion evidence
+		hm.cleanNodeState(node.ID)
 		return
 	}
 
@@ -261,6 +372,9 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 				Msg("Suspect node responded after timeout, marking as alive")
 
 			hm.cluster.nodes.updateState(node.ID, nodeAlive)
+
+			// Clean up tracking
+			hm.nodeFailures.Delete(node.ID)
 		} else {
 			log.Info().Str("node", node.ID.String()).
 				Msg("Suspect node timed out and is unreachable, marking as dead")
@@ -303,8 +417,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 			hm.cluster.nodes.remove(node.ID)
 
 			// Clean up any suspicion tracking
-			hm.suspicionMap.Delete(node.ID)
-			hm.nodeFailures.Delete(node.ID)
+			hm.cleanNodeState(node.ID)
 		}
 	}
 }
@@ -459,6 +572,10 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 				Msg("Node reported alive and confirmed by ping, marking as alive")
 
 			hm.cluster.nodes.updateState(aliveNode.ID, nodeAlive)
+
+			// Clean up any suspicion evidence
+			hm.cleanNodeState(aliveNode.ID)
+
 			return nil
 		}
 
@@ -524,8 +641,7 @@ func (hm *healthMonitor) handleLeaving(sender *Node, packet *Packet) error {
 
 	// Clean up any monitoring state for this node
 	// We don't need to track failures or suspicions for a node that's explicitly leaving
-	hm.nodeFailures.Delete(node.ID)
-	hm.suspicionMap.Delete(node.ID)
+	hm.cleanNodeState(node.ID)
 
 	return nil
 }
@@ -906,8 +1022,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []pus
 					hm.cluster.nodes.updateState(localNode.ID, nodeAlive)
 
 					// Clean up any failure tracking and suspicion evidence
-					hm.nodeFailures.Delete(localNode.ID)
-					hm.suspicionMap.Delete(localNode.ID)
+					hm.cleanNodeState(localNode.ID)
 				} else {
 					// Record the refutation even though our ping failed
 					if localNode.state == nodeSuspect {
@@ -943,8 +1058,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []pus
 				hm.cluster.nodes.updateState(localNode.ID, nodeLeaving)
 
 				// Clean up any failure tracking and suspicion evidence
-				hm.nodeFailures.Delete(localNode.ID)
-				hm.suspicionMap.Delete(localNode.ID)
+				hm.cleanNodeState(localNode.ID)
 			}
 		}
 	}
@@ -956,8 +1070,7 @@ func (hm *healthMonitor) MarkNodeLeaving(node *Node) {
 	hm.cluster.nodes.updateState(node.ID, nodeLeaving)
 
 	// Clean up any tracking state
-	hm.nodeFailures.Delete(node.ID)
-	hm.suspicionMap.Delete(node.ID)
+	hm.cleanNodeState(node.ID)
 
 	// Broadcast the leaving state
 	hm.broadcastLeaving(node)
