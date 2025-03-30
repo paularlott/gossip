@@ -152,7 +152,7 @@ func (c *Cluster) Join(peers []string) error {
 		node.ID = joinMsg.ID
 		node.advertisedAddr = joinMsg.AdvertisedAddr
 		if c.nodes.addIfNotExists(node) {
-			err = c.exchangeState(node)
+			err = c.exchangeState(node, []NodeID{c.localNode.ID, node.ID})
 			if err != nil {
 				log.Warn().Err(err).Msgf("Failed to exchange state with peer %s", peerAddr)
 			}
@@ -252,8 +252,8 @@ func (c *Cluster) getMaxTTL() uint8 {
 }
 
 // Exchange the state of a random subset of nodes with the given node
-func (c *Cluster) exchangeState(node *Node) error {
-	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), []NodeID{})
+func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
+	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), exclude)
 
 	var peerStates []pushPullState
 	for _, n := range nodes {
