@@ -45,7 +45,7 @@ func DefaultConfig() *Config {
 		UDPDeadline:                   5 * time.Second,
 		UDPMaxPacketSize:              1400,
 		TCPMaxPacketSize:              4194304, // 4MB
-		MsgHistoryGCInterval:          2 * time.Second,
+		MsgHistoryGCInterval:          1 * time.Second,
 		MsgHistoryMaxAge:              30 * time.Second,
 		MsgHistoryShardCount:          16,
 		NodeShardCount:                4,
