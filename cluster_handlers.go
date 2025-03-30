@@ -14,6 +14,9 @@ func (c *Cluster) registerSystemHandlers() {
 
 	c.handlers.registerConnHandler(nodeJoinMsg, c.handleJoin)
 	c.handlers.registerConnHandler(pushPullStateMsg, c.handlePushPullState)
+
+	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
+	c.handlers.registerHandler(suspicionMsg, true, c.healthMonitor.handleSuspicion)
 }
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) error {

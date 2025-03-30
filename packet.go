@@ -27,6 +27,8 @@ const (
 	*/
 	pushPullStateMsg    // Sent by peers when pushing / pulling state
 	pushPullStateAckMsg // Acknowledgement of the push state message
+	aliveMsg            // Sent to announce a node is alive
+	suspicionMsg        // Sent to announce a node is suspected to be dead
 /*
 _                                     // skip to 128
 userMsg             MessageType = 128 // User messages start here
@@ -68,4 +70,12 @@ type indirectPingMessage struct {
 	AdvertisedAddr string `msgpack:"advertised_addr"`
 	Seq            uint32 `msgpack:"seq"`
 	Ok             bool   `msgpack:"ok"`
+}
+
+type aliveMessage struct {
+	NodeID NodeID `msgpack:"node_id"`
+}
+
+type suspicionMessage struct {
+	SuspectID NodeID `msgpack:"suspect_id"`
 }

@@ -206,6 +206,7 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 
 		// Update node state
 		node.state = state
+		node.stateChangeTime = time.Now()
 
 		// Add to new state map
 		shard.byState[state][nodeID] = node
@@ -375,6 +376,17 @@ func (nl *nodeList) forAllInState(state NodeState, callback func(*Node) bool) {
 			}
 		}
 	}
+}
+
+func (nl *nodeList) getAllInState(state NodeState) []*Node {
+	nodes := make([]*Node, 0)
+
+	nl.forAllInState(state, func(node *Node) bool {
+		nodes = append(nodes, node)
+		return true
+	})
+
+	return nodes
 }
 
 // getAll returns all nodes in the cluster

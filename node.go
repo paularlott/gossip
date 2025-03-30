@@ -1,5 +1,7 @@
 package gossip
 
+import "time"
+
 type NodeState uint8
 
 const (
@@ -25,18 +27,20 @@ func (ns NodeState) String() string {
 }
 
 type Node struct {
-	ID             NodeID
-	advertisedAddr string
-	connectAddr    *Address
-	state          NodeState
+	ID              NodeID
+	advertisedAddr  string
+	connectAddr     *Address
+	stateChangeTime time.Time
+	state           NodeState
 }
 
 func newNode(id NodeID, advertisedAddr string) *Node {
 	return &Node{
-		ID:             id,
-		advertisedAddr: advertisedAddr,
-		connectAddr:    nil,
-		state:          nodeAlive,
+		ID:              id,
+		advertisedAddr:  advertisedAddr,
+		connectAddr:     nil,
+		stateChangeTime: time.Now(),
+		state:           nodeAlive,
 	}
 }
 

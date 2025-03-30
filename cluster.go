@@ -61,18 +61,12 @@ func NewCluster(config *Config) (*Cluster, error) {
 		}
 	}
 
-	transport, err := newTransport(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transport: %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
 		config:          config,
 		shutdownContext: ctx,
 		cancelFunc:      cancel,
 		msgHistory:      newMessageHistory(config),
-		transport:       transport,
 		nodes:           newNodeList(config.NodeShardCount),
 		localNode:       newNode(NodeID(u), config.AdvertiseAddr),
 		handlers:        newHandlerRegistry(),
@@ -82,8 +76,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
-	// Register the system handlers
-	cluster.registerSystemHandlers()
+	cluster.transport, err = newTransport(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transport: %v", err)
+	}
 
 	// Start the workers
 	for i := 0; i < config.SendWorkers; i++ {
@@ -93,6 +89,9 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	// Start the health monitor
 	cluster.healthMonitor = newHealthMonitor(cluster)
+
+	// Register the system message handlers
+	cluster.registerSystemHandlers()
 
 	log.Info().Msgf("Cluster created with Node ID: %s", u.String())
 
@@ -243,6 +242,11 @@ func (c *Cluster) getPeerSubsetSize(k int, multiplier float64) int {
 		return 0
 	}
 	return int(math.Ceil(math.Log2(float64(k)) * multiplier))
+}
+
+func (c *Cluster) getMaxTTL() uint8 {
+	ttl := c.getPeerSubsetSize(c.nodes.getLiveCount(), c.config.TTLMultiplier)
+	return uint8(math.Max(1, math.Min(float64(ttl), 10)))
 }
 
 // Exchange the state of a random subset of nodes with the given node
