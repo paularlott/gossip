@@ -293,7 +293,15 @@ func (cluster *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType 
 		excludePeers:  excludePeers,
 	}
 
-	cluster.broadcastQueue <- item
+	// Use non-blocking send to avoid getting stuck if queue is full
+	select {
+	case cluster.broadcastQueue <- item:
+		// Successfully queued
+	default:
+		// Queue full, log and skip this message
+		log.Error().
+			Msg("Broadcast queue is full, skipping message")
+	}
 }
 
 func (c *Cluster) broadcastWorker() {

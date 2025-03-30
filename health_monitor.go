@@ -18,15 +18,16 @@ type healthPingID struct {
 }
 
 type healthMonitor struct {
-	cluster        *Cluster
-	config         *Config
-	shutdownCtx    context.Context    // Parent context for shutdown
-	shutdownCancel context.CancelFunc // Function to cancel the context
-	peerPingMutex  sync.Mutex
-	pingSeq        uint32
-	peerPingAck    map[healthPingID]chan bool
-	nodeFailures   sync.Map // NodeID -> *nodeFailureCount
-	suspicionMap   sync.Map // NodeID -> *suspicionEvidence
+	cluster          *Cluster
+	config           *Config
+	shutdownCtx      context.Context    // Parent context for shutdown
+	shutdownCancel   context.CancelFunc // Function to cancel the context
+	peerPingMutex    sync.Mutex
+	pingSeq          uint32
+	peerPingAck      map[healthPingID]chan bool
+	healthCheckQueue chan *Node
+	nodeFailures     sync.Map // NodeID -> *nodeFailureCount
+	suspicionMap     sync.Map // NodeID -> *suspicionEvidence
 }
 
 type nodeFailureCount struct {
@@ -45,13 +46,33 @@ type suspicionEvidence struct {
 func newHealthMonitor(c *Cluster) *healthMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	hm := &healthMonitor{
-		cluster:        c,
-		config:         c.config,
-		shutdownCtx:    ctx,
-		shutdownCancel: cancel,
-		peerPingMutex:  sync.Mutex{},
-		pingSeq:        0,
-		peerPingAck:    make(map[healthPingID]chan bool),
+		cluster:          c,
+		config:           c.config,
+		shutdownCtx:      ctx,
+		shutdownCancel:   cancel,
+		peerPingMutex:    sync.Mutex{},
+		pingSeq:          0,
+		peerPingAck:      make(map[healthPingID]chan bool),
+		healthCheckQueue: make(chan *Node, c.config.HealthCheckSampleSize),
+	}
+
+	// Start health check workers
+	for i := 0; i < hm.config.HealthCheckSampleSize; i++ {
+		go func() {
+			for {
+				select {
+				case node, ok := <-hm.healthCheckQueue:
+					if !ok {
+						// Channel closed, exit worker
+						return
+					}
+					hm.checkNodeHealth(node)
+
+				case <-hm.shutdownCtx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	go hm.healthCheckLoop()
@@ -61,6 +82,7 @@ func newHealthMonitor(c *Cluster) *healthMonitor {
 
 func (hm *healthMonitor) stop() {
 	hm.shutdownCancel()
+	close(hm.healthCheckQueue)
 }
 
 func (hm *healthMonitor) cleanNodeState(nodeID NodeID) {
@@ -145,9 +167,18 @@ func (hm *healthMonitor) checkRandomNodes() {
 		[]NodeID{hm.cluster.localNode.ID},
 	)
 
-	// Check each node
+	// Queue nodes for checking by the worker pool
 	for _, node := range nodesToCheck {
-		go hm.checkNodeHealth(node)
+		// Use non-blocking send to avoid getting stuck if queue is full
+		select {
+		case hm.healthCheckQueue <- node:
+			// Successfully queued
+		default:
+			// Queue full, log and skip this node
+			log.Warn().
+				Str("node", node.ID.String()).
+				Msg("Health check queue full, skipping check")
+		}
 	}
 }
 
@@ -184,65 +215,6 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 
 	// Update last check time
 	failTracker.lastCheckTime.Store(time.Now().Unix())
-
-	// Both direct and indirect pings failed
-	currentFailures := failTracker.count.Add(1)
-
-	// Log the failure
-	if err != nil {
-		log.Debug().Err(err).Str("node", node.ID.String()).
-			Int32("failures", currentFailures).
-			Msg("Node health check failed")
-	} else {
-		log.Debug().Str("node", node.ID.String()).
-			Int32("failures", currentFailures).
-			Msg("Node did not respond to health check")
-	}
-
-	// Mark node as suspect after sufficient failures
-	if currentFailures >= int32(hm.config.SuspectThreshold) && node.state == nodeAlive {
-		log.Info().Str("node", node.ID.String()).
-			Int32("failures", currentFailures).
-			Msg("Node exceeded failure threshold, marking as suspect")
-
-		hm.cluster.nodes.updateState(node.ID, nodeSuspect)
-
-		// Broadcast the suspect status
-		hm.broadcastSuspicion(node)
-	}
-}
-
-func (hm *healthMonitor) XXXXXXXXcheckNodeHealth(node *Node) {
-	// Skip if node is already marked dead or leaving
-	if node.state == nodeDead || node.state == nodeLeaving {
-		return
-	}
-
-	// Get or create failure tracker
-	failCountObj, _ := hm.nodeFailures.LoadOrStore(
-		node.ID,
-		&nodeFailureCount{},
-	)
-	failTracker := failCountObj.(*nodeFailureCount)
-
-	// Update last check time
-	failTracker.lastCheckTime.Store(time.Now().Unix())
-
-	alive, err := hm.pingAny(node)
-	if alive {
-		// Node is alive, reset failure counter
-		failTracker.count.Store(0)
-
-		// If node was suspect, restore to alive
-		if node.state == nodeSuspect {
-			log.Info().Str("node", node.ID.String()).Msg("Suspect node is now reachable, marking as alive")
-			hm.cluster.nodes.updateState(node.ID, nodeAlive)
-
-			// Clean up any suspicion evidence
-			hm.cleanNodeState(node.ID)
-		}
-		return
-	}
 
 	// Both direct and indirect pings failed
 	currentFailures := failTracker.count.Add(1)
