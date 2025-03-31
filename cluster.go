@@ -95,6 +95,9 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Register the system message handlers
 	cluster.registerSystemHandlers()
 
+	// Start periodic state synchronization
+	cluster.startStateSync()
+
 	log.Info().Msgf("Cluster created with Node ID: %s", u.String())
 
 	return cluster, nil
@@ -154,7 +157,7 @@ func (c *Cluster) Join(peers []string) error {
 		node.ID = joinMsg.ID
 		node.advertisedAddr = joinMsg.AdvertisedAddr
 		if c.nodes.addIfNotExists(node) {
-			err = c.exchangeState(node, []NodeID{c.localNode.ID, node.ID})
+			err = c.exchangeState(node, []NodeID{c.localNode.ID})
 			if err != nil {
 				log.Warn().Err(err).Msgf("Failed to exchange state with peer %s", peerAddr)
 			}
@@ -240,25 +243,57 @@ func (c *Cluster) GetAllNodes() []*Node {
 	return c.nodes.getAll()
 }
 
-// Get the number of peers to use for a subset
-func (c *Cluster) getPeerSubsetSize(k int, multiplier float64) int {
-	if k <= 0 {
+// GetPeerSubsetSize calculates the number of peers to use for operations based on cluster size and purpose
+func (c *Cluster) getPeerSubsetSize(totalNodes int, purpose peerSelectionPurpose) int {
+	if totalNodes <= 0 {
 		return 0
 	}
-	return int(math.Ceil(math.Log2(float64(k)) * multiplier))
+
+	// Get the base count
+	basePeerCount := math.Log2(float64(totalNodes))
+	cap := 10.0
+
+	// Apply purpose-specific adjustments
+	switch purpose {
+	case purposeBroadcast:
+		basePeerCount = math.Ceil(basePeerCount * c.config.BroadcastMultiplier)
+
+	case purposeStateExchange:
+		// Add 2 to the base for more aggressive state propagation
+		basePeerCount = math.Ceil(basePeerCount*c.config.StateExchangeMultiplier) + 2
+		cap = 16
+
+	case purposeIndirectPing:
+		basePeerCount = math.Ceil(basePeerCount * c.config.IndirectPingMultiplier)
+		cap = 6
+
+	case purposeTTL:
+		basePeerCount = math.Ceil(basePeerCount * c.config.TTLMultiplier)
+		cap = 8
+
+	default:
+		basePeerCount = math.Ceil(basePeerCount)
+	}
+
+	// Apply the cap
+	return int(math.Min(basePeerCount, cap))
 }
 
 func (c *Cluster) getMaxTTL() uint8 {
-	ttl := c.getPeerSubsetSize(c.nodes.getLiveCount(), c.config.TTLMultiplier)
-	return uint8(math.Max(1, math.Min(float64(ttl), 10)))
+	return uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL))
 }
 
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
-	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), exclude)
+	// Determine how many nodes to include in the exchange
+	sampleSize := c.getPeerSubsetSize(c.nodes.getTotalCount(), purposeStateExchange)
 
+	// Get a random selection of nodes, excluding specified nodes
+	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
+
+	// Create the state exchange message
 	var peerStates []exchangeNodeState
-	for _, n := range nodes {
+	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
 			ID:              n.ID,
 			AdvertisedAddr:  n.advertisedAddr,
@@ -267,13 +302,25 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 		})
 	}
 
-	err := c.transport.sendMessageWithResponse(node, c.localNode.ID, pushPullStateMsg, &peerStates, pushPullStateAckMsg, &peerStates)
+	// No nodes to exchange, this is fine
+	if len(peerStates) == 0 {
+		return nil
+	}
+
+	// Exchange state with the peer
+	err := c.transport.sendMessageWithResponse(
+		node,
+		c.localNode.ID,
+		pushPullStateMsg,
+		&peerStates,
+		pushPullStateAckMsg,
+		&peerStates)
 	if err != nil {
 		return err
 	}
 
+	// Process the received states
 	c.healthMonitor.combineRemoteNodeState(node, peerStates)
-
 	return nil
 }
 
@@ -310,7 +357,7 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), 1), item.excludePeers)
+			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers)
 			for _, peer := range peerSubset {
 				if err := c.transport.sendPacket(item.transportType, peer, item.packet); err != nil {
 					log.Warn().Err(err).Msgf("Failed to send packet to peer %s", peer.ID)
@@ -321,4 +368,47 @@ func (c *Cluster) broadcastWorker() {
 			return
 		}
 	}
+}
+
+// Start periodic state synchronization with random peers
+func (c *Cluster) startStateSync() {
+	go func() {
+		// Add jitter to prevent all nodes syncing at the same time
+		jitter := time.Duration(rand.Int63n(int64(c.config.StateSyncInterval / 4)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.StateSyncInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Calculate appropriate number of peers based on cluster size
+				peerCount := c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeStateExchange)
+				if peerCount == 0 {
+					continue
+				}
+
+				// Get random subset, excluding ourselves
+				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
+
+				// Perform state exchange with selected peers
+				for _, peer := range peers {
+					go func(p *Node) {
+						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
+						if err != nil {
+							log.Debug().Err(err).Str("peer", p.ID.String()).
+								Msg("Periodic state exchange failed")
+						} else {
+							log.Trace().Str("peer", p.ID.String()).
+								Msg("Completed periodic state exchange")
+						}
+					}(peer)
+				}
+
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
 }

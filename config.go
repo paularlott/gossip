@@ -20,7 +20,6 @@ type Config struct {
 	MsgHistoryMaxAge              time.Duration // MsgHistoryMaxAge is the maximum age of a message in the history
 	MsgHistoryShardCount          int           // MessageHistoryShardCount is the number of shards to use for storing message history, 16 for up to 50 nodes, 32 for up to 500 nodes and 64 for larger clusters.
 	NodeShardCount                int           // NodeShardCount is the number of shards to use for storing node information, 4 for up to 50 nodes, 16 for up to 500 nodes and 32 for larger clusters.
-	StatePushPullMultiplier       float64       // StatePushPullMultiplier is the multiplier for the number of states to push/pull at a time
 	NumSendWorkers                int           // The number of workers to use for sending messages
 	SendQueueSize                 int           // SendQueueSize is the size of the send queue
 	HealthCheckInterval           time.Duration // How often to perform health checks
@@ -30,9 +29,12 @@ type Config struct {
 	DeadNodeTimeout               time.Duration // How long to keep dead nodes before removal
 	RefutationThreshold           int           // Number of peers refuting suspicion to restore node
 	EnableIndirectPings           bool          // Whether to use indirect pings
-	MaxNodesIndirectPing          int           // Max nodes to use for indirect pings
 	PingTimeout                   time.Duration // Timeout for ping operations, should be less than HealthCheckInterval
 	MaxParallelSuspectEvaluations int           // Max number of parallel evaluations for suspect nodes
+	StateSyncInterval             time.Duration // How often to perform state synchronization with peers
+	BroadcastMultiplier           float64       // Scale of peer sampling for broadcast messages
+	StateExchangeMultiplier       float64       // Scale of peer sampling for state exchange messages
+	IndirectPingMultiplier        float64       // Scale of peer sampling for indirect ping messages
 	TTLMultiplier                 float64       // Multiplier for TTL, used to determine how many hops a message can take
 }
 
@@ -49,7 +51,6 @@ func DefaultConfig() *Config {
 		MsgHistoryMaxAge:              30 * time.Second,
 		MsgHistoryShardCount:          16,
 		NodeShardCount:                4,
-		StatePushPullMultiplier:       2.5,
 		NumSendWorkers:                4,
 		SendQueueSize:                 128,
 		HealthCheckInterval:           1 * time.Second,
@@ -59,9 +60,12 @@ func DefaultConfig() *Config {
 		DeadNodeTimeout:               1 * time.Minute,
 		RefutationThreshold:           2,
 		EnableIndirectPings:           true,
-		MaxNodesIndirectPing:          3,
 		PingTimeout:                   500 * time.Millisecond,
 		MaxParallelSuspectEvaluations: 4,
-		TTLMultiplier:                 2,
+		StateSyncInterval:             30 * time.Second,
+		BroadcastMultiplier:           1,
+		StateExchangeMultiplier:       0.8,
+		IndirectPingMultiplier:        0.7,
+		TTLMultiplier:                 1.0,
 	}
 }

@@ -792,8 +792,13 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 		FromAddr:       hm.cluster.localNode.advertisedAddr,
 	}
 
+	peerCount := hm.cluster.getPeerSubsetSize(
+		hm.cluster.nodes.getLiveCount(),
+		purposeIndirectPing,
+	)
+
 	sentCount := 0
-	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(hm.config.MaxNodesIndirectPing, []NodeID{hm.cluster.localNode.ID, node.ID})
+	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
 	if len(indirectPeers) == 0 {
 		return false, fmt.Errorf("no indirect peers found")
 	}

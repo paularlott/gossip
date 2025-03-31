@@ -170,7 +170,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 		return err
 	}
 
-	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), []NodeID{})
+	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), purposeStateExchange), []NodeID{})
 
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
