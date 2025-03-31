@@ -429,7 +429,7 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
-func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data interface{}, excludePeers []NodeID) error {
+func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data interface{}) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}

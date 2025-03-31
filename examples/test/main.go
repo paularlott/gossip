@@ -18,8 +18,11 @@ import (
 
 const (
 	AppMsg1 gossip.MessageType = gossip.UserMsg + iota // User message
-	AppMsg2
 )
+
+type App1Message struct {
+	Message string `msgpack:"message"`
+}
 
 type MyListener struct{}
 
@@ -78,11 +81,14 @@ func main() {
 	}
 
 	cluster.HandleFunc(AppMsg1, true, func(sender *gossip.Node, packet *gossip.Packet) error {
-		fmt.Printf("Received AppMsg1 message from %s\n", sender.ID)
+		var msg App1Message
+		if err := packet.Unmarshal(&msg); err != nil {
+			return err
+		}
+
+		fmt.Printf("Received AppMsg1 message from %s: %s\n", sender.ID, msg.Message)
 		return nil
 	})
-
-	cluster.SendMessage(gossip.TransportBestEffort, AppMsg1, nil, nil)
 
 	// Handle CLI input
 	fmt.Printf("Cluster started local node ID %s\n\n", cluster.GetLocalNode().ID.String())
@@ -97,7 +103,7 @@ func main() {
 
 func handleCLIInput(c *gossip.Cluster) {
 	// Simple command line interface to set and get values
-	fmt.Println("Enter commands: set key value, get key, or peers. Type Ctl+C to exit.")
+	fmt.Println("Enter help to show help. Type Ctl+C to exit.")
 	for {
 		var cmd, key, value string
 		fmt.Print("> ")
@@ -116,9 +122,9 @@ func handleCLIInput(c *gossip.Cluster) {
 			value = parts[2]
 		}
 
-		fmt.Println("Command:", cmd)
-		fmt.Println("Key:", key)
-		fmt.Println("Value:", value)
+		/* 		fmt.Println("Command:", cmd)
+		   		fmt.Println("Key:", key)
+		   		fmt.Println("Value:", value) */
 
 		switch cmd {
 		/* 		case "SET":
@@ -141,6 +147,19 @@ func handleCLIInput(c *gossip.Cluster) {
 		   				fmt.Println(value)
 		   			} */
 
+		case "gossip":
+			if key == "" {
+				fmt.Println("Usage: gossip the message")
+				continue
+			}
+
+			msg := App1Message{Message: key}
+			if value != "" {
+				msg.Message += " " + value
+			}
+
+			c.SendMessage(gossip.TransportBestEffort, AppMsg1, msg)
+
 		case "peers":
 			// TODO Show if connected or not
 			peers := c.GetAllNodes()
@@ -150,6 +169,12 @@ func handleCLIInput(c *gossip.Cluster) {
 				//fmt.Printf("Peer ID: %s, State: %s, Date: %s, Direct: %t\n", p.ID, p.State.String(), lastSeen.Format(time.RFC3339), p.IsDirect)
 				fmt.Printf("Node ID: %s, Advertised: %s, State: %s\n", p.ID, p.GetAdvertisedAddr(), p.GetState().String())
 			}
+
+		case "help":
+			fmt.Println("Available commands:")
+			fmt.Println("  gossip <message> [<message>]: Send a message to the cluster")
+			fmt.Println("  peers: Show all peers in the cluster")
+			fmt.Println("  help: Show this help message")
 
 		default:
 			fmt.Println("Unknown command")
