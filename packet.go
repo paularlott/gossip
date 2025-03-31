@@ -46,7 +46,7 @@ type joinMessage struct {
 	AdvertisedAddr string `msgpack:"advertised_addr"`
 }
 
-type pushPullState struct {
+type exchangeNodeState struct {
 	ID              NodeID    `msgpack:"id"`
 	AdvertisedAddr  string    `msgpack:"advertised_addr"`
 	State           NodeState `msgpack:"state"`

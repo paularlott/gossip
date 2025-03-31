@@ -257,9 +257,9 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), exclude)
 
-	var peerStates []pushPullState
+	var peerStates []exchangeNodeState
 	for _, n := range nodes {
-		peerStates = append(peerStates, pushPullState{
+		peerStates = append(peerStates, exchangeNodeState{
 			ID:              n.ID,
 			AdvertisedAddr:  n.advertisedAddr,
 			State:           n.state,

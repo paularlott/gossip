@@ -844,7 +844,7 @@ func (hm *healthMonitor) pingAny(node *Node) (bool, error) {
 }
 
 // Combine the node state from remote peers with the local state.
-func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []pushPullState) {
+func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exchangeNodeState) {
 	if len(remoteStates) == 0 {
 		return
 	}

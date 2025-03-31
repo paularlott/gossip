@@ -163,7 +163,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 		return fmt.Errorf("unknown sender")
 	}
 
-	var peerStates []pushPullState
+	var peerStates []exchangeNodeState
 
 	err := packet.Unmarshal(&peerStates)
 	if err != nil {
@@ -172,9 +172,9 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 
 	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), c.config.StatePushPullMultiplier), []NodeID{})
 
-	var localStates []pushPullState
+	var localStates []exchangeNodeState
 	for _, n := range nodes {
-		localStates = append(localStates, pushPullState{
+		localStates = append(localStates, exchangeNodeState{
 			ID:              n.ID,
 			AdvertisedAddr:  n.advertisedAddr,
 			State:           n.state,
