@@ -10,18 +10,26 @@ import (
 )
 
 type Handler func(*Node, *Packet) error
-type ConnHandler func(net.Conn, *Node, *Packet) error
+type ReplyHandler func(*Node, *Packet) (MessageType, interface{}, error)
 
 type msgHandler struct {
-	forward     bool
-	handler     Handler
-	handlerConn ConnHandler
+	forward      bool
+	handler      Handler
+	replyHandler ReplyHandler
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
-func (mh *msgHandler) dispatch(conn net.Conn, node *Node, packet *Packet) error {
-	if conn != nil && mh.handlerConn != nil {
-		return mh.handlerConn(conn, node, packet)
+func (mh *msgHandler) dispatch(conn net.Conn, localNode *Node, transport *transport, node *Node, packet *Packet) error {
+	if conn != nil && mh.replyHandler != nil {
+		replyType, replyData, err := mh.replyHandler(node, packet)
+		if err != nil {
+			return err
+		}
+
+		if replyType != nilMsg && transport != nil {
+			return transport.writeMessage(conn, localNode.ID, replyType, replyData)
+		}
+		return nil
 	} else if mh.handler != nil {
 		return mh.handler(node, packet)
 	}
@@ -68,10 +76,10 @@ func (hr *handlerRegistry) registerHandler(msgType MessageType, forward bool, ha
 	})
 }
 
-func (hr *handlerRegistry) registerConnHandler(msgType MessageType, handler ConnHandler) {
+func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler ReplyHandler) {
 	hr.register(msgType, msgHandler{
-		forward:     false,
-		handlerConn: handler,
+		forward:      false,
+		replyHandler: handler,
 	})
 }
 

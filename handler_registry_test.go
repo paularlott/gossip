@@ -105,14 +105,14 @@ func TestRegisterHandler(t *testing.T) {
 		t.Error("Handler function not stored")
 	}
 
-	if msgHandler.handlerConn != nil {
+	if msgHandler.replyHandler != nil {
 		t.Error("Connection handler should be nil")
 	}
 
 	// Test calling the handler
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
-	msgHandler.dispatch(nil, node, packet)
+	msgHandler.dispatch(nil, nil, nil, node, packet)
 
 	if !handlerCalled {
 		t.Error("Handler was not called during dispatch")
@@ -125,13 +125,13 @@ func TestRegisterConnHandler(t *testing.T) {
 	const msgType = MessageType(2)
 
 	handlerCalled := false
-	handler := func(c net.Conn, n *Node, p *Packet) error {
+	handler := func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		handlerCalled = true
-		return nil
+		return nilMsg, nil, nil
 	}
 
 	// Register the handler
-	registry.registerConnHandler(msgType, handler)
+	registry.registerHandlerWithReply(msgType, handler)
 
 	// Verify it was registered
 	msgHandler := registry.getHandler(msgType)
@@ -143,7 +143,7 @@ func TestRegisterConnHandler(t *testing.T) {
 		t.Error("Forward flag not set correctly")
 	}
 
-	if msgHandler.handlerConn == nil {
+	if msgHandler.replyHandler == nil {
 		t.Error("Connection handler function not stored")
 	}
 
@@ -155,7 +155,7 @@ func TestRegisterConnHandler(t *testing.T) {
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
 	conn := newMockConn()
-	msgHandler.dispatch(conn, node, packet)
+	msgHandler.dispatch(conn, nil, nil, node, packet)
 
 	if !handlerCalled {
 		t.Error("Connection handler was not called during dispatch")
@@ -176,9 +176,9 @@ func TestDispatchWithNilConnection(t *testing.T) {
 			regularCalled = true
 			return nil
 		},
-		handlerConn: func(c net.Conn, n *Node, p *Packet) error {
+		replyHandler: func(n *Node, p *Packet) (MessageType, interface{}, error) {
 			connCalled = true
-			return nil
+			return nilMsg, nil, nil
 		},
 	})
 
@@ -191,7 +191,7 @@ func TestDispatchWithNilConnection(t *testing.T) {
 	// Test dispatching with nil connection
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
-	msgHandler.dispatch(nil, node, packet)
+	msgHandler.dispatch(nil, nil, nil, node, packet)
 
 	if !regularCalled {
 		t.Error("Regular handler was not called when connection is nil")
@@ -216,9 +216,9 @@ func TestDispatchWithConnection(t *testing.T) {
 			regularCalled = true
 			return nil
 		},
-		handlerConn: func(c net.Conn, n *Node, p *Packet) error {
+		replyHandler: func(n *Node, p *Packet) (MessageType, interface{}, error) {
 			connCalled = true
-			return nil
+			return nilMsg, nil, nil
 		},
 	})
 
@@ -232,7 +232,7 @@ func TestDispatchWithConnection(t *testing.T) {
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
 	conn := newMockConn()
-	msgHandler.dispatch(conn, node, packet)
+	msgHandler.dispatch(conn, nil, nil, node, packet)
 
 	if regularCalled {
 		t.Error("Regular handler was incorrectly called when connection is available")
@@ -338,9 +338,9 @@ func TestDispatchNoMatchingHandler(t *testing.T) {
 
 	// Register only a connection handler
 	connCalled := false
-	registry.registerConnHandler(msgType, func(c net.Conn, n *Node, p *Packet) error {
+	registry.registerHandlerWithReply(msgType, func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		connCalled = true
-		return nil
+		return nilMsg, nil, nil
 	})
 
 	// Get the handler
@@ -352,7 +352,7 @@ func TestDispatchNoMatchingHandler(t *testing.T) {
 	// Test dispatching with nil connection when only a connection handler exists
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
-	msgHandler.dispatch(nil, node, packet)
+	msgHandler.dispatch(nil, nil, nil, node, packet)
 
 	// Connection handler should not be called since connection is nil and no regular handler exists
 	if connCalled {
@@ -385,7 +385,7 @@ func TestDispatchWithNilParameters(t *testing.T) {
 	}
 
 	// Test with nil node
-	msgHandler.dispatch(nil, nil, &Packet{MessageType: msgType})
+	msgHandler.dispatch(nil, nil, nil, nil, &Packet{MessageType: msgType})
 	if receivedNode {
 		t.Error("Handler received non-nil node when nil was passed")
 	}
@@ -398,7 +398,7 @@ func TestDispatchWithNilParameters(t *testing.T) {
 	receivedPacket = false
 
 	// Test with nil packet
-	msgHandler.dispatch(nil, &Node{}, nil)
+	msgHandler.dispatch(nil, nil, nil, &Node{}, nil)
 	if !receivedNode {
 		t.Error("Handler did not receive node")
 	}
@@ -415,9 +415,9 @@ func TestConnectionOnlyHandlerWithNoConn(t *testing.T) {
 	handlerCalled := false
 
 	// Register only a connection handler
-	registry.registerConnHandler(msgType, func(c net.Conn, n *Node, p *Packet) error {
+	registry.registerHandlerWithReply(msgType, func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		handlerCalled = true
-		return nil
+		return nilMsg, nil, nil
 	})
 
 	// Get the handler
@@ -429,7 +429,7 @@ func TestConnectionOnlyHandlerWithNoConn(t *testing.T) {
 	// Test dispatch with no connection
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
-	msgHandler.dispatch(nil, node, packet)
+	msgHandler.dispatch(nil, nil, nil, node, packet)
 
 	// The handler should not be called
 	if handlerCalled {
@@ -460,7 +460,7 @@ func TestRegularOnlyHandlerWithConn(t *testing.T) {
 	node := &Node{}
 	packet := &Packet{MessageType: msgType}
 	conn := newMockConn()
-	msgHandler.dispatch(conn, node, packet)
+	msgHandler.dispatch(conn, nil, nil, node, packet)
 
 	// The regular handler should be called since there's no connection handler
 	if !handlerCalled {

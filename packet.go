@@ -12,7 +12,8 @@ type MessageID struct {
 
 const (
 	// Message types
-	pingMsg             MessageType = iota // Sent to test if a peer is alive
+	nilMsg              MessageType = iota // No operation message
+	pingMsg                                // Sent to test if a peer is alive
 	pingAckMsg                             // Sent in response to a ping message
 	indirectPingMsg                        // Sent to test if a peer is alive, but not directly reachable
 	indirectPingAckMsg                     // Sent in response to an indirect ping message

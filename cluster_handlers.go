@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"fmt"
-	"net"
 )
 
 func (c *Cluster) registerSystemHandlers() {
@@ -11,9 +10,9 @@ func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandler(indirectPingMsg, false, c.handleIndirectPing)
 	c.handlers.registerHandler(indirectPingAckMsg, false, c.handleIndirectPingAck)
 
-	c.handlers.registerConnHandler(nodeJoinMsg, c.handleJoin)
+	c.handlers.registerHandlerWithReply(nodeJoinMsg, c.handleJoin)
 	c.handlers.registerHandler(nodeJoiningMsg, true, c.handleJoining)
-	c.handlers.registerConnHandler(pushPullStateMsg, c.handlePushPullState)
+	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
 
 	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
 	c.handlers.registerHandler(suspicionMsg, true, c.healthMonitor.handleSuspicion)
@@ -113,24 +112,12 @@ func (c *Cluster) handleIndirectPingAck(sender *Node, packet *Packet) error {
 	return nil
 }
 
-func (c *Cluster) handleJoin(conn net.Conn, sender *Node, packet *Packet) error {
+func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interface{}, error) {
 	var joinMsg joinMessage
 
 	err := packet.Unmarshal(&joinMsg)
 	if err != nil {
-		return err
-	}
-
-	// Respond to the sender with our information
-	selfJoinMsg := joinMessage{
-		ID:             c.localNode.ID,
-		AdvertisedAddr: c.localNode.advertisedAddr,
-	}
-
-	// Send the peer state back to the sender
-	err = c.transport.writeMessage(conn, c.localNode.ID, nodeJoinAckMsg, &selfJoinMsg)
-	if err != nil {
-		return err
+		return nilMsg, nil, err
 	}
 
 	// Check add the peer to our list of known peers unless it already exists
@@ -141,7 +128,13 @@ func (c *Cluster) handleJoin(conn net.Conn, sender *Node, packet *Packet) error 
 	packet.MessageType = nodeJoiningMsg
 	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
 
-	return nil
+	// Respond to the sender with our information
+	selfJoinMsg := joinMessage{
+		ID:             c.localNode.ID,
+		AdvertisedAddr: c.localNode.advertisedAddr,
+	}
+
+	return nodeJoinAckMsg, &selfJoinMsg, nil
 }
 
 func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
@@ -158,16 +151,16 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 	return nil
 }
 
-func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packet) error {
+func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType, interface{}, error) {
 	if sender == nil {
-		return fmt.Errorf("unknown sender")
+		return nilMsg, nil, fmt.Errorf("unknown sender")
 	}
 
 	var peerStates []exchangeNodeState
 
 	err := packet.Unmarshal(&peerStates)
 	if err != nil {
-		return err
+		return nilMsg, nil, err
 	}
 
 	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSize(c.nodes.getTotalCount(), purposeStateExchange), []NodeID{})
@@ -182,12 +175,7 @@ func (c *Cluster) handlePushPullState(conn net.Conn, sender *Node, packet *Packe
 		})
 	}
 
-	err = c.transport.writeMessage(conn, c.localNode.ID, pushPullStateAckMsg, &localStates)
-	if err != nil {
-		return err
-	}
+	go c.healthMonitor.combineRemoteNodeState(sender, peerStates)
 
-	c.healthMonitor.combineRemoteNodeState(sender, peerStates)
-
-	return nil
+	return pushPullStateAckMsg, &localStates, nil
 }

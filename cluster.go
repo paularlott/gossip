@@ -226,7 +226,7 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 			senderNode.updateLastActivity()
 		}
 
-		err := h.dispatch(incomingPacket.conn, senderNode, packet)
+		err := h.dispatch(incomingPacket.conn, c.localNode, c.transport, senderNode, packet)
 		if err != nil {
 			log.Warn().Err(err).Msgf("Error dispatching packet: %d", packet.MessageType)
 		}
