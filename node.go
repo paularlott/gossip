@@ -1,6 +1,9 @@
 package gossip
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 type NodeState uint8
 
@@ -32,16 +35,21 @@ type Node struct {
 	connectAddr     *Address
 	stateChangeTime time.Time
 	state           NodeState
+	lastActivity    atomic.Int64 // Timestamp of last message received
 }
 
 func newNode(id NodeID, advertisedAddr string) *Node {
-	return &Node{
+	n := &Node{
 		ID:              id,
 		advertisedAddr:  advertisedAddr,
 		connectAddr:     nil,
 		stateChangeTime: time.Now(),
 		state:           nodeAlive,
 	}
+
+	n.lastActivity.Store(time.Now().UnixNano())
+
+	return n
 }
 
 func (node *Node) ResolveConnectAddr() (Address, error) {
@@ -61,6 +69,15 @@ func (node *Node) ResolveConnectAddr() (Address, error) {
 	node.connectAddr = &addr
 
 	return addr, nil
+}
+
+func (n *Node) updateLastActivity() {
+	n.lastActivity.Store(time.Now().UnixNano())
+}
+
+func (n *Node) getLastActivity() time.Time {
+	nano := n.lastActivity.Load()
+	return time.Unix(0, nano)
 }
 
 func (node *Node) GetState() NodeState {

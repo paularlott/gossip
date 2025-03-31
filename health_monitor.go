@@ -189,6 +189,32 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 		return
 	}
 
+	// Check if we've received a message from this node recently
+	lastActivityTime := node.getLastActivity()
+	timeSinceActivity := time.Since(lastActivityTime)
+
+	// If we've heard from this node within half the health check interval, consider it alive without pinging
+	//activityThreshold := hm.config.HealthCheckInterval / 2
+	activityThreshold := time.Duration(float64(hm.config.HealthCheckInterval) * hm.config.ActivityThresholdPercent)
+	if timeSinceActivity < activityThreshold {
+		// If node was previously marked suspect, restore to alive
+		if node.state == nodeSuspect {
+			log.Info().Str("node", node.ID.String()).
+				Dur("since_activity", timeSinceActivity).
+				Msg("Recent activity from suspect node, marking as alive")
+
+			hm.cluster.nodes.updateState(node.ID, nodeAlive)
+			hm.cleanNodeState(node.ID)
+		}
+
+		// Clean up failure tracking if it exists
+		if _, exists := hm.nodeFailures.Load(node.ID); exists {
+			hm.nodeFailures.Delete(node.ID)
+		}
+
+		return
+	}
+
 	alive, err := hm.pingAny(node)
 	if alive {
 		if _, exists := hm.nodeFailures.Load(node.ID); exists {

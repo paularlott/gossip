@@ -24,6 +24,7 @@ type Config struct {
 	SendQueueSize                 int           // SendQueueSize is the size of the send queue
 	HealthCheckInterval           time.Duration // How often to perform health checks
 	HealthCheckSampleSize         int           // Number of random nodes to check each interval
+	ActivityThresholdPercent      float64       // Percentage of activity threshold for a node to be considered alive, multiplied with HealthCheckInterval
 	SuspectThreshold              int           // Number of consecutive failures before marking suspect
 	SuspectTimeout                time.Duration // How long a node can be suspect before final check
 	DeadNodeTimeout               time.Duration // How long to keep dead nodes before removal
@@ -55,6 +56,7 @@ func DefaultConfig() *Config {
 		SendQueueSize:                 128,
 		HealthCheckInterval:           1 * time.Second,
 		HealthCheckSampleSize:         7,
+		ActivityThresholdPercent:      0.5,
 		SuspectThreshold:              3,
 		SuspectTimeout:                15 * time.Second,
 		DeadNodeTimeout:               1 * time.Minute,

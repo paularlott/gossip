@@ -226,7 +226,12 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{packet.SenderID})
 		}
 
-		err := h.dispatch(incomingPacket.conn, c.nodes.get(packet.SenderID), packet)
+		senderNode := c.nodes.get(packet.SenderID)
+		if senderNode != nil {
+			senderNode.updateLastActivity()
+		}
+
+		err := h.dispatch(incomingPacket.conn, senderNode, packet)
 		if err != nil {
 			log.Warn().Err(err).Msgf("Error dispatching packet: %d", packet.MessageType)
 		}
