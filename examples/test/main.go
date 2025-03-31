@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	AppMsg1 gossip.MessageType = gossip.UserMsg + iota // User message
+	GossipMsg gossip.MessageType = gossip.UserMsg + iota // User message
 )
 
-type App1Message struct {
+type GossipMessage struct {
 	Message string `msgpack:"message"`
 }
 
@@ -80,13 +80,13 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to join cluster")
 	}
 
-	cluster.HandleFunc(AppMsg1, true, func(sender *gossip.Node, packet *gossip.Packet) error {
-		var msg App1Message
+	cluster.HandleFunc(GossipMsg, true, func(sender *gossip.Node, packet *gossip.Packet) error {
+		var msg GossipMessage
 		if err := packet.Unmarshal(&msg); err != nil {
 			return err
 		}
 
-		fmt.Printf("Received AppMsg1 message from %s: %s\n", sender.ID, msg.Message)
+		fmt.Printf("Received GossipMsg message from %s: %s\n", sender.ID, msg.Message)
 		return nil
 	})
 
@@ -102,82 +102,173 @@ func main() {
 }
 
 func handleCLIInput(c *gossip.Cluster) {
-	// Simple command line interface to set and get values
-	fmt.Println("Enter help to show help. Type Ctl+C to exit.")
+	fmt.Println("Enter 'help' to show available commands. Press Ctrl+C to exit.")
+
+	reader := bufio.NewReader(os.Stdin)
+
 	for {
-		var cmd, key, value string
+		// Display prompt and read input
 		fmt.Print("> ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-
-		parts := strings.SplitN(input, " ", 3)
-		cmd = strings.ToLower(parts[0])
-
-		if len(parts) > 1 {
-			key = parts[1]
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading input:", err)
+			continue
 		}
 
-		if len(parts) > 2 {
-			value = parts[2]
+		// Parse the command
+		args := parseCommand(strings.TrimSpace(input))
+		if len(args) == 0 {
+			continue // Empty input
 		}
 
-		/* 		fmt.Println("Command:", cmd)
-		   		fmt.Println("Key:", key)
-		   		fmt.Println("Value:", value) */
+		cmd := strings.ToLower(args[0])
 
+		// Process the command
 		switch cmd {
-		/* 		case "SET":
-		   			if key == "" || value == "" {
-		   				fmt.Println("Usage: SET key value")
-		   				continue
-		   			}
-		   			n.Set(key, value)
-		   			fmt.Println("Value set")
-
-		   		case "GET":
-		   			if key == "" {
-		   				fmt.Println("Usage: GET key")
-		   				continue
-		   			}
-		   			value, exists := n.Get(key)
-		   			if !exists {
-		   				fmt.Println("Key not found")
-		   			} else {
-		   				fmt.Println(value)
-		   			} */
-
 		case "gossip":
-			if key == "" {
-				fmt.Println("Usage: gossip the message")
-				continue
-			}
-
-			msg := App1Message{Message: key}
-			if value != "" {
-				msg.Message += " " + value
-			}
-
-			c.SendMessage(gossip.TransportBestEffort, AppMsg1, msg)
+			handleGossipCommand(c, args)
 
 		case "peers":
-			// TODO Show if connected or not
-			peers := c.GetAllNodes()
-			for _, p := range peers {
-				// Get the last state update in local time
-				//lastSeen := time.Unix(0, p.LastStateUpdate*int64(time.Millisecond))
-				//fmt.Printf("Peer ID: %s, State: %s, Date: %s, Direct: %t\n", p.ID, p.State.String(), lastSeen.Format(time.RFC3339), p.IsDirect)
-				fmt.Printf("Node ID: %s, Advertised: %s, State: %s\n", p.ID, p.GetAdvertisedAddr(), p.GetState().String())
-			}
+			handlePeersCommand(c)
 
 		case "help":
-			fmt.Println("Available commands:")
-			fmt.Println("  gossip <message> [<message>]: Send a message to the cluster")
-			fmt.Println("  peers: Show all peers in the cluster")
-			fmt.Println("  help: Show this help message")
+			displayHelp()
+
+		// Commented out for future implementation
+		/*
+		   case "set":
+		       handleSetCommand(c, args)
+
+		   case "get":
+		       handleGetCommand(c, args)
+		*/
+
+		case "":
+			// Do nothing for empty input
 
 		default:
-			fmt.Println("Unknown command")
+			fmt.Println("Unknown command. Type 'help' for available commands.")
 		}
 	}
 }
+
+// parseCommand splits the input into command arguments
+func parseCommand(input string) []string {
+	// Split by spaces, but respect quoted strings
+	var args []string
+	inQuotes := false
+	current := ""
+
+	for _, char := range input {
+		switch char {
+		case '"':
+			inQuotes = !inQuotes
+		case ' ':
+			if !inQuotes {
+				if current != "" {
+					args = append(args, current)
+					current = ""
+				}
+			} else {
+				current += string(char)
+			}
+		default:
+			current += string(char)
+		}
+	}
+
+	if current != "" {
+		args = append(args, current)
+	}
+
+	return args
+}
+
+// handleGossipCommand processes the gossip command
+func handleGossipCommand(c *gossip.Cluster, args []string) {
+	if len(args) < 2 {
+		fmt.Println("Usage: gossip <message>")
+		return
+	}
+
+	// Combine all remaining arguments as the message
+	messageText := strings.Join(args[1:], " ")
+
+	msg := GossipMessage{Message: messageText}
+	err := c.SendMessage(gossip.TransportBestEffort, GossipMsg, msg)
+	if err != nil {
+		fmt.Printf("Error sending message: %v\n", err)
+	} else {
+		fmt.Println("Message sent")
+	}
+}
+
+// handlePeersCommand displays all peers in the cluster
+func handlePeersCommand(c *gossip.Cluster) {
+	peers := c.GetAllNodes()
+	if len(peers) == 0 {
+		fmt.Println("No peers in the cluster")
+		return
+	}
+
+	fmt.Println("Cluster peers:")
+	fmt.Println("-----------------------------------")
+	for _, p := range peers {
+		fmt.Printf("Node ID: %s\n", p.ID)
+		fmt.Printf("  Address: %s\n", p.GetAdvertisedAddr())
+		fmt.Printf("  State: %s\n", p.GetState().String())
+		fmt.Println("-----------------------------------")
+	}
+}
+
+// displayHelp shows available commands
+func displayHelp() {
+	fmt.Println("Available commands:")
+	fmt.Println("-----------------------------------")
+	fmt.Println("  gossip <message>  - Send a message to the cluster")
+	fmt.Println("  peers             - Show all peers in the cluster")
+	fmt.Println("  help              - Show this help message")
+	fmt.Println("  (Ctrl+C to exit)")
+	fmt.Println("-----------------------------------")
+
+	// Commented out for future implementation
+	/*
+	   fmt.Println("  set <key> <value> - Set a value in the distributed store")
+	   fmt.Println("  get <key>         - Get a value from the distributed store")
+	*/
+}
+
+// Commented out for future implementation
+/*
+func handleSetCommand(c *gossip.Cluster, args []string) {
+    if len(args) < 3 {
+        fmt.Println("Usage: set <key> <value>")
+        return
+    }
+
+    key := args[1]
+    value := strings.Join(args[2:], " ")
+
+    // TODO: Implement set functionality
+    // c.Set(key, value)
+
+    fmt.Println("Value set successfully")
+}
+
+func handleGetCommand(c *gossip.Cluster, args []string) {
+    if len(args) < 2 {
+        fmt.Println("Usage: get <key>")
+        return
+    }
+
+    key := args[1]
+
+    // TODO: Implement get functionality
+    // value, exists := c.Get(key)
+    // if !exists {
+    //     fmt.Println("Key not found")
+    // } else {
+    //     fmt.Println(value)
+    // }
+}
+*/

@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -483,15 +481,11 @@ func (t *transport) sendMessage(transportType TransportType, node *Node, sender 
 func (t *transport) sendPacket(transportType TransportType, node *Node, packet *Packet) error {
 
 	// Marshal the packet to a byte buffer
-	buf, err := t.packetToBuffer(packet)
+	rawPacket, err := t.packetToBuffer(packet)
 	if err != nil {
 		return err
 	}
 
-	return t.SendRawPacket(transportType, node, buf)
-}
-
-func (t *transport) SendRawPacket(transportType TransportType, node *Node, rawPacket []byte) error {
 	// If transport type is best effort but the packet is too large, switch to reliable
 	if transportType == TransportBestEffort && len(rawPacket) >= t.config.UDPMaxPacketSize {
 		transportType = TransportReliable
@@ -532,44 +526,4 @@ func (t *transport) SendRawPacket(transportType TransportType, node *Node, rawPa
 	}
 
 	return nil
-}
-
-// IsRemoteProblem determines whether the error is likely a remote problem (true) or a local problem (false).
-func (t *transport) isRemoteProblem(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// If the error has a dns: prefix, then resolve address error
-	if strings.HasPrefix(err.Error(), "dns:") {
-		return true
-	}
-
-	// Check for net.OpError, which wraps most network errors
-	var netErr *net.OpError
-	if errors.As(err, &netErr) {
-		// Check if the error originated from dialing, writing, or reading
-		if netErr.Op == "dial" || netErr.Op == "read" || netErr.Op == "write" {
-			// If it's a dial error, inspect the underlying error
-			if netErr.Op == "dial" {
-				if _, ok := netErr.Err.(*net.DNSError); ok {
-					// DNS error indicates a remote issue
-					return true
-				}
-			}
-
-			// Check the error string for certain patterns indicating remote issues
-			if strings.Contains(netErr.Err.Error(), "connection refused") ||
-				strings.Contains(netErr.Err.Error(), "connection reset by peer") ||
-				strings.Contains(netErr.Err.Error(), "no route to host") ||
-				strings.Contains(netErr.Err.Error(), "network unreachable") ||
-				strings.Contains(netErr.Err.Error(), "host is down") ||
-				strings.Contains(netErr.Err.Error(), "can't assign requested address") {
-				return true // These typically indicate remote issues
-			}
-		}
-	}
-
-	// If no specific remote issue was identified, assume it's a local problem
-	return false
 }
