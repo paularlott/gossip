@@ -653,7 +653,7 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 		AdvertisedAddr: aliveNode.advertisedAddr,
 	}
 
-	packet, err := hm.cluster.transport.buildPacket(hm.cluster.localNode.ID, aliveMsg, hm.cluster.getMaxTTL(), &msg)
+	packet, err := hm.cluster.transport.createPacket(hm.cluster.localNode.ID, aliveMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build alive message packet")
 		return
@@ -670,7 +670,7 @@ func (hm *healthMonitor) broadcastSuspicion(suspectNode *Node) {
 		NodeID: suspectNode.ID,
 	}
 
-	packet, err := hm.cluster.transport.buildPacket(hm.cluster.localNode.ID, suspicionMsg, hm.cluster.getMaxTTL(), &msg)
+	packet, err := hm.cluster.transport.createPacket(hm.cluster.localNode.ID, suspicionMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build suspicion message packet")
 		return
@@ -685,7 +685,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 		NodeID: leavingNode.ID,
 	}
 
-	packet, err := hm.cluster.transport.buildPacket(hm.cluster.localNode.ID, leavingMsg, hm.cluster.getMaxTTL(), &msg)
+	packet, err := hm.cluster.transport.createPacket(hm.cluster.localNode.ID, leavingMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build leaving message packet")
 		return

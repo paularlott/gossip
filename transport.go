@@ -19,9 +19,8 @@ import (
 type TransportType uint8
 
 const (
-	TransportAuto       TransportType = iota // Selects the transport based on the packet size, favours best effort
+	TransportBestEffort TransportType = iota // Best effort transport, uses UDP
 	TransportReliable                        // Reliable transport, uses TCP
-	TransportBestEffort                      // Best effort transport, uses UDP
 )
 
 type transport struct {
@@ -233,7 +232,7 @@ func (t *transport) nextMessageID() MessageID {
 	}
 }
 
-func (t *transport) buildPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
+func (t *transport) createPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
 	packet := &Packet{
 		MessageType: msgType,
 		SenderID:    sender,
@@ -254,7 +253,7 @@ func (t *transport) buildPacket(sender NodeID, msgType MessageType, ttl uint8, p
 // Send a message to the peer then accept a response message.
 // Uses a TCP connection to send the packet and receive the response.
 func (t *transport) sendMessageWithResponse(node *Node, sender NodeID, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
-	packet, err := t.buildPacket(sender, msgType, 1, payload)
+	packet, err := t.createPacket(sender, msgType, 1, payload)
 	if err != nil {
 		return err
 	}
@@ -310,7 +309,7 @@ func (t *transport) dialPeer(node *Node) (net.Conn, error) {
 }
 
 func (t *transport) writeMessage(conn net.Conn, sender NodeID, msgType MessageType, payload interface{}) error {
-	packet, err := t.buildPacket(sender, msgType, 1, payload)
+	packet, err := t.createPacket(sender, msgType, 1, payload)
 	if err != nil {
 		return fmt.Errorf("failed to build message: %w", err)
 	}
@@ -473,7 +472,7 @@ func (t *transport) readPacket(conn net.Conn) (*Packet, error) {
 }
 
 func (t *transport) sendMessage(transportType TransportType, node *Node, sender NodeID, msgType MessageType, ttl uint8, payload interface{}) error {
-	packet, err := t.buildPacket(sender, msgType, ttl, payload)
+	packet, err := t.createPacket(sender, msgType, ttl, payload)
 	if err != nil {
 		return err
 	}
@@ -493,13 +492,9 @@ func (t *transport) sendPacket(transportType TransportType, node *Node, packet *
 }
 
 func (t *transport) SendRawPacket(transportType TransportType, node *Node, rawPacket []byte) error {
-	// If transport type is any then use the packet size to determine the transport type
-	if transportType == TransportAuto {
-		if len(rawPacket) >= t.config.UDPMaxPacketSize {
-			transportType = TransportReliable
-		} else {
-			transportType = TransportBestEffort
-		}
+	// If transport type is best effort but the packet is too large, switch to reliable
+	if transportType == TransportBestEffort && len(rawPacket) >= t.config.UDPMaxPacketSize {
+		transportType = TransportReliable
 	}
 
 	// If using reliable transport then use TCP

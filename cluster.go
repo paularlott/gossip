@@ -218,7 +218,7 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 			} else {
 				transportType = TransportBestEffort
 			}
-			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{packet.SenderID})
+			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID})
 		}
 
 		senderNode := c.nodes.get(packet.SenderID)
@@ -411,4 +411,33 @@ func (c *Cluster) startStateSync() {
 			}
 		}
 	}()
+}
+
+func (c *Cluster) HandleFunc(msgType MessageType, forward bool, handler Handler) {
+	c.handlers.registerHandler(msgType, forward, handler)
+}
+
+func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHandler) {
+	c.handlers.registerHandlerWithReply(msgType, replyHandler)
+}
+
+func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data interface{}, excludePeers []NodeID) error {
+	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
+	if err != nil {
+		return err
+	}
+
+	c.enqueuePacketForBroadcast(packet, transport, []NodeID{c.localNode.ID})
+	return nil
+}
+
+func (c *Cluster) SendMessageWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
+	return c.transport.sendMessageWithResponse(
+		dstNode,
+		c.localNode.ID,
+		msgType,
+		&payload,
+		responseMsgType,
+		&responsePayload,
+	)
 }

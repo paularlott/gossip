@@ -88,7 +88,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 			ID:             ping.TargetID,
 			AdvertisedAddr: ping.AdvertisedAddr,
 		}
-		packet, err := c.transport.buildPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
+		packet, err := c.transport.createPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
 		if err != nil {
 			return err
 		}

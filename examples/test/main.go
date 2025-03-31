@@ -16,6 +16,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	AppMsg1 gossip.MessageType = gossip.UserMsg + iota // User message
+	AppMsg2
+)
+
 type MyListener struct{}
 
 func (l *MyListener) OnInit(cluster *gossip.Cluster) {
@@ -71,6 +76,13 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to join cluster")
 	}
+
+	cluster.HandleFunc(AppMsg1, true, func(sender *gossip.Node, packet *gossip.Packet) error {
+		fmt.Printf("Received AppMsg1 message from %s\n", sender.ID)
+		return nil
+	})
+
+	cluster.SendMessage(gossip.TransportBestEffort, AppMsg1, nil, nil)
 
 	// Handle CLI input
 	fmt.Printf("Cluster started local node ID %s\n\n", cluster.GetLocalNode().ID.String())
