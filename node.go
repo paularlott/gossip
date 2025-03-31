@@ -87,3 +87,18 @@ func (node *Node) GetState() NodeState {
 func (node *Node) GetAdvertisedAddr() string {
 	return node.advertisedAddr
 }
+
+func (node *Node) clone() *Node {
+	clone := &Node{
+		ID:              node.ID,
+		advertisedAddr:  node.advertisedAddr,
+		connectAddr:     node.connectAddr,
+		stateChangeTime: node.stateChangeTime,
+		state:           node.state,
+	}
+
+	// If using atomic last activity
+	clone.lastActivity.Store(node.lastActivity.Load())
+
+	return clone
+}

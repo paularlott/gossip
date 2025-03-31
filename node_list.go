@@ -16,6 +16,7 @@ type nodeListShard struct {
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
+	config     *Config
 	shardCount int
 	shardMask  uint32
 	shards     []*nodeListShard
@@ -31,17 +32,18 @@ type nodeList struct {
 }
 
 // NewNodeList creates a new node list
-func newNodeList(shardCount int) *nodeList {
+func newNodeList(config *Config) *nodeList {
 	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 	nl := &nodeList{
-		shardCount: shardCount,
-		shardMask:  uint32(shardCount - 1),
+		config:     config,
+		shardCount: config.NodeShardCount,
+		shardMask:  uint32(config.NodeShardCount - 1),
 		randSource: source,
 	}
 
 	// Initialize shards
-	nl.shards = make([]*nodeListShard, shardCount)
-	for i := 0; i < shardCount; i++ {
+	nl.shards = make([]*nodeListShard, config.NodeShardCount)
+	for i := 0; i < config.NodeShardCount; i++ {
 		nl.shards[i] = &nodeListShard{
 			nodes:   make(map[NodeID]*Node),
 			byState: make(map[NodeState]map[NodeID]*Node),
@@ -130,6 +132,11 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		if node.state == nodeAlive || node.state == nodeSuspect {
 			nl.liveCount.Add(1)
 		}
+
+		// Trigger event listener if configured
+		if nl.config.EventListener != nil {
+			nl.config.EventListener.OnNodeJoined(node.clone())
+		}
 	}
 
 	return true
@@ -213,6 +220,19 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 
 		// Update counters
 		nl.updateCountersForStateChange(oldState, state)
+
+		// Trigger event listener if configured
+		if nl.config.EventListener != nil {
+			switch state {
+			case nodeLeaving:
+				nl.config.EventListener.OnNodeLeft(node.clone())
+			case nodeDead:
+				nl.config.EventListener.OnNodeDead(node.clone())
+			default:
+				nl.config.EventListener.OnNodeStateChanged(node.clone(), oldState)
+			}
+		}
+
 		return true
 	}
 	return false

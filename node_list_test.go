@@ -18,7 +18,7 @@ func createMockNode(id byte, state NodeState) *Node {
 }
 
 func TestNodeListBasicOperations(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Create test nodes
 	node1 := createMockNode(1, nodeAlive)
@@ -63,7 +63,7 @@ func TestNodeListBasicOperations(t *testing.T) {
 }
 
 func TestNodeListStateTransitions(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 	node := createMockNode(1, nodeAlive)
 
 	// Add node
@@ -106,7 +106,7 @@ func TestNodeListStateTransitions(t *testing.T) {
 }
 
 func TestNodeListGetRandomLiveNodes(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Add 50 nodes (40 alive, 10 suspect)
 	for i := byte(1); i <= 50; i++ {
@@ -167,7 +167,7 @@ func TestNodeListGetRandomLiveNodes(t *testing.T) {
 }
 
 func TestNodeListExclusions(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Add 10 nodes
 	var nodes []*Node
@@ -213,7 +213,7 @@ func TestNodeListExclusions(t *testing.T) {
 }
 
 func TestForAllInState(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Add nodes in different states
 	for i := byte(1); i <= 10; i++ {
@@ -255,7 +255,7 @@ func TestForAllInState(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Add some initial nodes
 	for i := byte(1); i <= 10; i++ {
@@ -392,7 +392,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestRecalculateCounters(t *testing.T) {
-	nl := newNodeList(4)
+	nl := newNodeList(&Config{NodeShardCount: 4})
 
 	// Add nodes
 	for i := byte(1); i <= 30; i++ {

@@ -69,7 +69,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		shutdownContext: ctx,
 		cancelFunc:      cancel,
 		msgHistory:      newMessageHistory(config),
-		nodes:           newNodeList(config.NodeShardCount),
+		nodes:           newNodeList(config),
 		localNode:       newNode(NodeID(u), config.AdvertiseAddr),
 		handlers:        newHandlerRegistry(),
 		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
@@ -94,6 +94,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	// Register the system message handlers
 	cluster.registerSystemHandlers()
+
+	// Trigger the event listener
+	if config.EventListener != nil {
+		config.EventListener.OnInit(cluster)
+	}
 
 	// Start periodic state synchronization
 	cluster.startStateSync()
@@ -172,17 +177,7 @@ func (c *Cluster) Join(peers []string) error {
 // MMarks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
 	log.Info().Msg("Local node is leaving the cluster")
-
 	c.healthMonitor.MarkNodeLeaving(c.localNode)
-
-	// Broadcast leaving message multiple times to increase chance of delivery
-	for i := 0; i < 3; i++ {
-		c.healthMonitor.broadcastLeaving(c.localNode)
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Give some time for the message to propagate
-	time.Sleep(200 * time.Millisecond)
 }
 
 func (c *Cluster) acceptPackets() {
@@ -281,7 +276,7 @@ func (c *Cluster) getPeerSubsetSize(totalNodes int, purpose peerSelectionPurpose
 	}
 
 	// Apply the cap
-	return int(math.Min(basePeerCount, cap))
+	return int(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
 func (c *Cluster) getMaxTTL() uint8 {

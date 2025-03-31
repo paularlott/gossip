@@ -1075,6 +1075,12 @@ func (hm *healthMonitor) MarkNodeLeaving(node *Node) {
 	// Clean up any tracking state
 	hm.cleanNodeState(node.ID)
 
-	// Broadcast the leaving state
-	hm.broadcastLeaving(node)
+	// Broadcast leaving message multiple times to increase chance of delivery
+	for i := 0; i < 3; i++ {
+		hm.cluster.healthMonitor.broadcastLeaving(hm.cluster.localNode)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Give some time for the message to propagate
+	time.Sleep(200 * time.Millisecond)
 }

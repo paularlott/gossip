@@ -19,3 +19,12 @@ const (
 	purposeIndirectPing                              // Indirect ping requests
 	purposeTTL                                       // TTL calculation
 )
+
+// EventListener defines the interface for receiving events
+type EventListener interface {
+	OnInit(cluster *Cluster)
+	OnNodeJoined(node *Node)
+	OnNodeLeft(node *Node)
+	OnNodeDead(node *Node)
+	OnNodeStateChanged(node *Node, prevState NodeState)
+}

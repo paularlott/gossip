@@ -16,6 +16,28 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type MyListener struct{}
+
+func (l *MyListener) OnInit(cluster *gossip.Cluster) {
+	fmt.Println("MyListener: Cluster init")
+}
+
+func (l *MyListener) OnNodeJoined(node *gossip.Node) {
+	fmt.Printf("MyListener: Node %s joined\n", node.ID)
+}
+
+func (l *MyListener) OnNodeLeft(node *gossip.Node) {
+	fmt.Printf("MyListener: Node %s left\n", node.ID)
+}
+
+func (l *MyListener) OnNodeDead(node *gossip.Node) {
+	fmt.Printf("MyListener: Node %s is dead\n", node.ID)
+}
+
+func (l *MyListener) OnNodeStateChanged(node *gossip.Node, prevState gossip.NodeState) {
+	fmt.Printf("MyListener: Node %s state changed from %s to %s\n", node.ID, prevState.String(), node.GetState().String())
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -34,6 +56,7 @@ func main() {
 	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	config.AdvertiseAddr = ""
 	config.EncryptionKey = "1234567890123456"
+	config.EventListener = &MyListener{}
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
