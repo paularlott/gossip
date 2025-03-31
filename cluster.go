@@ -413,15 +413,27 @@ func (c *Cluster) startStateSync() {
 	}()
 }
 
-func (c *Cluster) HandleFunc(msgType MessageType, forward bool, handler Handler) {
+func (c *Cluster) HandleFunc(msgType MessageType, forward bool, handler Handler) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
 	c.handlers.registerHandler(msgType, forward, handler)
+	return nil
 }
 
-func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHandler) {
+func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHandler) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
 	c.handlers.registerHandlerWithReply(msgType, replyHandler)
+	return nil
 }
 
 func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data interface{}, excludePeers []NodeID) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+
 	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
 	if err != nil {
 		return err
@@ -432,6 +444,10 @@ func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data
 }
 
 func (c *Cluster) SendMessageWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
+	if msgType < UserMsg || responseMsgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+
 	return c.transport.sendMessageWithResponse(
 		dstNode,
 		c.localNode.ID,
