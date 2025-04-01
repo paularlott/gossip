@@ -468,35 +468,54 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
-func (c *Cluster) Send(msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-
+func (c *Cluster) sendMessage(transportType TransportType, msgType MessageType, data interface{}) error {
 	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
 	if err != nil {
 		return err
 	}
 
-	c.enqueuePacketForBroadcast(packet, transportBestEffort, []NodeID{c.localNode.ID})
+	c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID})
 	return nil
+}
+
+func (c *Cluster) Send(msgType MessageType, data interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessage(transportBestEffort, msgType, data)
 }
 
 func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
+	return c.sendMessage(transportReliable, msgType, data)
+}
 
+func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, msgType MessageType, data interface{}) error {
 	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
 	if err != nil {
 		return err
 	}
 
-	c.enqueuePacketForBroadcast(packet, transportReliable, []NodeID{c.localNode.ID})
-	return nil
+	return c.transport.sendPacket(transportType, dstNode, packet)
 }
 
-func (c *Cluster) SendWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
+func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageTo(transportBestEffort, dstNode, msgType, data)
+}
+
+func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageTo(transportReliable, dstNode, msgType, data)
+}
+
+func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
 	if msgType < UserMsg || responseMsgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
