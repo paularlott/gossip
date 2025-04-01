@@ -11,6 +11,7 @@ type Config struct {
 	// If not given the BindAddr will be used.
 	AdvertiseAddr                 string
 	EncryptionKey                 string        // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
+	Logger                        Logger        // Logger is the logger to use for logging messages
 	TCPDialTimeout                time.Duration // TCPDialTimeout is the duration to wait for a TCP connection to be established
 	TCPDeadline                   time.Duration // TCPDeadline is the duration to wait for a TCP operation to complete
 	UDPDeadline                   time.Duration // UDPDeadline is the duration to wait for a UDP operation to complete

@@ -135,7 +135,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 
 		// Trigger event listener if configured
 		if nl.config.EventListener != nil {
-			nl.config.EventListener.OnNodeJoined(node.clone())
+			nl.config.EventListener.OnNodeJoined(node)
 		}
 	}
 
@@ -225,11 +225,11 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 		if nl.config.EventListener != nil {
 			switch state {
 			case nodeLeaving:
-				nl.config.EventListener.OnNodeLeft(node.clone())
+				nl.config.EventListener.OnNodeLeft(node)
 			case nodeDead:
-				nl.config.EventListener.OnNodeDead(node.clone())
+				nl.config.EventListener.OnNodeDead(node)
 			default:
-				nl.config.EventListener.OnNodeStateChanged(node.clone(), oldState)
+				nl.config.EventListener.OnNodeStateChanged(node, oldState)
 			}
 		}
 

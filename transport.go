@@ -10,15 +10,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rs/zerolog/log"
-	"github.com/shamaton/msgpack/v2"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type TransportType uint8
 
 const (
-	TransportBestEffort TransportType = iota // Best effort transport, uses UDP
-	TransportReliable                        // Reliable transport, uses TCP
+	transportBestEffort TransportType = iota // Best effort transport, uses UDP
+	transportReliable                        // Reliable transport, uses TCP
 )
 
 type transport struct {
@@ -49,7 +48,10 @@ func newTransport(config *Config) (*transport, error) {
 		return nil, fmt.Errorf("failed to resolve bind address: %w", err)
 	}
 
-	log.Info().Str("bind_addr", addr.IP.String()).Uint16("bind_port", addr.Port).Msg("Binding to address")
+	config.Logger.
+		Field("bind_addr", addr.IP.String()).
+		Field("bind_port", addr.Port).
+		Infof("Binding to address")
 
 	// Create a TCP listener
 	tcpAddr := &net.TCPAddr{
@@ -60,7 +62,7 @@ func newTransport(config *Config) (*transport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create TCP listener: %w", err)
 	}
-	log.Debug().Str("tcp_addr", tcpListener.Addr().String()).Msg("TCP listener created")
+	config.Logger.Field("tcp_addr", tcpListener.Addr().String()).Debugf("TCP listener created")
 
 	// Create a UDP listener
 	udpAddr := &net.UDPAddr{
@@ -71,7 +73,7 @@ func newTransport(config *Config) (*transport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UDP listener: %w", err)
 	}
-	log.Debug().Str("udp_addr", udpListener.LocalAddr().String()).Msg("UDP listener created")
+	config.Logger.Field("udp_addr", udpListener.LocalAddr().String()).Debugf("UDP listener created")
 
 	// Create the transport
 	transport := &transport{
@@ -92,7 +94,7 @@ func newTransport(config *Config) (*transport, error) {
 	go transport.tcpListen()
 	go transport.udpListen()
 
-	log.Info().Msg("Transport started")
+	config.Logger.Infof("Transport started")
 
 	return transport, nil
 }
@@ -109,7 +111,7 @@ func (t *transport) stop() {
 
 	close(t.packetChannel)
 
-	log.Info().Msg("Transport stopped")
+	t.config.Logger.Infof("Transport stopped")
 }
 
 func (t *transport) PacketChannel() chan *incomingPacket {
@@ -124,21 +126,21 @@ func (t *transport) tcpListen() {
 				return
 			}
 
-			log.Error().Err(err).Msg("Failed to accept TCP connection")
+			t.config.Logger.Err(err).Errorf("Failed to accept TCP connection")
 			continue
 		}
 
 		go func() {
 			raw, err := t.readPacketFromConn(conn)
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to read TCP packet")
+				t.config.Logger.Err(err).Errorf("Failed to read TCP packet")
 				conn.Close()
 				return
 			}
 
 			packet, err := t.packetFromBuffer(raw)
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to decode TCP packet")
+				t.config.Logger.Err(err).Errorf("Failed to decode TCP packet")
 				conn.Close()
 				return
 			}
@@ -163,7 +165,7 @@ func (t *transport) udpListen() {
 				return
 			}
 
-			log.Error().Err(err).Msg("Failed to read from UDP connection")
+			t.config.Logger.Err(err).Errorf("Failed to read from UDP connection")
 			continue
 		}
 
@@ -171,7 +173,7 @@ func (t *transport) udpListen() {
 		if n > 0 {
 			packet, err := t.packetFromBuffer(buf[:n])
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to decode UDP packet")
+				t.config.Logger.Err(err).Errorf("Failed to decode UDP packet")
 				continue
 			}
 
@@ -487,12 +489,12 @@ func (t *transport) sendPacket(transportType TransportType, node *Node, packet *
 	}
 
 	// If transport type is best effort but the packet is too large, switch to reliable
-	if transportType == TransportBestEffort && len(rawPacket) >= t.config.UDPMaxPacketSize {
-		transportType = TransportReliable
+	if transportType == transportBestEffort && len(rawPacket) >= t.config.UDPMaxPacketSize {
+		transportType = transportReliable
 	}
 
 	// If using reliable transport then use TCP
-	if transportType == TransportReliable {
+	if transportType == transportReliable {
 		conn, err := t.dialPeer(node)
 		if err != nil {
 			return err

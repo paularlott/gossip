@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 )
 
 type Cluster struct {
@@ -39,6 +38,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	if config.AdvertiseAddr == "" {
 		config.AdvertiseAddr = config.BindAddr
+	}
+
+	if config.Logger == nil {
+		config.Logger = NewNullLogger()
 	}
 
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
@@ -103,7 +106,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Start periodic state synchronization
 	cluster.startStateSync()
 
-	log.Info().Msgf("Cluster created with Node ID: %s", u.String())
+	cluster.config.Logger.Infof("Cluster initialized with Node ID: %s", u.String())
 
 	return cluster, nil
 }
@@ -129,7 +132,7 @@ func (c *Cluster) Stop() {
 		c.cancelFunc()
 	}
 
-	log.Info().Msg("Cluster stopped")
+	c.config.Logger.Infof("Cluster stopped")
 }
 
 func (c *Cluster) Join(peers []string) error {
@@ -144,7 +147,7 @@ func (c *Cluster) Join(peers []string) error {
 
 	// Join the cluster by attempting to connect to as many peers as possible
 	for _, peerAddr := range peers {
-		log.Debug().Msgf("Attempting to join peer: %s", peerAddr)
+		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
 		joinMsg := &joinMessage{
 			ID:             c.localNode.ID,
@@ -154,7 +157,7 @@ func (c *Cluster) Join(peers []string) error {
 		node := newNode(c.localNode.ID, peerAddr)
 		err := c.transport.sendMessageWithResponse(node, c.localNode.ID, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
 		if err != nil {
-			log.Warn().Err(err).Msgf("Failed to join peer %s", peerAddr)
+			c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
 			continue
 		}
 
@@ -164,11 +167,11 @@ func (c *Cluster) Join(peers []string) error {
 		if c.nodes.addIfNotExists(node) {
 			err = c.exchangeState(node, []NodeID{c.localNode.ID})
 			if err != nil {
-				log.Warn().Err(err).Msgf("Failed to exchange state with peer %s", peerAddr)
+				c.config.Logger.Err(err).Warnf("Failed to exchange state with peer %s", peerAddr)
 			}
 		}
 
-		log.Info().Msgf("Joined peer: %s", peerAddr)
+		c.config.Logger.Infof("Joined peer: %s", peerAddr)
 	}
 
 	return nil
@@ -176,7 +179,7 @@ func (c *Cluster) Join(peers []string) error {
 
 // MMarks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
-	log.Info().Msg("Local node is leaving the cluster")
+	c.config.Logger.Infof("Local node is leaving the cluster")
 	c.healthMonitor.MarkNodeLeaving(c.localNode)
 }
 
@@ -214,9 +217,9 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 		if h.forward {
 			var transportType TransportType
 			if incomingPacket.conn != nil {
-				transportType = TransportReliable
+				transportType = transportReliable
 			} else {
-				transportType = TransportBestEffort
+				transportType = transportBestEffort
 			}
 			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID})
 		}
@@ -228,19 +231,11 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 
 		err := h.dispatch(incomingPacket.conn, c.localNode, c.transport, senderNode, packet)
 		if err != nil {
-			log.Warn().Err(err).Msgf("Error dispatching packet: %d", packet.MessageType)
+			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
-		log.Warn().Msgf("No handler registered for message type: %d", packet.MessageType)
+		c.config.Logger.Warnf("No handler registered for message type: %d", packet.MessageType)
 	}
-}
-
-func (c *Cluster) GetLocalNode() *Node {
-	return c.localNode
-}
-
-func (c *Cluster) GetAllNodes() []*Node {
-	return c.nodes.getAll()
 }
 
 // GetPeerSubsetSize calculates the number of peers to use for operations based on cluster size and purpose
@@ -326,7 +321,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 
 // Enqueue a packet for broadcasting to peers.
 // If useReliable is true, the packet will be sent reliably, if false it will be sent over UDP if it's small enough or TCP otherwise.
-func (cluster *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType TransportType, excludePeers []NodeID) {
+func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType TransportType, excludePeers []NodeID) {
 
 	// Once the packets TTL is 0 we don't forward it stops it bouncing around the cluster
 	if packet.TTL == 0 {
@@ -342,12 +337,11 @@ func (cluster *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType 
 
 	// Use non-blocking send to avoid getting stuck if queue is full
 	select {
-	case cluster.broadcastQueue <- item:
+	case c.broadcastQueue <- item:
 		// Successfully queued
 	default:
 		// Queue full, log and skip this message
-		log.Error().
-			Msg("Broadcast queue is full, skipping message")
+		c.config.Logger.Errorf("Broadcast queue is full, skipping message")
 	}
 }
 
@@ -360,7 +354,7 @@ func (c *Cluster) broadcastWorker() {
 			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers)
 			for _, peer := range peerSubset {
 				if err := c.transport.sendPacket(item.transportType, peer, item.packet); err != nil {
-					log.Warn().Err(err).Msgf("Failed to send packet to peer %s", peer.ID)
+					c.config.Logger.Err(err).Warnf("Failed to send packet to peer %s", peer.ID)
 				}
 			}
 
@@ -397,11 +391,9 @@ func (c *Cluster) startStateSync() {
 					go func(p *Node) {
 						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
 						if err != nil {
-							log.Debug().Err(err).Str("peer", p.ID.String()).
-								Msg("Periodic state exchange failed")
+							c.config.Logger.Err(err).Field("peer", p.ID.String()).Debugf("Periodic state exchange failed")
 						} else {
-							log.Trace().Str("peer", p.ID.String()).
-								Msg("Completed periodic state exchange")
+							c.config.Logger.Field("peer", p.ID.String()).Debugf("Completed periodic state exchange")
 						}
 					}(peer)
 				}
@@ -413,14 +405,61 @@ func (c *Cluster) startStateSync() {
 	}()
 }
 
-func (c *Cluster) HandleFunc(msgType MessageType, forward bool, handler Handler) error {
+func (c *Cluster) GetLocalNode() *Node {
+	return c.localNode
+}
+
+func (c *Cluster) GetAllNodes() []*Node {
+	return c.nodes.getAll()
+}
+
+func (c *Cluster) GetNodeByID(id NodeID) *Node {
+	return c.nodes.get(id)
+}
+
+func (c *Cluster) NumNodes() int {
+	return c.nodes.getTotalCount()
+}
+
+// Get the number of nodes that are currently alive or suspect
+func (c *Cluster) NumLiveNodes() int {
+	return c.nodes.getLiveCount()
+}
+
+// Get the number of nodes that are currently alive
+func (c *Cluster) NumAliveNodes() int {
+	return c.nodes.getAliveCount()
+}
+
+// Get the number of nodes that are currently suspect
+func (c *Cluster) NumSuspectNodes() int {
+	return c.nodes.getSuspectCount()
+}
+
+// Get the number of nodes that are currently dead
+func (c *Cluster) NumDeadNodes() int {
+	return c.nodes.getDeadCount()
+}
+
+// Registers a handler to accept a message and automatically forward it to other nodes
+func (c *Cluster) HandleFunc(msgType MessageType, handler Handler) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
-	c.handlers.registerHandler(msgType, forward, handler)
+	c.handlers.registerHandler(msgType, true, handler)
 	return nil
 }
 
+// Registers a handler to accept a message without automatically forwarding it to other nodes
+func (c *Cluster) HandleFuncNoForward(msgType MessageType, handler Handler) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+	c.handlers.registerHandler(msgType, false, handler)
+	return nil
+}
+
+// Registers a handler to accept a message and reply to the sender, always uses the reliable transport
 func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHandler) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
@@ -429,7 +468,7 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
-func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data interface{}) error {
+func (c *Cluster) Send(msgType MessageType, data interface{}) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
@@ -439,11 +478,25 @@ func (c *Cluster) SendMessage(transport TransportType, msgType MessageType, data
 		return err
 	}
 
-	c.enqueuePacketForBroadcast(packet, transport, []NodeID{c.localNode.ID})
+	c.enqueuePacketForBroadcast(packet, transportBestEffort, []NodeID{c.localNode.ID})
 	return nil
 }
 
-func (c *Cluster) SendMessageWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
+func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+
+	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
+	if err != nil {
+		return err
+	}
+
+	c.enqueuePacketForBroadcast(packet, transportReliable, []NodeID{c.localNode.ID})
+	return nil
+}
+
+func (c *Cluster) SendWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
 	if msgType < UserMsg || responseMsgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}

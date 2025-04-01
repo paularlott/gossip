@@ -1,7 +1,7 @@
 package gossip
 
 import (
-	"github.com/shamaton/msgpack/v2"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type MessageType uint16

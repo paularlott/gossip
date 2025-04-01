@@ -16,6 +16,38 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ZerologLogger implements the Logger interface using zerolog
+type ZerologLogger struct {
+	zl zerolog.Logger
+}
+
+func NewZerologLogger(zl zerolog.Logger) *ZerologLogger {
+	return &ZerologLogger{zl: zl}
+}
+
+func (l *ZerologLogger) Debugf(format string, args ...interface{}) {
+	l.zl.Debug().Msgf(format, args...)
+}
+func (l *ZerologLogger) Infof(format string, args ...interface{}) {
+	l.zl.Info().Msgf(format, args...)
+}
+func (l *ZerologLogger) Warnf(format string, args ...interface{}) {
+	l.zl.Warn().Msgf(format, args...)
+}
+func (l *ZerologLogger) Errorf(format string, args ...interface{}) {
+	l.zl.Error().Msgf(format, args...)
+}
+func (l *ZerologLogger) Field(key string, value interface{}) gossip.Logger {
+	return &ZerologLogger{
+		zl: l.zl.With().Interface(key, value).Logger(),
+	}
+}
+func (l *ZerologLogger) Err(err error) gossip.Logger {
+	return &ZerologLogger{
+		zl: l.zl.With().Err(err).Logger(),
+	}
+}
+
 const (
 	GossipMsg gossip.MessageType = gossip.UserMsg + iota // User message
 )
@@ -65,6 +97,7 @@ func main() {
 	config.AdvertiseAddr = ""
 	config.EncryptionKey = "1234567890123456"
 	config.EventListener = &MyListener{}
+	config.Logger = NewZerologLogger(log.Logger)
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
@@ -80,7 +113,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to join cluster")
 	}
 
-	cluster.HandleFunc(GossipMsg, true, func(sender *gossip.Node, packet *gossip.Packet) error {
+	cluster.HandleFunc(GossipMsg, func(sender *gossip.Node, packet *gossip.Packet) error {
 		var msg GossipMessage
 		if err := packet.Unmarshal(&msg); err != nil {
 			return err
@@ -195,7 +228,7 @@ func handleGossipCommand(c *gossip.Cluster, args []string) {
 	messageText := strings.Join(args[1:], " ")
 
 	msg := GossipMessage{Message: messageText}
-	err := c.SendMessage(gossip.TransportBestEffort, GossipMsg, msg)
+	err := c.Send(GossipMsg, msg)
 	if err != nil {
 		fmt.Printf("Error sending message: %v\n", err)
 	} else {

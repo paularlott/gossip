@@ -5,8 +5,6 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-
-	"github.com/rs/zerolog/log"
 )
 
 type Handler func(*Node, *Packet) error
@@ -62,7 +60,7 @@ func (hr *handlerRegistry) register(t MessageType, h msgHandler) {
 	}
 
 	if _, ok := newHandlers[t]; ok {
-		log.Fatal().Msgf("Handler already registered for message type: %d", t)
+		panic(fmt.Sprintf("Handler already registered for message type: %d", t))
 	}
 
 	newHandlers[t] = h

@@ -88,17 +88,14 @@ func (node *Node) GetAdvertisedAddr() string {
 	return node.advertisedAddr
 }
 
-func (node *Node) clone() *Node {
-	clone := &Node{
-		ID:              node.ID,
-		advertisedAddr:  node.advertisedAddr,
-		connectAddr:     node.connectAddr,
-		stateChangeTime: node.stateChangeTime,
-		state:           node.state,
-	}
+func (node *Node) DeadOrLeft() bool {
+	return node.state == nodeDead || node.state == nodeLeaving
+}
 
-	// If using atomic last activity
-	clone.lastActivity.Store(node.lastActivity.Load())
+func (node *Node) Alive() bool {
+	return node.state == nodeAlive
+}
 
-	return clone
+func (node *Node) Suspect() bool {
+	return node.state == nodeSuspect
 }
