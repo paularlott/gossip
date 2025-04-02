@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-msgpack/v2 v2.1.3
+	github.com/klauspost/compress v1.18.0
 	github.com/rs/zerolog v1.34.0
 	github.com/shamaton/msgpack/v2 v2.2.3
 	github.com/vmihailenco/msgpack/v5 v5.4.1

@@ -12,6 +12,7 @@ import (
 
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/compression"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -100,6 +101,8 @@ func main() {
 	config.EventListener = &MyListener{}
 	config.Logger = NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
+
+	config.Compressor = compression.NewSnappyCompressor()
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {

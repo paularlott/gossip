@@ -238,11 +238,32 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 		return nil, err
 	}
 
+	// If we compressor then compress the packet
+	var compressedData []byte
+	isCompressed := false
+	if t.config.Compressor != nil && len(packet.payload) >= t.config.CompressMinSize {
+		compressedData, err = t.config.Compressor.Compress(packet.payload)
+		if err != nil {
+			return nil, err
+		}
+
+		// If compressed data is smaller than the original data then use it
+		if len(compressedData) < len(packet.payload) {
+			isCompressed = true
+		}
+	}
+
 	// Create a buffer to hold the packet data
 	var buf bytes.Buffer
 
 	// Write the size of the packet header as a 16-bit big endian integer
 	packetSize := uint16(len(headerBytes))
+
+	// If payload is compressed set the MSB bit of the packet size
+	if isCompressed {
+		packetSize |= 0x8000
+	}
+
 	err = binary.Write(&buf, binary.BigEndian, packetSize)
 	if err != nil {
 		return nil, err
@@ -255,7 +276,11 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 	}
 
 	// Write the payload byte slice from the packet
-	_, err = buf.Write(packet.payload)
+	if isCompressed {
+		_, err = buf.Write(compressedData)
+	} else {
+		_, err = buf.Write(packet.payload)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +309,13 @@ func (t *transport) packetFromBuffer(data []byte) (*Packet, error) {
 		return nil, fmt.Errorf("packet too small")
 	}
 
+	// Read the header size from the first 2 bytes and strip the MSB bit if set remembering that the MSB bit is set if the payload is compressed
+	isCompressed := false
 	headerSize := binary.BigEndian.Uint16(data[:2])
+	if headerSize&0x8000 != 0 {
+		headerSize &= 0x7FFF
+		isCompressed = true
+	}
 	if len(data) < int(headerSize)+2 {
 		return nil, fmt.Errorf("packet too small")
 	}
@@ -297,8 +328,16 @@ func (t *transport) packetFromBuffer(data []byte) (*Packet, error) {
 	}
 
 	// Attach the payload to the packet
-	packet.payload = data[headerSize+2:]
 	packet.codec = t.config.MsgCodec
+
+	if t.config.Compressor != nil && isCompressed {
+		packet.payload, err = t.config.Compressor.Decompress(data[headerSize+2:])
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		packet.payload = data[headerSize+2:]
+	}
 
 	return &packet, nil
 }
