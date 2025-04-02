@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,13 +16,15 @@ type Cluster struct {
 	config          *Config
 	shutdownContext context.Context
 	cancelFunc      context.CancelFunc
+	shutdownWg      sync.WaitGroup
 	msgHistory      *messageHistory
-	transport       *transport
+	transport       Transport
 	nodes           *nodeList
 	localNode       *Node
 	handlers        *handlerRegistry
 	broadcastQueue  chan *broadcastQItem
 	healthMonitor   *healthMonitor
+	messageIdGen    atomic.Pointer[MessageID]
 }
 
 type broadcastQItem struct {
@@ -42,6 +46,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	if config.Logger == nil {
 		config.Logger = NewNullLogger()
+	}
+
+	// Check we have a codec for encoding and decoding messages
+	if config.MsgCodec == nil {
+		return nil, fmt.Errorf("missing MsgCodec")
 	}
 
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
@@ -78,13 +87,26 @@ func NewCluster(config *Config) (*Cluster, error) {
 		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
 	}
 
+	initialMessageID := MessageID{
+		Timestamp: time.Now().UnixNano(),
+		Seq:       0,
+	}
+	cluster.messageIdGen.Store(&initialMessageID)
+
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
-	cluster.transport, err = newTransport(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transport: %v", err)
+	if config.Transport == nil {
+		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create transport: %v", err)
+		}
+	} else {
+		cluster.transport = config.Transport
 	}
+
+	// Add all background goroutines to the WaitGroup
+	cluster.shutdownWg.Add(1 + config.NumSendWorkers)
 
 	// Start the workers
 	for range config.NumSendWorkers {
@@ -111,7 +133,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	return cluster, nil
 }
 
-func (c *Cluster) Stop() {
+func (c *Cluster) Shutdown() {
 	if c.localNode.state != nodeLeaving {
 		c.Leave()
 	}
@@ -124,13 +146,12 @@ func (c *Cluster) Stop() {
 		c.msgHistory.stop()
 	}
 
-	if c.transport != nil {
-		c.transport.stop()
-	}
-
 	if c.cancelFunc != nil {
 		c.cancelFunc()
 	}
+
+	// Wait for all goroutines to finish
+	c.shutdownWg.Wait()
 
 	c.config.Logger.Infof("Cluster stopped")
 }
@@ -155,7 +176,7 @@ func (c *Cluster) Join(peers []string) error {
 		}
 
 		node := newNode(c.localNode.ID, peerAddr)
-		err := c.transport.sendMessageWithResponse(node, c.localNode.ID, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
+		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
 		if err != nil {
 			c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
 			continue
@@ -184,6 +205,8 @@ func (c *Cluster) Leave() {
 }
 
 func (c *Cluster) acceptPackets() {
+	defer c.shutdownWg.Done()
+
 	for {
 		select {
 		case incomingPacket := <-c.transport.PacketChannel():
@@ -197,13 +220,17 @@ func (c *Cluster) acceptPackets() {
 	}
 }
 
-func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
-	if incomingPacket.conn != nil {
-		defer incomingPacket.conn.Close()
+func (c *Cluster) handleIncomingPacket(incomingPacket *IncomingPacket) {
+	var transportType TransportType
+	if incomingPacket.Conn != nil {
+		defer incomingPacket.Conn.Close()
+		transportType = TransportReliable
+	} else {
+		transportType = TransportBestEffort
 	}
 
 	// If the sender is us or already seen then ignore the message
-	packet := incomingPacket.packet
+	packet := incomingPacket.Packet
 	if packet.SenderID == c.localNode.ID || c.msgHistory.contains(packet.SenderID, packet.MessageID) {
 		return
 	}
@@ -215,12 +242,6 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 	h := c.handlers.getHandler(packet.MessageType)
 	if h != nil {
 		if h.forward {
-			var transportType TransportType
-			if incomingPacket.conn != nil {
-				transportType = transportReliable
-			} else {
-				transportType = transportBestEffort
-			}
 			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID})
 		}
 
@@ -229,7 +250,7 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *incomingPacket) {
 			senderNode.updateLastActivity()
 		}
 
-		err := h.dispatch(incomingPacket.conn, c.localNode, c.transport, senderNode, packet)
+		err := h.dispatch(incomingPacket.Conn, c, senderNode, packet)
 		if err != nil {
 			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
 		}
@@ -303,9 +324,8 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	}
 
 	// Exchange state with the peer
-	err := c.transport.sendMessageWithResponse(
+	err := c.sendToWithResponse(
 		node,
-		c.localNode.ID,
 		pushPullStateMsg,
 		&peerStates,
 		pushPullStateAckMsg,
@@ -346,6 +366,8 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 }
 
 func (c *Cluster) broadcastWorker() {
+	defer c.shutdownWg.Done()
+
 	for {
 		select {
 		case item := <-c.broadcastQueue:
@@ -353,7 +375,7 @@ func (c *Cluster) broadcastWorker() {
 			// Get the peer subset to send the packet to
 			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers)
 			for _, peer := range peerSubset {
-				if err := c.transport.sendPacket(item.transportType, peer, item.packet); err != nil {
+				if err := c.transport.SendPacket(item.transportType, peer, item.packet); err != nil {
 					c.config.Logger.Err(err).Warnf("Failed to send packet to peer %s", peer.ID)
 				}
 			}
@@ -466,66 +488,4 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	}
 	c.handlers.registerHandlerWithReply(msgType, replyHandler)
 	return nil
-}
-
-func (c *Cluster) sendMessage(transportType TransportType, msgType MessageType, data interface{}) error {
-	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
-	if err != nil {
-		return err
-	}
-
-	c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID})
-	return nil
-}
-
-func (c *Cluster) Send(msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-	return c.sendMessage(transportBestEffort, msgType, data)
-}
-
-func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-	return c.sendMessage(transportReliable, msgType, data)
-}
-
-func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, msgType MessageType, data interface{}) error {
-	packet, err := c.transport.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
-	if err != nil {
-		return err
-	}
-
-	return c.transport.sendPacket(transportType, dstNode, packet)
-}
-
-func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-	return c.sendMessageTo(transportBestEffort, dstNode, msgType, data)
-}
-
-func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-	return c.sendMessageTo(transportReliable, dstNode, msgType, data)
-}
-
-func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
-	if msgType < UserMsg || responseMsgType < UserMsg {
-		return fmt.Errorf("invalid message type")
-	}
-
-	return c.transport.sendMessageWithResponse(
-		dstNode,
-		c.localNode.ID,
-		msgType,
-		&payload,
-		responseMsgType,
-		&responsePayload,
-	)
 }

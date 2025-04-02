@@ -1,9 +1,5 @@
 package gossip
 
-import (
-	"github.com/vmihailenco/msgpack/v5"
-)
-
 type MessageType uint16
 type MessageID struct {
 	Timestamp int64
@@ -31,52 +27,57 @@ const (
 
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
-	MessageType MessageType `msgpack:"message_type"`
-	SenderID    NodeID      `msgpack:"sender_id"`
-	MessageID   MessageID   `msgpack:"message_id"`
-	TTL         uint8       `msgpack:"ttl"`
-	Payload     []byte      `msgpack:"-"`
+	MessageType MessageType `msgpack:"message_type" json:"message_type"`
+	SenderID    NodeID      `msgpack:"sender_id" json:"sender_id"`
+	MessageID   MessageID   `msgpack:"message_id" json:"message_id"`
+	TTL         uint8       `msgpack:"ttl" json:"ttl"`
+	payload     []byte
+	codec       MsgCodec
 }
 
 func (p *Packet) Unmarshal(v interface{}) error {
-	return msgpack.Unmarshal(p.Payload, v)
+	return p.codec.Unmarshal(p.payload, v)
+}
+
+func (p *Packet) Codec() MsgCodec {
+	return p.codec
 }
 
 type joinMessage struct {
-	ID             NodeID `msgpack:"id"`
-	AdvertisedAddr string `msgpack:"advertised_addr"`
+	ID             NodeID `msgpack:"id" json:"id"`
+	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
 }
 
 type exchangeNodeState struct {
-	ID              NodeID    `msgpack:"id"`
-	AdvertisedAddr  string    `msgpack:"advertised_addr"`
-	State           NodeState `msgpack:"state"`
-	StateChangeTime int64     `msgpack:"state_change_time"`
+	ID              NodeID    `msgpack:"id" json:"id"`
+	AdvertisedAddr  string    `msgpack:"advertised_addr" json:"advertised_addr"`
+	State           NodeState `msgpack:"state" json:"state"`
+	StateChangeTime int64     `msgpack:"state_change_time" json:"state_change_time"`
 }
 
 type pingMessage struct {
-	TargetID NodeID `msgpack:"target_id"`
-	Seq      uint32 `msgpack:"seq"`
-	FromAddr string `msgpack:"from_addr"`
+	TargetID NodeID `msgpack:"target_id" json:"target_id"`
+	Seq      uint32 `msgpack:"seq" json:"seq"`
+	FromAddr string `msgpack:"from_addr" json:"from_addr"`
 }
 
 type indirectPingMessage struct {
-	TargetID       NodeID `msgpack:"target_id"`
-	AdvertisedAddr string `msgpack:"advertised_addr"`
-	Seq            uint32 `msgpack:"seq"`
-	Ok             bool   `msgpack:"ok"`
-	FromAddr       string `msgpack:"from_addr"`
+	TargetID       NodeID `msgpack:"target_id" json:"target_id"`
+	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
+	Seq            uint32 `msgpack:"seq" json:"seq"`
+	Ok             bool   `msgpack:"ok" json:"ok"`
+	FromAddr       string `msgpack:"from_addr" json:"from_addr"`
 }
 
 type aliveMessage struct {
-	NodeID         NodeID `msgpack:"node_id"`
-	AdvertisedAddr string `msgpack:"advertised_addr"`
+	NodeID         NodeID `msgpack:"node_id" json:"node_id"`
+	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
 }
 
 type suspicionMessage struct {
-	NodeID NodeID `msgpack:"node_id"`
+	NodeID NodeID `msgpack:"node_id" json:"node_id"`
 }
 
 type leavingMessage struct {
-	NodeID NodeID `msgpack:"node_id"`
+	NodeID NodeID `msgpack:"node_id" json:"node_id"`
 }

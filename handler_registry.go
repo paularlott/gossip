@@ -17,15 +17,19 @@ type msgHandler struct {
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
-func (mh *msgHandler) dispatch(conn net.Conn, localNode *Node, transport *transport, node *Node, packet *Packet) error {
+func (mh *msgHandler) dispatch(conn net.Conn, c *Cluster, node *Node, packet *Packet) error {
 	if conn != nil && mh.replyHandler != nil {
 		replyType, replyData, err := mh.replyHandler(node, packet)
 		if err != nil {
 			return err
 		}
 
-		if replyType != nilMsg && transport != nil {
-			return transport.writeMessage(conn, localNode.ID, replyType, replyData)
+		if replyType != nilMsg && c != nil {
+			packet, err := c.createPacket(c.localNode.ID, replyType, 1, replyData)
+			if err != nil {
+				return err
+			}
+			return c.transport.WritePacket(conn, packet)
 		}
 		return nil
 	} else if mh.handler != nil {

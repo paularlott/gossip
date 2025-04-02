@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/gossip/codec"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -53,7 +54,7 @@ const (
 )
 
 type GossipMessage struct {
-	Message string `msgpack:"message"`
+	Message string `msgpack:"message" json:"message"`
 }
 
 type MyListener struct{}
@@ -98,6 +99,7 @@ func main() {
 	config.EncryptionKey = "1234567890123456"
 	config.EventListener = &MyListener{}
 	config.Logger = NewZerologLogger(log.Logger)
+	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
@@ -105,7 +107,7 @@ func main() {
 	}
 	defer func() {
 		cluster.Leave()
-		cluster.Stop()
+		cluster.Shutdown()
 	}()
 
 	err = cluster.Join(peers)

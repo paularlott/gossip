@@ -28,3 +28,14 @@ type EventListener interface {
 	OnNodeDead(node *Node)
 	OnNodeStateChanged(node *Node, prevState NodeState)
 }
+
+// Interface for decoupling the message serialization and deserialization
+type MsgCodec interface {
+	Marshal(v interface{}) ([]byte, error)
+	Unmarshal(data []byte, v interface{}) error
+}
+
+type CompressionCodec interface {
+	Compress(data []byte) ([]byte, error)
+	Decompress(data []byte) ([]byte, error)
+}

@@ -37,7 +37,7 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 	}
 
 	// Echo the ping back to the sender
-	return c.transport.sendMessage(transportBestEffort, sender, c.localNode.ID, pingAckMsg, 1, &ping)
+	return c.sendMessageTo(TransportBestEffort, sender, 1, pingAckMsg, &ping)
 }
 
 func (c *Cluster) handlePingAck(sender *Node, packet *Packet) error {
@@ -73,7 +73,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	}
 
 	// Respond to the sender with the ping acknowledgment
-	err = c.transport.sendMessage(transportBestEffort, sender, c.localNode.ID, indirectPingAckMsg, 1, &ping)
+	err = c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)
 	if err != nil {
 		return err
 	}
@@ -88,11 +88,11 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 			ID:             ping.TargetID,
 			AdvertisedAddr: ping.AdvertisedAddr,
 		}
-		packet, err := c.transport.createPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
+		packet, err := c.createPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
 		if err != nil {
 			return err
 		}
-		c.enqueuePacketForBroadcast(packet, transportBestEffort, []NodeID{c.localNode.ID, ping.TargetID, packet.SenderID})
+		c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, ping.TargetID, packet.SenderID})
 	}
 
 	return nil
@@ -126,7 +126,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	// Gossip the node to our peers
 	packet.MessageType = nodeJoiningMsg
-	c.enqueuePacketForBroadcast(packet, transportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
+	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
 
 	// Respond to the sender with our information
 	selfJoinMsg := joinMessage{
