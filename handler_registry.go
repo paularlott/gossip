@@ -3,7 +3,6 @@ package gossip
 import (
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 )
 
@@ -40,22 +39,16 @@ func (mh *msgHandler) dispatch(conn net.Conn, c *Cluster, node *Node, packet *Pa
 }
 
 type handlerRegistry struct {
-	registerMutex sync.Mutex
-	handlers      atomic.Value
+	handlers atomic.Value
 }
 
 func newHandlerRegistry() *handlerRegistry {
-	registry := &handlerRegistry{
-		registerMutex: sync.Mutex{},
-	}
+	registry := &handlerRegistry{}
 	registry.handlers.Store(make(map[MessageType]msgHandler))
 	return registry
 }
 
 func (hr *handlerRegistry) register(t MessageType, h msgHandler) {
-	hr.registerMutex.Lock()
-	defer hr.registerMutex.Unlock()
-
 	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
 
 	newHandlers := make(map[MessageType]msgHandler, len(currentHandlers))
