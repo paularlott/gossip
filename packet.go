@@ -21,15 +21,16 @@ const (
 	aliveMsg                               // Sent to announce a node is alive
 	suspicionMsg                           // Sent to announce a node is suspected to be dead
 	leavingMsg                             // Sent to announce a node is leaving
+	metadataUpdateMsg                      // Update the metadata of a node
 	_                                      // skip to 128
 	UserMsg             MessageType = 128  // User messages start here
 )
 
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
-	MessageType MessageType `msgpack:"message_type" json:"message_type"`
-	SenderID    NodeID      `msgpack:"sender_id" json:"sender_id"`
-	MessageID   MessageID   `msgpack:"message_id" json:"message_id"`
+	MessageType MessageType `msgpack:"mt" json:"mt"`
+	SenderID    NodeID      `msgpack:"si" json:"si"`
+	MessageID   MessageID   `msgpack:"mi" json:"mi"`
 	TTL         uint8       `msgpack:"ttl" json:"ttl"`
 	payload     []byte
 	codec       MsgCodec
@@ -44,40 +45,49 @@ func (p *Packet) Codec() MsgCodec {
 }
 
 type joinMessage struct {
-	ID             NodeID `msgpack:"id" json:"id"`
-	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
+	ID                NodeID                 `msgpack:"id" json:"id"`
+	AdvertisedAddr    string                 `msgpack:"aa" json:"aa"`
+	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type exchangeNodeState struct {
-	ID              NodeID    `msgpack:"id" json:"id"`
-	AdvertisedAddr  string    `msgpack:"advertised_addr" json:"advertised_addr"`
-	State           NodeState `msgpack:"state" json:"state"`
-	StateChangeTime int64     `msgpack:"state_change_time" json:"state_change_time"`
+	ID                NodeID                 `msgpack:"id" json:"id"`
+	AdvertisedAddr    string                 `msgpack:"aa" json:"aa"`
+	State             NodeState              `msgpack:"s" json:"s"`
+	StateChangeTime   int64                  `msgpack:"sct" json:"sct"`
+	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type pingMessage struct {
-	TargetID NodeID `msgpack:"target_id" json:"target_id"`
+	TargetID NodeID `msgpack:"ti" json:"ti"`
 	Seq      uint32 `msgpack:"seq" json:"seq"`
-	FromAddr string `msgpack:"from_addr" json:"from_addr"`
+	FromAddr string `msgpack:"faddr" json:"faddr"`
 }
 
 type indirectPingMessage struct {
-	TargetID       NodeID `msgpack:"target_id" json:"target_id"`
-	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
+	TargetID       NodeID `msgpack:"ti" json:"ti"`
+	AdvertisedAddr string `msgpack:"aa" json:"aa"`
 	Seq            uint32 `msgpack:"seq" json:"seq"`
 	Ok             bool   `msgpack:"ok" json:"ok"`
-	FromAddr       string `msgpack:"from_addr" json:"from_addr"`
+	FromAddr       string `msgpack:"faddr" json:"faddr"`
 }
 
 type aliveMessage struct {
-	NodeID         NodeID `msgpack:"node_id" json:"node_id"`
-	AdvertisedAddr string `msgpack:"advertised_addr" json:"advertised_addr"`
+	NodeID         NodeID `msgpack:"ni" json:"ni"`
+	AdvertisedAddr string `msgpack:"aa" json:"aa"`
 }
 
 type suspicionMessage struct {
-	NodeID NodeID `msgpack:"node_id" json:"node_id"`
+	NodeID NodeID `msgpack:"ni" json:"ni"`
 }
 
 type leavingMessage struct {
-	NodeID NodeID `msgpack:"node_id" json:"node_id"`
+	NodeID NodeID `msgpack:"ni" json:"ni"`
+}
+
+type metadataUpdateMessage struct {
+	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }

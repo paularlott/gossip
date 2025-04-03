@@ -36,15 +36,21 @@ type Node struct {
 	stateChangeTime time.Time
 	state           NodeState
 	lastActivity    atomic.Int64 // Timestamp of last message received
+	Metadata        MetadataReader
+	metadata        *Metadata
 }
 
 func newNode(id NodeID, advertisedAddr string) *Node {
+	metadata := NewMetadata()
+
 	n := &Node{
 		ID:              id,
 		advertisedAddr:  advertisedAddr,
 		connectAddr:     nil,
 		stateChangeTime: time.Now(),
 		state:           nodeAlive,
+		Metadata:        metadata,
+		metadata:        metadata,
 	}
 
 	n.lastActivity.Store(time.Now().UnixNano())

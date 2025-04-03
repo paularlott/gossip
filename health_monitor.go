@@ -938,6 +938,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				// Create a new node with the remote information
 				newNode := newNode(remoteState.ID, remoteState.AdvertisedAddr)
 				newNode.state = remoteState.State
+				newNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true)
 
 				// Add the node to our list
 				hm.cluster.nodes.addIfNotExists(newNode)
@@ -946,6 +947,8 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			// No further processing needed for new nodes
 			continue
 		}
+
+		localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, false)
 
 		// We know about this node, determine if we should update our state
 		hm.config.Logger.

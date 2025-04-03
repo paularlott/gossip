@@ -171,9 +171,13 @@ func (c *Cluster) Join(peers []string) error {
 		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
 		joinMsg := &joinMessage{
-			ID:             c.localNode.ID,
-			AdvertisedAddr: c.localNode.advertisedAddr,
+			ID:                c.localNode.ID,
+			AdvertisedAddr:    c.localNode.advertisedAddr,
+			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+			Metadata:          c.localNode.metadata.GetAll(),
 		}
+
+		fmt.Println("Join message:", joinMsg)
 
 		node := newNode(c.localNode.ID, peerAddr)
 		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
@@ -185,6 +189,7 @@ func (c *Cluster) Join(peers []string) error {
 		// Update the node with the peer's advertised address and ID then save it
 		node.ID = joinMsg.ID
 		node.advertisedAddr = joinMsg.AdvertisedAddr
+		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
 		if c.nodes.addIfNotExists(node) {
 			err = c.exchangeState(node, []NodeID{c.localNode.ID})
 			if err != nil {
@@ -311,10 +316,12 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	var peerStates []exchangeNodeState
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
-			ID:              n.ID,
-			AdvertisedAddr:  n.advertisedAddr,
-			State:           n.state,
-			StateChangeTime: n.stateChangeTime.UnixNano(),
+			ID:                n.ID,
+			AdvertisedAddr:    n.advertisedAddr,
+			State:             n.state,
+			StateChangeTime:   n.stateChangeTime.UnixNano(),
+			MetadataTimestamp: n.metadata.GetTimestamp(),
+			Metadata:          n.metadata.GetAll(),
 		})
 	}
 
@@ -429,6 +436,11 @@ func (c *Cluster) startStateSync() {
 
 func (c *Cluster) GetLocalNode() *Node {
 	return c.localNode
+}
+
+// Get the local nodes metadata for read and write access
+func (c *Cluster) LocalMetadata() *Metadata {
+	return c.localNode.metadata
 }
 
 func (c *Cluster) GetAllNodes() []*Node {

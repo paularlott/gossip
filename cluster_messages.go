@@ -164,3 +164,19 @@ func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload
 
 	return c.sendToWithResponse(dstNode, msgType, payload, responseMsgType, responsePayload)
 }
+
+// Send a metadata update to the cluster.
+func (c *Cluster) SendMetadataUpdate() error {
+	updateMsg := &metadataUpdateMessage{
+		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+		Metadata:          c.localNode.metadata.GetAll(),
+	}
+
+	packet, err := c.createPacket(c.localNode.ID, metadataUpdateMsg, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), &updateMsg)
+	if err != nil {
+		return err
+	}
+
+	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID})
+	return nil
+}

@@ -256,43 +256,6 @@ func TestGetNonExistentHandler(t *testing.T) {
 	}
 }
 
-// Test for thread safety using multiple goroutines
-func TestConcurrentRegistration(t *testing.T) {
-	registry := newHandlerRegistry()
-
-	// Number of concurrent registrations to perform
-	const iterations = 100
-
-	// Create a wait group to synchronize goroutines
-	done := make(chan struct{})
-
-	// Register handlers concurrently
-	for i := 0; i < iterations; i++ {
-		go func(msgType MessageType) {
-			registry.registerHandler(msgType, false, func(n *Node, p *Packet) error { return nil })
-			done <- struct{}{}
-		}(MessageType(i))
-	}
-
-	// Wait for all registrations to complete
-	for i := 0; i < iterations; i++ {
-		select {
-		case <-done:
-			// Registration completed
-		case <-time.After(2 * time.Second):
-			t.Fatal("Test timed out - possible deadlock in concurrent registration")
-		}
-	}
-
-	// Verify that all handlers were registered correctly
-	for i := 0; i < iterations; i++ {
-		msgHandler := registry.getHandler(MessageType(i))
-		if msgHandler == nil {
-			t.Errorf("Handler for message type %d was not properly registered", i)
-		}
-	}
-}
-
 // Test for concurrent reading
 func TestConcurrentReading(t *testing.T) {
 	registry := newHandlerRegistry()

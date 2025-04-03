@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
@@ -172,6 +173,15 @@ func handleCLIInput(c *gossip.Cluster) {
 		case "help":
 			displayHelp()
 
+		case "set-meta":
+			handleSetmetaCommand(c, args)
+
+		case "get-meta":
+			handleGetmetaCommand(c, args)
+
+		case "show-meta":
+			handleShowmetaCommand(c, args)
+
 		// Commented out for future implementation
 		/*
 		   case "set":
@@ -249,64 +259,118 @@ func handlePeersCommand(c *gossip.Cluster) {
 		return
 	}
 
-	fmt.Println("Cluster peers:")
-	fmt.Println("-----------------------------------")
+	data := [][]string{}
+	data = append(data, []string{"ID", "Address", "State", "Metadata"})
 	for _, p := range peers {
-		fmt.Printf("Node ID: %s\n", p.ID)
-		fmt.Printf("  Address: %s\n", p.GetAdvertisedAddr())
-		fmt.Printf("  State: %s\n", p.GetState().String())
-		fmt.Println("-----------------------------------")
+		meta := p.Metadata.GetAllAsString()
+		metaKV := []string{}
+		for k, v := range meta {
+			metaKV = append(metaKV, fmt.Sprintf("%s = %s", k, v))
+		}
+
+		data = append(data, []string{p.ID.String(), p.GetAdvertisedAddr(), p.GetState().String(), strings.Join(metaKV, ", ")})
 	}
+
+	PrintTable(data)
+}
+
+func handleSetmetaCommand(c *gossip.Cluster, args []string) {
+	if len(args) < 3 {
+		fmt.Println("Usage: setmeta <key> <value>")
+		return
+	}
+
+	key := args[1]
+	value := strings.Join(args[2:], " ")
+
+	c.LocalMetadata().SetString(key, value)
+	fmt.Printf("Metadata set: %s = %s\n", key, value)
+
+	c.SendMetadataUpdate()
+}
+
+func handleGetmetaCommand(c *gossip.Cluster, args []string) {
+	if len(args) < 3 {
+		fmt.Println("Usage: getmeta <node_id> <key>")
+		return
+	}
+
+	u, err := uuid.Parse(args[1])
+	if err != nil {
+		return
+	}
+
+	nodeID := gossip.NodeID(u)
+	key := args[2]
+
+	node := c.GetNodeByID(nodeID)
+	if node == nil {
+		fmt.Printf("Node %s not found\n", nodeID)
+		return
+	}
+
+	value := node.Metadata.GetString(key)
+	if !node.Metadata.Exists(key) {
+		fmt.Printf("Key %s not found in node %s metadata\n", key, nodeID)
+	} else {
+		fmt.Printf("Node %s metadata: %s = %s\n", nodeID, key, value)
+	}
+}
+
+func handleShowmetaCommand(c *gossip.Cluster, args []string) {
+	u, err := uuid.Parse(args[1])
+	if err != nil {
+		return
+	}
+
+	nodeID := gossip.NodeID(u)
+	node := c.GetNodeByID(nodeID)
+	if node == nil {
+		fmt.Printf("Node %s not found\n", nodeID)
+		return
+	}
+	meta := node.Metadata.GetAllAsString()
+
+	data := [][]string{}
+	data = append(data, []string{"Key", "Value"})
+	for k, v := range meta {
+		data = append(data, []string{k, v})
+	}
+
+	PrintTable(data)
 }
 
 // displayHelp shows available commands
 func displayHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("-----------------------------------")
-	fmt.Println("  gossip <message>  - Send a message to the cluster")
-	fmt.Println("  peers             - Show all peers in the cluster")
-	fmt.Println("  help              - Show this help message")
+	fmt.Println("  gossip <message>        - Send a message to the cluster")
+	fmt.Println("  peers                   - Show all peers in the cluster")
+	fmt.Println("  set-meta <key> <value>  - Set metadata for the local node")
+	fmt.Println("  get-meta <node_id> <key> - Get metadata for the node")
+	fmt.Println("  show-meta <node_id>      - Show all metadata for the node")
+	fmt.Println("  help                    - Show this help message")
 	fmt.Println("  (Ctrl+C to exit)")
 	fmt.Println("-----------------------------------")
-
-	// Commented out for future implementation
-	/*
-	   fmt.Println("  set <key> <value> - Set a value in the distributed store")
-	   fmt.Println("  get <key>         - Get a value from the distributed store")
-	*/
 }
 
-// Commented out for future implementation
-/*
-func handleSetCommand(c *gossip.Cluster, args []string) {
-    if len(args) < 3 {
-        fmt.Println("Usage: set <key> <value>")
-        return
-    }
+func PrintTable(table [][]string) {
+	// Find the maximum width of each column
+	maxWidths := make([]int, len(table[0]))
+	for _, row := range table {
+		for i, cell := range row {
+			if len(cell) > maxWidths[i] {
+				maxWidths[i] = len(cell)
+			}
+		}
+	}
 
-    key := args[1]
-    value := strings.Join(args[2:], " ")
-
-    // TODO: Implement set functionality
-    // c.Set(key, value)
-
-    fmt.Println("Value set successfully")
+	// Print each row
+	for _, row := range table {
+		for i, cell := range row {
+			// Pad the columns as necessary
+			fmt.Printf("%-*s  ", maxWidths[i], cell)
+		}
+		fmt.Println()
+	}
 }
-
-func handleGetCommand(c *gossip.Cluster, args []string) {
-    if len(args) < 2 {
-        fmt.Println("Usage: get <key>")
-        return
-    }
-
-    key := args[1]
-
-    // TODO: Implement get functionality
-    // value, exists := c.Get(key)
-    // if !exists {
-    //     fmt.Println("Key not found")
-    // } else {
-    //     fmt.Println(value)
-    // }
-}
-*/

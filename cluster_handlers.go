@@ -13,6 +13,7 @@ func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandlerWithReply(nodeJoinMsg, c.handleJoin)
 	c.handlers.registerHandler(nodeJoiningMsg, true, c.handleJoining)
 	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
+	c.handlers.registerHandler(metadataUpdateMsg, true, c.handleMetadataUpdate)
 
 	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
 	c.handlers.registerHandler(suspicionMsg, true, c.healthMonitor.handleSuspicion)
@@ -80,19 +81,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 
 	// If we got a good ping from the node then test if we know about it, if not we'll add it to our list of peers
 	if ping.Ok && c.nodes.get(ping.TargetID) == nil {
-		// Add the node to our list of peers
-		c.nodes.addIfNotExists(targetNode)
-
-		// Gossip the node to our peers
-		join := joinMessage{
-			ID:             ping.TargetID,
-			AdvertisedAddr: ping.AdvertisedAddr,
-		}
-		packet, err := c.createPacket(c.localNode.ID, nodeJoiningMsg, 1, &join)
-		if err != nil {
-			return err
-		}
-		c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, ping.TargetID, packet.SenderID})
+		c.Join([]string{ping.AdvertisedAddr})
 	}
 
 	return nil
@@ -122,7 +111,9 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	// Check add the peer to our list of known peers unless it already exists
 	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
-	c.nodes.addOrUpdate(node)
+	if c.nodes.addOrUpdate(node) {
+		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+	}
 
 	// Gossip the node to our peers
 	packet.MessageType = nodeJoiningMsg
@@ -130,8 +121,10 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	// Respond to the sender with our information
 	selfJoinMsg := joinMessage{
-		ID:             c.localNode.ID,
-		AdvertisedAddr: c.localNode.advertisedAddr,
+		ID:                c.localNode.ID,
+		AdvertisedAddr:    c.localNode.advertisedAddr,
+		MetadataTimestamp: c.localNode.Metadata.GetTimestamp(),
+		Metadata:          c.localNode.Metadata.GetAll(),
 	}
 
 	return nodeJoinAckMsg, &selfJoinMsg, nil
@@ -146,7 +139,9 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 	}
 
 	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
-	c.nodes.addOrUpdate(node)
+	if c.nodes.addOrUpdate(node) {
+		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+	}
 
 	return nil
 }
@@ -157,7 +152,6 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType
 	}
 
 	var peerStates []exchangeNodeState
-
 	err := packet.Unmarshal(&peerStates)
 	if err != nil {
 		return nilMsg, nil, err
@@ -168,14 +162,37 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
-			ID:              n.ID,
-			AdvertisedAddr:  n.advertisedAddr,
-			State:           n.state,
-			StateChangeTime: n.stateChangeTime.UnixNano(),
+			ID:                n.ID,
+			AdvertisedAddr:    n.advertisedAddr,
+			State:             n.state,
+			StateChangeTime:   n.stateChangeTime.UnixNano(),
+			MetadataTimestamp: n.metadata.GetTimestamp(),
+			Metadata:          n.metadata.GetAll(),
 		})
 	}
 
 	go c.healthMonitor.combineRemoteNodeState(sender, peerStates)
 
 	return pushPullStateAckMsg, &localStates, nil
+}
+
+func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
+	if sender == nil {
+		return fmt.Errorf("unknown sender")
+	}
+
+	var metadataUpdate metadataUpdateMessage
+	err := packet.Unmarshal(&metadataUpdate)
+	if err != nil {
+		return err
+	}
+
+	node := c.nodes.get(sender.ID)
+	if node == nil {
+		return fmt.Errorf("unknown sender")
+	}
+
+	node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false)
+
+	return nil
 }
