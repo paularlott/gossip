@@ -295,8 +295,6 @@ func (c *Cluster) Join(peers []string) error {
 				Metadata:          c.localNode.metadata.GetAll(),
 			}
 
-			fmt.Println("Join message:", joinMsg)
-
 			node := newNode(c.localNode.ID, addr)
 			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
 			if err != nil {
