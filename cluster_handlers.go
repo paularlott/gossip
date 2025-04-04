@@ -192,7 +192,11 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		return fmt.Errorf("unknown sender")
 	}
 
-	node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false)
+	if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
+		if c.config.EventListener != nil {
+			c.config.EventListener.OnNodeMetadataChanged(node)
+		}
+	}
 
 	return nil
 }

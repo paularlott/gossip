@@ -466,8 +466,6 @@ func (md *Metadata) update(data map[string]interface{}, timestamp int64, force b
 	// Only replace if the incoming timestamp is newer
 	currentTime := md.lastMod.Load()
 
-	fmt.Println("Current time:", currentTime, "Incoming time:", timestamp, timestamp <= currentTime)
-
 	if !force && timestamp <= currentTime {
 		return false // Reject older data
 	}

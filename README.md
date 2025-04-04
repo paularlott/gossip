@@ -2,6 +2,17 @@
 
 This library implements a Gossip Protocol in Go.
 
+## Advertised Address
+
+The advertised address of a node can be any of the following, these same addresses can be given as the join address when starting a new node:
+
+- IP:port
+- hostname:port
+- hostname
+- IP
+- srv+service-name
+- https://hostname:port/endpoint (for example, https://example.com:8000/gossip) [TODO]
+
 ## Building
 
 ### Msgpack

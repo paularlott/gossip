@@ -27,6 +27,7 @@ type EventListener interface {
 	OnNodeLeft(node *Node)
 	OnNodeDead(node *Node)
 	OnNodeStateChanged(node *Node, prevState NodeState)
+	OnNodeMetadataChanged(node *Node)
 }
 
 // Interface for decoupling the message serialization and deserialization

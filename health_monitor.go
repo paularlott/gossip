@@ -948,7 +948,11 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			continue
 		}
 
-		localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, false)
+		if localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, false) {
+			if hm.config.EventListener != nil {
+				hm.config.EventListener.OnNodeMetadataChanged(localNode)
+			}
+		}
 
 		// We know about this node, determine if we should update our state
 		hm.config.Logger.

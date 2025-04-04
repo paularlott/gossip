@@ -81,6 +81,10 @@ func (l *MyListener) OnNodeStateChanged(node *gossip.Node, prevState gossip.Node
 	fmt.Printf("MyListener: Node %s state changed from %s to %s\n", node.ID, prevState.String(), node.GetState().String())
 }
 
+func (l *MyListener) OnNodeMetadataChanged(node *gossip.Node) {
+	fmt.Printf("MyListener: Node %s metadata changed\n", node.ID)
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
