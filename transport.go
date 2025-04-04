@@ -43,28 +43,22 @@ type IncomingPacket struct {
 	Packet *Packet
 }
 
-func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config) (*transport, error) {
+func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address) (*transport, error) {
 
 	// Check we have a bind address
 	if config.BindAddr == "" {
 		return nil, fmt.Errorf("no bind address given")
 	}
 
-	// Get the address and port from the bind address
-	addr, err := ResolveAddress(config.BindAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve bind address: %w", err)
-	}
-
 	config.Logger.
-		Field("bind_addr", addr.IP.String()).
-		Field("bind_port", addr.Port).
+		Field("bind_addr", bindAddress.IP.String()).
+		Field("bind_port", bindAddress.Port).
 		Infof("Binding to address")
 
 	// Create a TCP listener
 	tcpAddr := &net.TCPAddr{
-		IP:   addr.IP,
-		Port: int(addr.Port),
+		IP:   bindAddress.IP,
+		Port: int(bindAddress.Port),
 	}
 	tcpListener, err := net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
@@ -74,8 +68,8 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config) (*tra
 
 	// Create a UDP listener
 	udpAddr := &net.UDPAddr{
-		IP:   addr.IP,
-		Port: int(addr.Port),
+		IP:   bindAddress.IP,
+		Port: int(bindAddress.Port),
 	}
 	udpListener, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
@@ -213,15 +207,10 @@ func (t *transport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (t *transport) DialPeer(node *Node) (net.Conn, error) {
-	addr, err := node.ResolveConnectAddr()
-	if err != nil {
-		return nil, fmt.Errorf("dns: failed to resolve node address: %w", err)
-	}
-
 	// Create a TCP connection
 	tcpAddr := &net.TCPAddr{
-		IP:   addr.IP,
-		Port: int(addr.Port),
+		IP:   node.address.IP,
+		Port: node.address.Port,
 	}
 	conn, err := net.DialTimeout("tcp", tcpAddr.String(), t.config.TCPDialTimeout)
 	if err != nil {
@@ -443,20 +432,14 @@ func (t *transport) SendPacket(transportType TransportType, node *Node, packet *
 			return err
 		}
 	} else { // Send the message over UDP
-
-		addr, err := node.ResolveConnectAddr()
-		if err != nil {
-			return err
-		}
-
 		err = t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline))
 		if err != nil {
 			return err
 		}
 
 		_, err = t.udpListener.WriteToUDP(rawPacket, &net.UDPAddr{
-			IP:   addr.IP,
-			Port: int(addr.Port),
+			IP:   node.address.IP,
+			Port: node.address.Port,
 		})
 		if err != nil {
 			return err

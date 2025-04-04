@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +12,9 @@ func createMockNode(id byte, state NodeState) *Node {
 	var nodeID NodeID
 	nodeID[0] = id // Just use first byte for test differentiation
 	return &Node{
-		ID:             nodeID,
-		advertisedAddr: "192.168.1.1:7946",
-		state:          state,
+		ID:      nodeID,
+		address: Address{IP: net.ParseIP("192.168.1.1"), Port: 7946},
+		state:   state,
 	}
 }
 

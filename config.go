@@ -10,6 +10,7 @@ type Config struct {
 	// If this is prefixed with srv+ then a SRV record will be used to resolve the address to an IP and port
 	// If not given the BindAddr will be used.
 	AdvertiseAddr                 string
+	DefaultPort                   int              // DefaultPort is the default port to use for the node
 	EncryptionKey                 string           // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                     Transport        // Transport layer to communicate over UDP or TCP
 	Logger                        Logger           // Logger is the logger to use for logging messages
@@ -49,6 +50,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		BindAddr:                      "127.0.0.1:8000",
 		AdvertiseAddr:                 "",
+		DefaultPort:                   8000,
 		CompressMinSize:               256,
 		TCPDialTimeout:                5 * time.Second,
 		TCPDeadline:                   5 * time.Second,

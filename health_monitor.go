@@ -567,7 +567,7 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 			Field("from", sender.ID.String()).
 			Debugf("Received alive message for unknown node, adding to cluster")
 
-		newNode := newNode(msg.NodeID, msg.AdvertisedAddr)
+		newNode := newNode(msg.NodeID, msg.Address)
 		hm.cluster.nodes.addIfNotExists(newNode)
 
 		return nil
@@ -665,8 +665,8 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 	hm.config.Logger.Field("node", aliveNode.ID.String()).Debugf("Broadcasting alive status to cluster")
 
 	msg := &aliveMessage{
-		NodeID:         aliveNode.ID,
-		AdvertisedAddr: aliveNode.advertisedAddr,
+		NodeID:  aliveNode.ID,
+		Address: aliveNode.address,
 	}
 
 	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, aliveMsg, hm.cluster.getMaxTTL(), &msg)
@@ -747,7 +747,7 @@ func (hm *healthMonitor) pingNode(node *Node) (bool, error) {
 	ping := pingMessage{
 		TargetID: node.ID,
 		Seq:      seq,
-		FromAddr: hm.cluster.localNode.advertisedAddr,
+		FromAddr: hm.cluster.localNode.address,
 	}
 	if err := hm.cluster.sendMessageTo(TransportBestEffort, node, 1, pingMsg, &ping); err != nil {
 		hm.config.Logger.Err(err).Errorf("Failed to send ping message to peer %s", node.ID)
@@ -828,10 +828,10 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 
 	// Send the ping message
 	ping := indirectPingMessage{
-		TargetID:       node.ID,
-		AdvertisedAddr: node.advertisedAddr, // Send the advertised address in case the node we're using doesn't know about the target node yet
-		Seq:            seq,
-		FromAddr:       hm.cluster.localNode.advertisedAddr,
+		TargetID: node.ID,
+		Address:  node.address,
+		Seq:      seq,
+		FromAddr: hm.cluster.localNode.address,
 	}
 
 	peerCount := hm.cluster.getPeerSubsetSize(
@@ -936,7 +936,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					Debugf("Discovered new node from remote state")
 
 				// Create a new node with the remote information
-				newNode := newNode(remoteState.ID, remoteState.AdvertisedAddr)
+				newNode := newNode(remoteState.ID, remoteState.Address)
 				newNode.state = remoteState.State
 				newNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true)
 

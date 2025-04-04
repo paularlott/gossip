@@ -46,14 +46,14 @@ func (p *Packet) Codec() MsgCodec {
 
 type joinMessage struct {
 	ID                NodeID                 `msgpack:"id" json:"id"`
-	AdvertisedAddr    string                 `msgpack:"aa" json:"aa"`
+	Address           Address                `msgpack:"addr" json:"addr"`
 	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type exchangeNodeState struct {
 	ID                NodeID                 `msgpack:"id" json:"id"`
-	AdvertisedAddr    string                 `msgpack:"aa" json:"aa"`
+	Address           Address                `msgpack:"addr" json:"addr"`
 	State             NodeState              `msgpack:"s" json:"s"`
 	StateChangeTime   int64                  `msgpack:"sct" json:"sct"`
 	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
@@ -61,22 +61,22 @@ type exchangeNodeState struct {
 }
 
 type pingMessage struct {
-	TargetID NodeID `msgpack:"ti" json:"ti"`
-	Seq      uint32 `msgpack:"seq" json:"seq"`
-	FromAddr string `msgpack:"faddr" json:"faddr"`
+	TargetID NodeID  `msgpack:"ti" json:"ti"`
+	Seq      uint32  `msgpack:"seq" json:"seq"`
+	FromAddr Address `msgpack:"faddr" json:"faddr"`
 }
 
 type indirectPingMessage struct {
-	TargetID       NodeID `msgpack:"ti" json:"ti"`
-	AdvertisedAddr string `msgpack:"aa" json:"aa"`
-	Seq            uint32 `msgpack:"seq" json:"seq"`
-	Ok             bool   `msgpack:"ok" json:"ok"`
-	FromAddr       string `msgpack:"faddr" json:"faddr"`
+	TargetID NodeID  `msgpack:"ti" json:"ti"`
+	Address  Address `msgpack:"addr" json:"addr"`
+	Seq      uint32  `msgpack:"seq" json:"seq"`
+	Ok       bool    `msgpack:"ok" json:"ok"`
+	FromAddr Address `msgpack:"faddr" json:"faddr"`
 }
 
 type aliveMessage struct {
-	NodeID         NodeID `msgpack:"ni" json:"ni"`
-	AdvertisedAddr string `msgpack:"aa" json:"aa"`
+	NodeID  NodeID  `msgpack:"ni" json:"ni"`
+	Address Address `msgpack:"addr" json:"addr"`
 }
 
 type suspicionMessage struct {

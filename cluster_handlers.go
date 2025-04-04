@@ -64,7 +64,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	}
 
 	// Create a temporary node for the target
-	targetNode := newNode(ping.TargetID, ping.AdvertisedAddr)
+	targetNode := newNode(ping.TargetID, ping.Address)
 	ping.Ok, err = c.healthMonitor.pingNode(targetNode)
 
 	// If we don't know the sender then generate a temporary node and add it to our list of peers
@@ -74,17 +74,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	}
 
 	// Respond to the sender with the ping acknowledgment
-	err = c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)
-	if err != nil {
-		return err
-	}
-
-	// If we got a good ping from the node then test if we know about it, if not we'll add it to our list of peers
-	if ping.Ok && c.nodes.get(ping.TargetID) == nil {
-		c.Join([]string{ping.AdvertisedAddr})
-	}
-
-	return nil
+	return c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)
 }
 
 func (c *Cluster) handleIndirectPingAck(sender *Node, packet *Packet) error {
@@ -110,7 +100,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 	}
 
 	// Check add the peer to our list of known peers unless it already exists
-	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
+	node := newNode(joinMsg.ID, joinMsg.Address)
 	if c.nodes.addOrUpdate(node) {
 		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
 	}
@@ -122,7 +112,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 	// Respond to the sender with our information
 	selfJoinMsg := joinMessage{
 		ID:                c.localNode.ID,
-		AdvertisedAddr:    c.localNode.advertisedAddr,
+		Address:           c.localNode.address,
 		MetadataTimestamp: c.localNode.Metadata.GetTimestamp(),
 		Metadata:          c.localNode.Metadata.GetAll(),
 	}
@@ -138,7 +128,7 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 		return err
 	}
 
-	node := newNode(joinMsg.ID, joinMsg.AdvertisedAddr)
+	node := newNode(joinMsg.ID, joinMsg.Address)
 	if c.nodes.addOrUpdate(node) {
 		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
 	}
@@ -163,7 +153,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
 			ID:                n.ID,
-			AdvertisedAddr:    n.advertisedAddr,
+			Address:           n.address,
 			State:             n.state,
 			StateChangeTime:   n.stateChangeTime.UnixNano(),
 			MetadataTimestamp: n.metadata.GetTimestamp(),

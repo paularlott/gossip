@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,10 +85,17 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cancelFunc:      cancel,
 		msgHistory:      newMessageHistory(config),
 		nodes:           newNodeList(config),
-		localNode:       newNode(NodeID(u), config.AdvertiseAddr),
+		localNode:       newNode(NodeID(u), Address{}),
 		handlers:        newHandlerRegistry(),
 		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
 	}
+
+	// Resolve the local node's address
+	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve local address: %v", err)
+	}
+	cluster.localNode.address = addresses[0]
 
 	initialMessageID := MessageID{
 		Timestamp: time.Now().UnixNano(),
@@ -96,8 +106,14 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
+	// Resolve the local node's address
+	addresses, err = cluster.ResolveAddress(config.BindAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve local address: %v", err)
+	}
+
 	if config.Transport == nil {
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config)
+		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0])
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %v", err)
 		}
@@ -156,6 +172,100 @@ func (c *Cluster) Shutdown() {
 	c.config.Logger.Infof("Cluster stopped")
 }
 
+func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
+	addresses := make([]Address, 0)
+
+	// Check if this is an SRV record
+	if strings.HasPrefix(addressStr, "srv+") {
+		serviceName := addressStr[4:] // Remove the "srv+" prefix
+
+		// Make sure the service ends with a dot
+		if !strings.HasSuffix(serviceName, ".") {
+			serviceName += "."
+		}
+
+		// Look up the SRV record
+		_, addrs, err := net.LookupSRV("", "", serviceName)
+		if err != nil {
+			return addresses, fmt.Errorf("failed to lookup SRV record")
+		}
+
+		if len(addrs) == 0 {
+			return addresses, fmt.Errorf("no SRV records found for service")
+		}
+
+		for _, srv := range addrs {
+			// Resolve the target hostname to an IP
+			ips, err := net.LookupIP(srv.Target)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to resolve SRV target hostname")
+			}
+
+			if len(ips) > 0 {
+				addresses = append(addresses, Address{
+					IP:   ips[0],
+					Port: int(srv.Port),
+				})
+			}
+		}
+	} else {
+		// If the address string contains only numbers then assume it's a port and prefix with :
+		if _, err := strconv.Atoi(addressStr); err == nil {
+			addressStr = ":" + addressStr
+		}
+
+		// Split the address into host and port
+		host, portStr, err := net.SplitHostPort(addressStr)
+		if err != nil {
+			// No port specified, use the host as is and default port
+			host = addressStr
+			portStr = ""
+		}
+
+		// If host is empty then use loopback address
+		if host == "" {
+			host = "127.0.0.1"
+		}
+
+		// Parse port if provided, otherwise use default
+		var port int
+		if portStr != "" {
+			portVal, err := strconv.ParseUint(portStr, 10, 16)
+			if err == nil {
+				port = int(portVal)
+			} else {
+				port = c.config.DefaultPort
+			}
+		} else {
+			port = c.config.DefaultPort
+		}
+
+		// Resolve the IP address
+		var ip net.IP
+		if ip = net.ParseIP(host); ip == nil {
+			// Host is a hostname, resolve it
+			ips, err := net.LookupIP(host)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to resolve hostname")
+			}
+
+			for _, ip = range ips {
+				addresses = append(addresses, Address{
+					IP:   ip,
+					Port: port,
+				})
+			}
+		} else {
+			addresses = append(addresses, Address{
+				IP:   ip,
+				Port: port,
+			})
+		}
+	}
+
+	return addresses, nil
+}
+
 func (c *Cluster) Join(peers []string) error {
 	if len(peers) == 0 {
 		return fmt.Errorf("no peers provided")
@@ -170,34 +280,42 @@ func (c *Cluster) Join(peers []string) error {
 	for _, peerAddr := range peers {
 		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
-		joinMsg := &joinMessage{
-			ID:                c.localNode.ID,
-			AdvertisedAddr:    c.localNode.advertisedAddr,
-			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
-			Metadata:          c.localNode.metadata.GetAll(),
-		}
-
-		fmt.Println("Join message:", joinMsg)
-
-		node := newNode(c.localNode.ID, peerAddr)
-		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
+		// Resolve the address
+		addresses, err := c.ResolveAddress(peerAddr)
 		if err != nil {
-			c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
+			c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
 			continue
 		}
 
-		// Update the node with the peer's advertised address and ID then save it
-		node.ID = joinMsg.ID
-		node.advertisedAddr = joinMsg.AdvertisedAddr
-		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
-		if c.nodes.addIfNotExists(node) {
-			err = c.exchangeState(node, []NodeID{c.localNode.ID})
-			if err != nil {
-				c.config.Logger.Err(err).Warnf("Failed to exchange state with peer %s", peerAddr)
+		for _, addr := range addresses {
+			joinMsg := &joinMessage{
+				ID:                c.localNode.ID,
+				Address:           c.localNode.address,
+				MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+				Metadata:          c.localNode.metadata.GetAll(),
 			}
-		}
 
-		c.config.Logger.Infof("Joined peer: %s", peerAddr)
+			fmt.Println("Join message:", joinMsg)
+
+			node := newNode(c.localNode.ID, addr)
+			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
+			if err != nil {
+				c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
+				continue
+			}
+
+			// Update the node with the peer's advertised address and ID then save it
+			node.ID = joinMsg.ID
+			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+			if c.nodes.addIfNotExists(node) {
+				err = c.exchangeState(node, []NodeID{c.localNode.ID})
+				if err != nil {
+					c.config.Logger.Err(err).Warnf("Failed to exchange state with peer %s", peerAddr)
+				}
+			}
+
+			c.config.Logger.Infof("Joined peer: %s (%s)", peerAddr, addr.String())
+		}
 	}
 
 	return nil
@@ -317,7 +435,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
 			ID:                n.ID,
-			AdvertisedAddr:    n.advertisedAddr,
+			Address:           n.address,
 			State:             n.state,
 			StateChangeTime:   n.stateChangeTime.UnixNano(),
 			MetadataTimestamp: n.metadata.GetTimestamp(),

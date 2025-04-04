@@ -31,8 +31,7 @@ func (ns NodeState) String() string {
 
 type Node struct {
 	ID              NodeID
-	advertisedAddr  string
-	connectAddr     *Address
+	address         Address
 	stateChangeTime time.Time
 	state           NodeState
 	lastActivity    atomic.Int64 // Timestamp of last message received
@@ -40,13 +39,12 @@ type Node struct {
 	metadata        *Metadata
 }
 
-func newNode(id NodeID, advertisedAddr string) *Node {
+func newNode(id NodeID, address Address) *Node {
 	metadata := NewMetadata()
 
 	n := &Node{
 		ID:              id,
-		advertisedAddr:  advertisedAddr,
-		connectAddr:     nil,
+		address:         address,
 		stateChangeTime: time.Now(),
 		state:           nodeAlive,
 		Metadata:        metadata,
@@ -56,25 +54,6 @@ func newNode(id NodeID, advertisedAddr string) *Node {
 	n.lastActivity.Store(time.Now().UnixNano())
 
 	return n
-}
-
-func (node *Node) ResolveConnectAddr() (Address, error) {
-
-	// If we've already resolved the address, return it
-	if node.connectAddr != nil {
-		return *node.connectAddr, nil
-	}
-
-	// Resolve the address
-	addr, err := ResolveAddress(node.advertisedAddr)
-	if err != nil {
-		return Address{}, err
-	}
-
-	// Store the resolved address and update the last lookup time
-	node.connectAddr = &addr
-
-	return addr, nil
 }
 
 func (n *Node) updateLastActivity() {
@@ -90,8 +69,8 @@ func (node *Node) GetState() NodeState {
 	return node.state
 }
 
-func (node *Node) GetAdvertisedAddr() string {
-	return node.advertisedAddr
+func (node *Node) GetAddress() Address {
+	return node.address
 }
 
 func (node *Node) DeadOrLeft() bool {

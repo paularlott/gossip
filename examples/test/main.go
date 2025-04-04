@@ -186,14 +186,8 @@ func handleCLIInput(c *gossip.Cluster) {
 		case "show-meta":
 			handleShowmetaCommand(c, args)
 
-		// Commented out for future implementation
-		/*
-		   case "set":
-		       handleSetCommand(c, args)
-
-		   case "get":
-		       handleGetCommand(c, args)
-		*/
+		case "whoami":
+			fmt.Printf("Local node ID: %s (%s)\n", c.GetLocalNode().ID.String(), c.GetLocalNode().GetAddress().String())
 
 		case "":
 			// Do nothing for empty input
@@ -272,7 +266,7 @@ func handlePeersCommand(c *gossip.Cluster) {
 			metaKV = append(metaKV, fmt.Sprintf("%s = %s", k, v))
 		}
 
-		data = append(data, []string{p.ID.String(), p.GetAdvertisedAddr(), p.GetState().String(), strings.Join(metaKV, ", ")})
+		data = append(data, []string{p.ID.String(), p.GetAddress().String(), p.GetState().String(), strings.Join(metaKV, ", ")})
 	}
 
 	PrintTable(data)
@@ -348,6 +342,7 @@ func handleShowmetaCommand(c *gossip.Cluster, args []string) {
 func displayHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("-----------------------------------")
+	fmt.Println("  whoami									- Show local node ID")
 	fmt.Println("  gossip <message>        - Send a message to the cluster")
 	fmt.Println("  peers                   - Show all peers in the cluster")
 	fmt.Println("  set-meta <key> <value>  - Set metadata for the local node")
