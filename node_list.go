@@ -110,6 +110,11 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 
 		// Update counters
 		nl.updateCountersForStateChange(oldState, node.state)
+
+		// If old state was leaving or dead, trigger event listener
+		if nl.config.EventListener != nil && (oldState == nodeLeaving || oldState == nodeDead) {
+			nl.config.EventListener.OnNodeJoined(node)
+		}
 	} else {
 		// New node
 		shard.nodes[node.ID] = node

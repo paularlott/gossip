@@ -129,9 +129,8 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 	}
 
 	node := newNode(joinMsg.ID, joinMsg.Address)
-	if c.nodes.addOrUpdate(node) {
-		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
-	}
+	node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+	c.nodes.addOrUpdate(node)
 
 	return nil
 }

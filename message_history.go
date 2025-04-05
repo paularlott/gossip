@@ -20,7 +20,6 @@ type messageHistory struct {
 	config          *Config
 	shardMask       uint32
 	shards          []*historyShard
-	pruneTimer      *time.Ticker
 	shutdownContext context.Context
 	cancelFunc      context.CancelFunc
 }
@@ -32,7 +31,6 @@ func newMessageHistory(config *Config) *messageHistory {
 		config:          config,
 		shardMask:       uint32(config.MsgHistoryShardCount - 1),
 		shards:          make([]*historyShard, config.MsgHistoryShardCount),
-		pruneTimer:      time.NewTicker(config.MsgHistoryGCInterval),
 		shutdownContext: ctx,
 		cancelFunc:      cancel,
 	}
@@ -44,13 +42,12 @@ func newMessageHistory(config *Config) *messageHistory {
 		}
 	}
 
-	go mh.pruneHistory()
+	mh.pruneHistory()
 
 	return mh
 }
 
 func (mh *messageHistory) stop() {
-	mh.pruneTimer.Stop()
 	mh.cancelFunc()
 }
 
@@ -103,23 +100,28 @@ func (mh *messageHistory) contains(nodeID NodeID, messageID MessageID) bool {
 }
 
 func (mh *messageHistory) pruneHistory() {
-	for {
-		select {
-		case <-mh.pruneTimer.C:
-			cutoff := time.Now().Add(-mh.config.MsgHistoryMaxAge).UnixNano()
+	go func() {
+		pruneTimer := time.NewTicker(mh.config.MsgHistoryGCInterval)
+		defer pruneTimer.Stop()
 
-			for _, shard := range mh.shards {
-				shard.mutex.Lock()
-				for key, timestamp := range shard.entries {
-					if timestamp < cutoff {
-						delete(shard.entries, key)
+		for {
+			select {
+			case <-pruneTimer.C:
+				cutoff := time.Now().Add(-mh.config.MsgHistoryMaxAge).UnixNano()
+
+				for _, shard := range mh.shards {
+					shard.mutex.Lock()
+					for key, timestamp := range shard.entries {
+						if timestamp < cutoff {
+							delete(shard.entries, key)
+						}
 					}
+					shard.mutex.Unlock()
 				}
-				shard.mutex.Unlock()
-			}
 
-		case <-mh.shutdownContext.Done():
-			return
+			case <-mh.shutdownContext.Done():
+				return
+			}
 		}
-	}
+	}()
 }

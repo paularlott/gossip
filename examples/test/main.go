@@ -91,6 +91,7 @@ func main() {
 
 	port := flag.Int("port", 8000, "Port to listen on")
 	peersArg := flag.String("peers", "", "Comma separated list of peers to connect to, e.g. 127.0.0.1:8001,127.0.0.1:8002")
+	nodeID := flag.String("node-id", "", "Node ID to use (optional, will be generated if not provided)")
 	flag.Parse()
 
 	// Parse peers
@@ -100,6 +101,7 @@ func main() {
 	}
 
 	config := gossip.DefaultConfig()
+	config.NodeID = *nodeID
 	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	config.AdvertiseAddr = ""
 	config.EncryptionKey = "1234567890123456"

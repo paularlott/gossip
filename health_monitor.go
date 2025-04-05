@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,6 +90,10 @@ func (hm *healthMonitor) cleanNodeState(nodeID NodeID) {
 }
 
 func (hm *healthMonitor) healthCheckLoop() {
+	// Add jitter to prevent all nodes checking at the same time
+	jitter := time.Duration(rand.Int63n(int64(hm.config.HealthCheckInterval / 4)))
+	time.Sleep(jitter)
+
 	// Create a ticker for periodic health checks
 	checkTicker := time.NewTicker(hm.config.HealthCheckInterval)
 	suspectTicker := time.NewTicker(hm.config.SuspectTimeout)
