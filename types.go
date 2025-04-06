@@ -1,6 +1,9 @@
 package gossip
 
 import (
+	"net"
+	"net/http"
+
 	"github.com/google/uuid"
 )
 
@@ -39,4 +42,19 @@ type MsgCodec interface {
 type CompressionCodec interface {
 	Compress(data []byte) ([]byte, error)
 	Decompress(data []byte) ([]byte, error)
+}
+
+// Provider defines an interface for WebSocket implementation providers
+type WebsocketProvider interface {
+	// DialWebsocket connects to a WebSocket server and returns a net.Conn adapter
+	DialWebsocket(url string) (net.Conn, error)
+
+	// UpgradeHTTPToWebsocket upgrades an HTTP connection to WebSocket
+	UpgradeHTTPToWebsocket(w http.ResponseWriter, r *http.Request) (net.Conn, error)
+}
+
+// WSConn extends net.Conn with WebSocket-specific information
+type WSConn interface {
+	net.Conn
+	IsSecure() bool
 }

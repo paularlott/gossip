@@ -84,3 +84,8 @@ func (node *Node) Alive() bool {
 func (node *Node) Suspect() bool {
 	return node.state == nodeSuspect
 }
+
+// Checks if this node shares at least one transport with the remote node.
+func (node *Node) HasCompatibleTransport(remote *Node) bool {
+	return (node.address.Port != 0 && remote.address.Port != 0) || (node.address.URL != "" && remote.address.URL != "")
+}

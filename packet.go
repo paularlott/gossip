@@ -61,9 +61,8 @@ type exchangeNodeState struct {
 }
 
 type pingMessage struct {
-	TargetID NodeID  `msgpack:"ti" json:"ti"`
-	Seq      uint32  `msgpack:"seq" json:"seq"`
-	FromAddr Address `msgpack:"faddr" json:"faddr"`
+	TargetID NodeID `msgpack:"ti" json:"ti"`
+	Seq      uint32 `msgpack:"seq" json:"seq"`
 }
 
 type indirectPingMessage struct {
@@ -71,7 +70,6 @@ type indirectPingMessage struct {
 	Address  Address `msgpack:"addr" json:"addr"`
 	Seq      uint32  `msgpack:"seq" json:"seq"`
 	Ok       bool    `msgpack:"ok" json:"ok"`
-	FromAddr Address `msgpack:"faddr" json:"faddr"`
 }
 
 type aliveMessage struct {

@@ -6,6 +6,8 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +15,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+)
+
+var (
+	ErrUnsupportedAddressFormat = fmt.Errorf("unsupported address format")
 )
 
 type Cluster struct {
@@ -103,6 +109,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 	cluster.messageIdGen.Store(&initialMessageID)
 
+	// Trigger the event listener
+	if config.EventListener != nil {
+		config.EventListener.OnInit(cluster)
+	}
+
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
@@ -113,7 +124,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	if config.Transport == nil {
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0])
+		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0], cluster.localNode)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %v", err)
 		}
@@ -135,11 +146,6 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	// Register the system message handlers
 	cluster.registerSystemHandlers()
-
-	// Trigger the event listener
-	if config.EventListener != nil {
-		config.EventListener.OnInit(cluster)
-	}
 
 	// Start periodic state synchronization
 	cluster.startStateSync()
@@ -172,95 +178,208 @@ func (c *Cluster) Shutdown() {
 	c.config.Logger.Infof("Cluster stopped")
 }
 
-func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
-	addresses := make([]Address, 0)
+// Handler for incoming WebSocket connections when gossiping over web sockets
+func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
+	c.transport.WebsocketHandler(c.shutdownContext, w, r)
+}
 
-	// Check if this is an SRV record
+func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
+
+	// If the address has a | in it then split it as we're giving a IP:port|url combination
+	if strings.Contains(addressStr, "|") {
+		parts := strings.Split(addressStr, "|")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid address format: %s", addressStr)
+		}
+
+		// Part 1 must not be http(s)://
+		if strings.Contains(parts[0], "http://") || strings.Contains(parts[0], "https://") || strings.Contains(parts[0], "ws://") || strings.Contains(parts[0], "wss://") {
+			return nil, fmt.Errorf("invalid address format: %s", addressStr)
+		}
+		// Part 2 must be http(s)://
+		if !strings.Contains(parts[1], "http://") && !strings.Contains(parts[1], "https://") && !strings.Contains(parts[1], "ws://") && !strings.Contains(parts[1], "wss://") {
+			return nil, fmt.Errorf("invalid address format: %s", addressStr)
+		}
+
+		// Resolve the 2 parts
+		part1, err := c.ResolveAddress(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve address: %s", err)
+		}
+		part2, err := c.ResolveAddress(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve address: %s", err)
+		}
+
+		// Combine the 2 parts, we only take the first address from each
+		addr := Address{
+			IP:   part1[0].IP,
+			Port: part1[0].Port,
+			URL:  part2[0].URL,
+		}
+
+		return []Address{addr}, nil
+	}
+
+	// If SRV record
 	if strings.HasPrefix(addressStr, "srv+") {
 		serviceName := addressStr[4:] // Remove the "srv+" prefix
 
-		// Make sure the service ends with a dot
-		if !strings.HasSuffix(serviceName, ".") {
-			serviceName += "."
-		}
+		// If http(s):// then we're doing web sockets, lets resolve the address
+		if strings.HasPrefix(serviceName, "http://") || strings.HasPrefix(serviceName, "https://") || strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "wss://") {
+			addresses := make([]Address, 0)
 
-		// Look up the SRV record
-		_, addrs, err := net.LookupSRV("", "", serviceName)
-		if err != nil {
-			return addresses, fmt.Errorf("failed to lookup SRV record")
-		}
-
-		if len(addrs) == 0 {
-			return addresses, fmt.Errorf("no SRV records found for service")
-		}
-
-		for _, srv := range addrs {
-			// Resolve the target hostname to an IP
-			ips, err := net.LookupIP(srv.Target)
-			if err != nil {
-				return addresses, fmt.Errorf("failed to resolve SRV target hostname")
+			// If no web socket provider is set then we can't do this
+			if c.config.WebsocketProvider == nil {
+				return addresses, ErrUnsupportedAddressFormat
 			}
 
-			if len(ips) > 0 {
+			// Extract the host from the url
+			parsedURL, err := url.Parse(serviceName)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to parse URL: %v", err)
+			}
+
+			addr, err := c.lookupSRV(parsedURL.Hostname(), false)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to lookup SRV record: %v", err)
+			}
+
+			if len(addr) > 0 {
+				// Fix the schema to be ws:// or wss://
+				if strings.HasPrefix(parsedURL.Scheme, "http") {
+					parsedURL.Scheme = "ws" + strings.TrimPrefix(parsedURL.Scheme, "http")
+				}
+
 				addresses = append(addresses, Address{
-					IP:   ips[0],
-					Port: int(srv.Port),
+					URL: fmt.Sprintf("%s://%s:%d%s", parsedURL.Scheme, parsedURL.Hostname(), addr[0].Port, parsedURL.Path),
 				})
+			}
+
+			return addresses, nil
+		} else {
+			// If socket transport not enabled then we can't do this
+			if !c.config.SocketTransportEnabled {
+				return []Address{}, ErrUnsupportedAddressFormat
+			}
+
+			return c.lookupSRV(serviceName, true)
+		}
+	}
+
+	// If http(s):// then we're doing web sockets, lets resolve the address
+	if strings.HasPrefix(addressStr, "http://") || strings.HasPrefix(addressStr, "https://") || strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "wss://") {
+		if c.config.WebsocketProvider == nil {
+			return []Address{}, ErrUnsupportedAddressFormat
+		}
+
+		if strings.HasPrefix(addressStr, "http") {
+			addressStr = "ws" + strings.TrimPrefix(addressStr, "http")
+		}
+
+		return []Address{
+			{
+				URL: addressStr,
+			},
+		}, nil
+	} else {
+		if !c.config.SocketTransportEnabled {
+			return []Address{}, ErrUnsupportedAddressFormat
+		}
+
+		return c.lookupIP(addressStr, c.config.DefaultPort)
+	}
+}
+
+func (c *Cluster) lookupSRV(serviceName string, resolveToIPs bool) ([]Address, error) {
+	addresses := make([]Address, 0)
+
+	// Make sure the service ends with a dot
+	if !strings.HasSuffix(serviceName, ".") {
+		serviceName += "."
+	}
+
+	// Look up the SRV record
+	_, addrs, err := net.LookupSRV("", "", serviceName)
+	if err != nil {
+		return addresses, fmt.Errorf("failed to lookup SRV record")
+	}
+
+	if len(addrs) == 0 {
+		return addresses, fmt.Errorf("no SRV records found for service")
+	}
+
+	if resolveToIPs {
+		for _, srv := range addrs {
+			addr, err := c.lookupIP(srv.Target, int(srv.Port))
+			if err == nil {
+				addresses = append(addresses, addr...)
 			}
 		}
 	} else {
-		// If the address string contains only numbers then assume it's a port and prefix with :
-		if _, err := strconv.Atoi(addressStr); err == nil {
-			addressStr = ":" + addressStr
+		for _, srv := range addrs {
+			addresses = append(addresses, Address{
+				Port: int(srv.Port),
+			})
 		}
+	}
 
-		// Split the address into host and port
-		host, portStr, err := net.SplitHostPort(addressStr)
+	return addresses, nil
+}
+
+func (c *Cluster) lookupIP(host string, defaultPort int) ([]Address, error) {
+	addresses := make([]Address, 0)
+
+	// If the address string contains only numbers then assume it's a port and prefix with :
+	if _, err := strconv.Atoi(host); err == nil {
+		host = ":" + host
+	}
+
+	// If the host doesn't contain a port then use the default port
+	if !strings.Contains(host, ":") {
+		host = fmt.Sprintf("%s:%d", host, defaultPort)
+	}
+
+	// Split the address into host and port
+	hostStr, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		return addresses, err
+	}
+
+	// If host is empty then use loopback address
+	if hostStr == "" {
+		hostStr = "127.0.0.1"
+	}
+
+	// Parse port value
+	var port int
+	portVal, err := strconv.ParseUint(portStr, 10, 16)
+	if err == nil {
+		port = int(portVal)
+	} else {
+		port = defaultPort
+	}
+
+	// Resolve the IP address
+	var ip net.IP
+	if ip = net.ParseIP(hostStr); ip == nil {
+		// Host is a hostname, resolve it
+		ips, err := net.LookupIP(hostStr)
 		if err != nil {
-			// No port specified, use the host as is and default port
-			host = addressStr
-			portStr = ""
+			return addresses, fmt.Errorf("failed to resolve hostname")
 		}
 
-		// If host is empty then use loopback address
-		if host == "" {
-			host = "127.0.0.1"
-		}
-
-		// Parse port if provided, otherwise use default
-		var port int
-		if portStr != "" {
-			portVal, err := strconv.ParseUint(portStr, 10, 16)
-			if err == nil {
-				port = int(portVal)
-			} else {
-				port = c.config.DefaultPort
-			}
-		} else {
-			port = c.config.DefaultPort
-		}
-
-		// Resolve the IP address
-		var ip net.IP
-		if ip = net.ParseIP(host); ip == nil {
-			// Host is a hostname, resolve it
-			ips, err := net.LookupIP(host)
-			if err != nil {
-				return addresses, fmt.Errorf("failed to resolve hostname")
-			}
-
-			for _, ip = range ips {
-				addresses = append(addresses, Address{
-					IP:   ip,
-					Port: port,
-				})
-			}
-		} else {
+		for _, ip = range ips {
 			addresses = append(addresses, Address{
 				IP:   ip,
 				Port: port,
 			})
 		}
+	} else {
+		addresses = append(addresses, Address{
+			IP:   ip,
+			Port: port,
+		})
 	}
 
 	return addresses, nil
@@ -304,6 +423,7 @@ func (c *Cluster) Join(peers []string) error {
 
 			// Update the node with the peer's advertised address and ID then save it
 			node.ID = joinMsg.ID
+			node.address = joinMsg.Address
 			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
 			if c.nodes.addIfNotExists(node) {
 				err = c.exchangeState(node, []NodeID{c.localNode.ID})
@@ -499,7 +619,7 @@ func (c *Cluster) broadcastWorker() {
 			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers)
 			for _, peer := range peerSubset {
 				if err := c.transport.SendPacket(item.transportType, peer, item.packet); err != nil {
-					c.config.Logger.Err(err).Warnf("Failed to send packet to peer %s", peer.ID)
+					c.config.Logger.Err(err).Debugf("Failed to send packet to peer %s", peer.ID)
 				}
 			}
 
@@ -616,4 +736,8 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	}
 	c.handlers.registerHandlerWithReply(msgType, replyHandler)
 	return nil
+}
+
+func (c *Cluster) NodeIsLocal(node *Node) bool {
+	return node.ID == c.localNode.ID
 }

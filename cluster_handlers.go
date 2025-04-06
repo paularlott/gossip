@@ -21,6 +21,10 @@ func (c *Cluster) registerSystemHandlers() {
 }
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
+	if sender == nil {
+		return fmt.Errorf("unknown sender")
+	}
+
 	ping := pingMessage{}
 	if err := packet.Unmarshal(&ping); err != nil {
 		return err
@@ -29,12 +33,6 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 	// Check if the ping is for us
 	if ping.TargetID != c.localNode.ID {
 		return nil
-	}
-
-	// If we don't know the sender then generate a temporary node and add it to our list of peers
-	if sender == nil {
-		sender = newNode(packet.SenderID, ping.FromAddr)
-		c.nodes.addIfNotExists(sender)
 	}
 
 	// Echo the ping back to the sender
@@ -56,6 +54,10 @@ func (c *Cluster) handlePingAck(sender *Node, packet *Packet) error {
 }
 
 func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
+	if sender == nil {
+		return fmt.Errorf("unknown sender")
+	}
+
 	var err error
 
 	ping := indirectPingMessage{}
@@ -66,12 +68,6 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	// Create a temporary node for the target
 	targetNode := newNode(ping.TargetID, ping.Address)
 	ping.Ok, err = c.healthMonitor.pingNode(targetNode)
-
-	// If we don't know the sender then generate a temporary node and add it to our list of peers
-	if sender == nil {
-		sender = newNode(packet.SenderID, ping.FromAddr)
-		c.nodes.addIfNotExists(sender)
-	}
 
 	// Respond to the sender with the ping acknowledgment
 	return c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)

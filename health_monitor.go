@@ -188,8 +188,8 @@ func (hm *healthMonitor) checkRandomNodes() {
 
 // Check health for a single node
 func (hm *healthMonitor) checkNodeHealth(node *Node) {
-	// Skip if node is already marked dead or leaving
-	if node.state == nodeDead || node.state == nodeLeaving {
+	// Skip if node is already marked dead or leaving, also don't do active checks where there's no shared transport with the node
+	if node.state == nodeDead || node.state == nodeLeaving || !hm.cluster.localNode.HasCompatibleTransport(node) {
 		return
 	}
 
@@ -374,20 +374,28 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 	// If the node has been suspect for too long, check it one more time
 	suspectDuration := time.Since(evidence.suspectTime)
 	if suspectDuration > hm.config.SuspectTimeout {
-		// Try one final ping
-		if alive, _ := hm.pingAny(node); alive {
-			hm.config.Logger.
-				Field("node", node.ID.String()).
-				Infof("Suspect node responded after timeout, marking as alive")
+		if hm.cluster.localNode.HasCompatibleTransport(node) {
+			// Try one final ping
+			if alive, _ := hm.pingAny(node); alive {
+				hm.config.Logger.
+					Field("node", node.ID.String()).
+					Infof("Suspect node responded after timeout, marking as alive")
 
-			hm.cluster.nodes.updateState(node.ID, nodeAlive)
+				hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
-			// Clean up tracking
-			hm.nodeFailures.Delete(node.ID)
+				// Clean up tracking
+				hm.nodeFailures.Delete(node.ID)
+			} else {
+				hm.config.Logger.
+					Field("node", node.ID.String()).
+					Infof("Suspect node timed out and is unreachable, marking as dead")
+
+				hm.cluster.nodes.updateState(node.ID, nodeDead)
+			}
 		} else {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
-				Infof("Suspect node timed out and is unreachable, marking as dead")
+				Infof("Suspect node can't be checked as no compatible transport, marking as dead")
 
 			hm.cluster.nodes.updateState(node.ID, nodeDead)
 		}
@@ -425,7 +433,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 				Infof("Dead node timeout expired, removing from cluster")
 
 			hm.removeNodeEvidenceFromAllNodes(node.ID)
-			hm.cluster.nodes.remove(node.ID)
+			hm.cluster.nodes.removeIfInState(node.ID, []NodeState{nodeDead, nodeLeaving})
 
 			// Clean up any suspicion tracking
 			hm.cleanNodeState(node.ID)
@@ -511,8 +519,8 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 		return nil
 	}
 
-	// If we've seen this node alive recently, refute the suspicion
-	if suspectNode.state == nodeAlive {
+	// If we've seen this node alive recently, refute the suspicion, only works if nodes share a compatible connection
+	if suspectNode.state == nodeAlive && hm.cluster.localNode.HasCompatibleTransport(suspectNode) {
 		// Try to ping to confirm it's still alive
 		if alive, _ := hm.pingAny(suspectNode); alive {
 			// Refute the suspicion by reporting node is alive
@@ -580,6 +588,21 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 
 	// If node is suspect or dead, try a direct ping to confirm
 	if aliveNode.state == nodeSuspect || aliveNode.state == nodeDead {
+		if !hm.cluster.localNode.HasCompatibleTransport(aliveNode) {
+			hm.config.Logger.
+				Field("node", aliveNode.ID.String()).
+				Field("from", sender.ID.String()).
+				Field("state", aliveNode.state.String()).
+				Infof("Node reported alive no compatible transport accepting state, marking as alive")
+
+			hm.cluster.nodes.updateState(aliveNode.ID, nodeAlive)
+
+			// Clean up any suspicion evidence
+			hm.cleanNodeState(aliveNode.ID)
+
+			return nil
+		}
+
 		// Try to ping to verify
 		if alive, _ := hm.pingAny(aliveNode); alive {
 			hm.config.Logger.
@@ -752,10 +775,8 @@ func (hm *healthMonitor) pingNode(node *Node) (bool, error) {
 	ping := pingMessage{
 		TargetID: node.ID,
 		Seq:      seq,
-		FromAddr: hm.cluster.localNode.address,
 	}
 	if err := hm.cluster.sendMessageTo(TransportBestEffort, node, 1, pingMsg, &ping); err != nil {
-		hm.config.Logger.Err(err).Errorf("Failed to send ping message to peer %s", node.ID)
 		return false, err
 	}
 
@@ -836,7 +857,6 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 		TargetID: node.ID,
 		Address:  node.address,
 		Seq:      seq,
-		FromAddr: hm.cluster.localNode.address,
 	}
 
 	peerCount := hm.cluster.getPeerSubsetSize(
@@ -972,8 +992,15 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeDead:
 			// If we think it's alive, try to confirm with a ping
 			if localNode.state == nodeAlive {
-				// Ping to verify
-				alive, _ := hm.pingAny(localNode)
+				var alive bool
+
+				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
+					// Ping to verify
+					alive, _ = hm.pingAny(localNode)
+				} else {
+					alive = false
+				}
+
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
@@ -1032,8 +1059,14 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeSuspect:
 			// If we think it's alive, verify
 			if localNode.state == nodeAlive {
-				// Ping to verify
-				alive, _ := hm.pingAny(localNode)
+				var alive bool
+				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
+					// Ping to verify
+					alive, _ = hm.pingAny(localNode)
+				} else {
+					alive = false
+				}
+
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
@@ -1053,8 +1086,15 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeAlive:
 			// If we think it's suspect or dead, verify
 			if localNode.state == nodeSuspect || localNode.state == nodeDead {
-				// Try to ping and verify
-				alive, _ := hm.pingAny(localNode)
+				var alive bool
+
+				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
+					// Try to ping and verify
+					alive, _ = hm.pingAny(localNode)
+				} else {
+					alive = false
+				}
+
 				if alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).

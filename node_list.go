@@ -157,6 +157,10 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
+	nl.removeIfInState(nodeID, []NodeState{nodeAlive, nodeSuspect, nodeLeaving, nodeDead})
+}
+
+func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 	shard := nl.getShard(nodeID)
 
 	shard.mutex.Lock()
@@ -164,28 +168,38 @@ func (nl *nodeList) remove(nodeID NodeID) {
 
 	node, exists := shard.nodes[nodeID]
 	if exists {
-		// Update counters
-		nl.totalCount.Add(-1)
-		switch node.state {
-		case nodeAlive:
-			nl.aliveCount.Add(-1)
-		case nodeSuspect:
-			nl.suspectCount.Add(-1)
-		case nodeLeaving:
-			nl.leavingCount.Add(-1)
-		case nodeDead:
-			nl.deadCount.Add(-1)
-		}
-		if node.state == nodeAlive || node.state == nodeSuspect {
-			nl.liveCount.Add(-1)
-		}
+		// Check if node is in one of the specified states
+		for _, state := range states {
+			if node.state == state {
 
-		// Remove from state map
-		delete(shard.byState[node.state], nodeID)
+				// Update counters
+				nl.totalCount.Add(-1)
+				switch node.state {
+				case nodeAlive:
+					nl.aliveCount.Add(-1)
+				case nodeSuspect:
+					nl.suspectCount.Add(-1)
+				case nodeLeaving:
+					nl.leavingCount.Add(-1)
+				case nodeDead:
+					nl.deadCount.Add(-1)
+				}
+				if node.state == nodeAlive || node.state == nodeSuspect {
+					nl.liveCount.Add(-1)
+				}
 
-		// Remove from nodes map
-		delete(shard.nodes, nodeID)
+				// Remove from state map
+				delete(shard.byState[node.state], nodeID)
+
+				// Remove from nodes map
+				delete(shard.nodes, nodeID)
+
+				return true
+			}
+		}
 	}
+
+	return false
 }
 
 // Get returns a node by ID
