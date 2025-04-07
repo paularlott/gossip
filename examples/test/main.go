@@ -68,7 +68,7 @@ func main() {
 	config.EventListener = &MyListener{}
 	config.Logger = NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
-	config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
+	config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
 
 	config.Compressor = compression.NewSnappyCompressor()
 

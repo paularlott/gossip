@@ -1,5 +1,7 @@
 package gossip
 
+import "github.com/paularlott/gossip/codec"
+
 type MessageType uint16
 type MessageID struct {
 	Timestamp int64
@@ -33,14 +35,14 @@ type Packet struct {
 	MessageID   MessageID   `msgpack:"mi" json:"mi"`
 	TTL         uint8       `msgpack:"ttl" json:"ttl"`
 	payload     []byte
-	codec       MsgCodec
+	codec       codec.Serializer
 }
 
 func (p *Packet) Unmarshal(v interface{}) error {
 	return p.codec.Unmarshal(p.payload, v)
 }
 
-func (p *Packet) Codec() MsgCodec {
+func (p *Packet) Codec() codec.Serializer {
 	return p.codec
 }
 

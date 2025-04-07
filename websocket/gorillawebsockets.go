@@ -13,6 +13,35 @@ import (
 	gorillaws "github.com/gorilla/websocket"
 )
 
+// GorillaWebSocket implements the WebSocket interface for gorilla/websocket
+type GorillaWebSocket struct {
+	conn     *gorillaws.Conn
+	isSecure bool
+}
+
+// WriteMessage implements WebSocket.WriteMessage
+func (g *GorillaWebSocket) WriteMessage(messageType int, data []byte) error {
+	return g.conn.WriteMessage(messageType, data)
+}
+
+// ReadMessage implements WebSocket.ReadMessage
+func (g *GorillaWebSocket) ReadMessage() (messageType int, p []byte, err error) {
+	return g.conn.ReadMessage()
+}
+
+// NextReader implements WebSocket.NextReader
+func (g *GorillaWebSocket) NextReader() (messageType int, reader io.Reader, err error) {
+	return g.conn.NextReader()
+}
+
+// Close implements WebSocket.Close
+func (g *GorillaWebSocket) Close() error {
+	g.conn.WriteControl(gorillaws.CloseMessage,
+		gorillaws.FormatCloseMessage(gorillaws.CloseNormalClosure, ""),
+		time.Now().Add(time.Second))
+	return g.conn.Close()
+}
+
 // GorillaWebSocketProvider implements WebsocketProvider using gorilla/websocket
 type GorillaWebSocketProvider struct {
 	// Configuration options
@@ -141,8 +170,7 @@ func (w *gorillaWebsocketConn) SetWriteDeadline(t time.Time) error {
 	return w.conn.SetWriteDeadline(t)
 }
 
-// DialWebsocket implements WebSocketProvider.DialWebsocket
-func (p *GorillaWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
+func (p *GorillaWebSocketProvider) Dial(url string) (WebSocket, error) {
 	if url == "" {
 		return nil, fmt.Errorf("empty WebSocket URL")
 	}
@@ -159,7 +187,6 @@ func (p *GorillaWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
 	}
 
 	header := http.Header{}
-
 	if p.BearerToken != "" {
 		header.Set("Authorization", "Bearer "+p.BearerToken)
 	}
@@ -170,17 +197,13 @@ func (p *GorillaWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
 		return nil, fmt.Errorf("failed to dial WebSocket: %w", err)
 	}
 
-	// Create a net.Conn adapter for the WebSocket connection
-	conn := &gorillaWebsocketConn{
+	return &GorillaWebSocket{
 		conn:     wsConn,
 		isSecure: strings.HasPrefix(strings.ToLower(url), "wss://"),
-	}
-
-	return conn, nil
+	}, nil
 }
 
-// UpgradeHTTPToWebsocket implements WebSocketProvider.UpgradeHTTPToWebsocket
-func (p *GorillaWebSocketProvider) UpgradeHTTPToWebsocket(w http.ResponseWriter, r *http.Request) (net.Conn, error) {
+func (p *GorillaWebSocketProvider) Upgrade(w http.ResponseWriter, r *http.Request) (WebSocket, error) {
 	upgrader := gorillaws.Upgrader{
 		CheckOrigin:       func(r *http.Request) bool { return true },
 		ReadBufferSize:    p.ReadBufferSize,
@@ -195,10 +218,20 @@ func (p *GorillaWebSocketProvider) UpgradeHTTPToWebsocket(w http.ResponseWriter,
 		return nil, fmt.Errorf("failed to upgrade connection to WebSocket: %w", err)
 	}
 
-	// Create a net.Conn adapter for the WebSocket connection
-	conn := &gorillaWebsocketConn{
-		conn: wsConn,
+	return &GorillaWebSocket{
+		conn:     wsConn,
+		isSecure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+	}, nil
+}
+
+func (p *GorillaWebSocketProvider) ToNetConn(ws WebSocket) net.Conn {
+	gws, ok := ws.(*GorillaWebSocket)
+	if !ok {
+		panic("websocket is not a GorillaWebsocket")
 	}
 
-	return conn, nil
+	return &gorillaWebsocketConn{
+		conn:     gws.conn,
+		isSecure: gws.isSecure,
+	}
 }

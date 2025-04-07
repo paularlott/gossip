@@ -1,8 +1,10 @@
+// websocket/coder.go
 package websocket
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -10,15 +12,6 @@ import (
 
 	coderws "github.com/coder/websocket"
 )
-
-// CoderWebSocketProvider implements WebsocketProvider using coder/websocket
-type CoderWebSocketProvider struct {
-	// Configuration options
-	HandshakeTimeout  time.Duration
-	EnableCompression bool
-	SkipTLSVerify     bool
-	BearerToken       string
-}
 
 // coderWebsocketConn wraps a net.Conn to add websocket identification capabilities
 type coderWebsocketConn struct {
@@ -30,9 +23,51 @@ func (c *coderWebsocketConn) IsSecure() bool {
 	return c.isSecure
 }
 
-// NewCoderProvider creates a new WebSocket provider using coder/websocket
-func NewCoderProvider(timeout time.Duration, skipTLSVerify bool, bearerToken string) *CoderWebSocketProvider {
-	return &CoderWebSocketProvider{
+// CoderWebSocket implements the WebSocket interface for coder/websocket
+type CoderWebSocket struct {
+	conn     *coderws.Conn
+	ctx      context.Context
+	isSecure bool
+}
+
+// WriteMessage implements WebSocket.WriteMessage
+func (c *CoderWebSocket) WriteMessage(messageType int, data []byte) error {
+	return c.conn.Write(c.ctx, coderws.MessageType(messageType), data)
+}
+
+// ReadMessage implements WebSocket.ReadMessage
+func (c *CoderWebSocket) ReadMessage() (messageType int, p []byte, err error) {
+	typ, r, err := c.conn.Reader(c.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	data, err := io.ReadAll(r)
+	return int(typ), data, err
+}
+
+// NextReader implements WebSocket.NextReader
+func (c *CoderWebSocket) NextReader() (messageType int, reader io.Reader, err error) {
+	mt, reader, err := c.conn.Reader(c.ctx)
+	return int(mt), reader, err
+}
+
+// Close implements WebSocket.Close
+func (c *CoderWebSocket) Close() error {
+	return c.conn.Close(coderws.StatusNormalClosure, "")
+}
+
+// CoderProvider implements Provider for coder/websocket
+type CoderProvider struct {
+	HandshakeTimeout  time.Duration
+	EnableCompression bool
+	SkipTLSVerify     bool
+	BearerToken       string
+}
+
+// NewCoderProvider creates a new Provider using coder/websocket
+func NewCoderProvider(timeout time.Duration, skipTLSVerify bool, bearerToken string) *CoderProvider {
+	return &CoderProvider{
 		HandshakeTimeout:  timeout,
 		EnableCompression: true,
 		SkipTLSVerify:     skipTLSVerify,
@@ -40,8 +75,8 @@ func NewCoderProvider(timeout time.Duration, skipTLSVerify bool, bearerToken str
 	}
 }
 
-// DialWebsocket implements WebSocketProvider.DialWebsocket
-func (p *CoderWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
+// Dial implements Provider.Dial
+func (p *CoderProvider) Dial(url string) (WebSocket, error) {
 	if url == "" {
 		return nil, fmt.Errorf("empty WebSocket URL")
 	}
@@ -49,7 +84,6 @@ func (p *CoderWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.HandshakeTimeout)
 	defer cancel()
 
-	// Set up dialer options
 	opts := &coderws.DialOptions{
 		CompressionMode: coderws.CompressionDisabled,
 	}
@@ -61,24 +95,23 @@ func (p *CoderWebSocketProvider) DialWebsocket(url string) (net.Conn, error) {
 		opts.HTTPHeader.Set("Authorization", "Bearer "+p.BearerToken)
 	}
 
-	// Dial the WebSocket server
 	wsConn, _, err := coderws.Dial(ctx, url, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial WebSocket: %w", err)
 	}
 
-	ctx, _ = context.WithTimeout(context.Background(), p.HandshakeTimeout)
-	netConn := coderws.NetConn(ctx, wsConn, coderws.MessageBinary)
+	// Create context for the websocket
+	connCtx, _ := context.WithTimeout(context.Background(), p.HandshakeTimeout)
 
-	return &coderWebsocketConn{
-		Conn:     netConn,
+	return &CoderWebSocket{
+		conn:     wsConn,
+		ctx:      connCtx,
 		isSecure: strings.HasPrefix(strings.ToLower(url), "wss://"),
 	}, nil
 }
 
-// UpgradeHTTPToWebsocket implements WebSocketProvider.UpgradeHTTPToWebsocket
-func (p *CoderWebSocketProvider) UpgradeHTTPToWebsocket(w http.ResponseWriter, r *http.Request) (net.Conn, error) {
-	// Set up upgrader options
+// Upgrade implements Provider.Upgrade
+func (p *CoderProvider) Upgrade(w http.ResponseWriter, r *http.Request) (WebSocket, error) {
 	opts := &coderws.AcceptOptions{
 		CompressionMode:    coderws.CompressionDisabled,
 		InsecureSkipVerify: p.SkipTLSVerify,
@@ -87,14 +120,30 @@ func (p *CoderWebSocketProvider) UpgradeHTTPToWebsocket(w http.ResponseWriter, r
 		opts.CompressionMode = coderws.CompressionContextTakeover
 	}
 
-	// Upgrade the HTTP connection to WebSocket
 	wsConn, err := coderws.Accept(w, r, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upgrade connection to WebSocket: %w", err)
 	}
 
-	ctx, _ := context.WithTimeout(context.Background(), p.HandshakeTimeout)
-	conn := coderws.NetConn(ctx, wsConn, coderws.MessageBinary)
+	connCtx, _ := context.WithTimeout(context.Background(), p.HandshakeTimeout)
 
-	return conn, nil
+	return &CoderWebSocket{
+		conn:     wsConn,
+		ctx:      connCtx,
+		isSecure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+	}, nil
+}
+
+// ToNetConn implements Provider.ToNetConn
+func (p *CoderProvider) ToNetConn(ws WebSocket) net.Conn {
+	coderWS, ok := ws.(*CoderWebSocket)
+	if !ok {
+		panic("websocket is not a CoderWebSocket")
+	}
+
+	netConn := coderws.NetConn(coderWS.ctx, coderWS.conn, coderws.MessageBinary)
+	return &coderWebsocketConn{
+		Conn:     netConn,
+		isSecure: coderWS.isSecure,
+	}
 }

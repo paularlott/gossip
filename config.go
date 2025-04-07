@@ -2,6 +2,10 @@ package gossip
 
 import (
 	"time"
+
+	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/compression"
+	"github.com/paularlott/gossip/websocket"
 )
 
 type Config struct {
@@ -17,10 +21,10 @@ type Config struct {
 	EncryptionKey                 string                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                     Transport               // Transport layer to communicate over UDP or TCP
 	Logger                        Logger                  // Logger is the logger to use for logging messages
-	MsgCodec                      MsgCodec                // The codec to use for encoding and decoding messages
-	Compressor                    CompressionCodec        // The codec to use for compressing and decompressing messages, if not given messages will not be compressed
+	MsgCodec                      codec.Serializer        // The codec to use for encoding and decoding messages
+	Compressor                    compression.Codec       // The codec to use for compressing and decompressing messages, if not given messages will not be compressed
 	CompressMinSize               int                     // The minimum size of a message before attempting to compress it
-	WebsocketProvider             WebsocketProvider       // The provider to use for WebSocket connections
+	WebsocketProvider             websocket.Provider      // The provider to use for WebSocket connections
 	SocketTransportEnabled        bool                    // Whether to use the socket transport layer
 	ApplicationVersionCheck       ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
 	TCPDialTimeout                time.Duration           // TCPDialTimeout is the duration to wait for a TCP connection to be established

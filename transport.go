@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paularlott/gossip/websocket"
 )
 
 type TransportType uint8
@@ -42,7 +44,7 @@ type transport struct {
 	tcpListener   *net.TCPListener
 	udpListener   *net.UDPConn
 	packetChannel chan *IncomingPacket
-	wsProvider    WebsocketProvider
+	wsProvider    websocket.Provider
 }
 
 // Holds the information for an incoming packet waiting on the queue for processing
@@ -186,14 +188,14 @@ func (t *transport) WebsocketHandler(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
-	conn, err := t.wsProvider.UpgradeHTTPToWebsocket(w, r)
+	wsConn, err := t.wsProvider.Upgrade(w, r)
 	if err != nil {
 		t.config.Logger.Err(err).Errorf("Failed to upgrade to WebSocket")
 		http.Error(w, "Failed to upgrade to WebSocket", http.StatusInternalServerError)
 		return
 	}
 
-	t.packetToQueue(conn, ctx)
+	t.packetToQueue(t.wsProvider.ToNetConn(wsConn), ctx)
 }
 
 func (t *transport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
@@ -258,7 +260,12 @@ func (t *transport) DialPeer(node *Node) (net.Conn, error) {
 			return nil, fmt.Errorf("no websocket provider configured")
 		}
 
-		return t.wsProvider.DialWebsocket(node.address.URL)
+		wsConn, err := t.wsProvider.Dial(node.address.URL)
+		if err != nil {
+			return nil, err
+		}
+
+		return t.wsProvider.ToNetConn(wsConn), nil
 	} else {
 		return nil, ErrNoTransportAvailable
 	}
@@ -411,7 +418,7 @@ func (t *transport) WritePacket(conn net.Conn, packet *Packet) error {
 	// If running on wss then we need to skip compression and encryption to avoid double compression/encryption
 	skipCompression := false
 	skipEncryption := false
-	if wsConn, ok := conn.(WSConn); ok {
+	if wsConn, ok := conn.(websocket.Conn); ok {
 		skipCompression = true
 		skipEncryption = wsConn.IsSecure()
 	}
@@ -487,7 +494,7 @@ func (t *transport) ReadPacket(conn net.Conn) (*Packet, error) {
 
 	// Test if we're using a secure websocket connection
 	underlyingTransportIsSecure := false
-	if wsConn, ok := conn.(WSConn); ok {
+	if wsConn, ok := conn.(websocket.Conn); ok {
 		underlyingTransportIsSecure = wsConn.IsSecure()
 	}
 
