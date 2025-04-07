@@ -543,7 +543,8 @@ func (c *Cluster) getPeerSubsetSize(totalNodes int, purpose peerSelectionPurpose
 		cap = 6
 
 	case purposeTTL:
-		basePeerCount = math.Ceil(basePeerCount * c.config.TTLMultiplier)
+		// Add 2 to the base for more aggressive state propagation
+		basePeerCount = math.Ceil(basePeerCount*c.config.TTLMultiplier) + 2
 		cap = 8
 
 	default:
