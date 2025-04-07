@@ -8,11 +8,13 @@ import (
 
 type Handler func(*Node, *Packet) error
 type ReplyHandler func(*Node, *Packet) (MessageType, interface{}, error)
+type StreamHandler func(*Node, *Packet, net.Conn)
 
 type msgHandler struct {
-	forward      bool
-	handler      Handler
-	replyHandler ReplyHandler
+	forward       bool
+	handler       Handler
+	replyHandler  ReplyHandler
+	streamHandler StreamHandler
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
@@ -30,6 +32,10 @@ func (mh *msgHandler) dispatch(conn net.Conn, c *Cluster, node *Node, packet *Pa
 			}
 			return c.transport.WritePacket(conn, packet)
 		}
+		return nil
+	} else if conn != nil && mh.streamHandler != nil {
+		// Start stream handlers in their own go routine as they could run for a while
+		go mh.streamHandler(node, packet, conn)
 		return nil
 	} else if mh.handler != nil {
 		return mh.handler(node, packet)
@@ -75,6 +81,13 @@ func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler
 	hr.register(msgType, msgHandler{
 		forward:      false,
 		replyHandler: handler,
+	})
+}
+
+func (hr *handlerRegistry) registerStreamHandler(msgType MessageType, handler StreamHandler) {
+	hr.register(msgType, msgHandler{
+		forward:       false,
+		streamHandler: handler,
 	})
 }
 

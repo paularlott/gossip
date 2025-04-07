@@ -758,6 +758,15 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
+// Registers a handler to accept a message and open a stream between sender and destination, always uses the reliable transport
+func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+	c.handlers.registerStreamHandler(msgType, handler)
+	return nil
+}
+
 func (c *Cluster) NodeIsLocal(node *Node) bool {
 	return node.ID == c.localNode.ID
 }

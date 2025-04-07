@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"fmt"
+	"net"
 	"time"
 )
 
@@ -179,4 +180,56 @@ func (c *Cluster) SendMetadataUpdate() error {
 
 	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID})
 	return nil
+}
+
+func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interface{}) (net.Conn, error) {
+	if msgType < UserMsg {
+		return nil, fmt.Errorf("invalid message type")
+	}
+
+	conn, err := c.transport.DialPeer(dstNode)
+	if err != nil {
+		return nil, err
+	}
+
+	err = c.WriteStream(conn, msgType, payload)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+func (c *Cluster) WriteStream(conn net.Conn, msgType MessageType, payload interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+
+	packet, err := c.createPacket(c.localNode.ID, msgType, 1, payload)
+	if err != nil {
+		return err
+	}
+
+	// Write the packet to the connection
+	return c.transport.WritePacket(conn, packet)
+}
+
+func (c *Cluster) ReadStream(conn net.Conn, msgType MessageType, payload interface{}) error {
+	if msgType < UserMsg {
+		return fmt.Errorf("invalid message type")
+	}
+
+	packet, err := c.transport.ReadPacket(conn)
+	if err != nil {
+		return err
+	}
+
+	// If the response message type doesn't match the expected type, return an error
+	if packet.MessageType != msgType {
+		return fmt.Errorf("unexpected response")
+	}
+
+	// Unmarshal the response payload
+	return packet.Unmarshal(payload)
 }
