@@ -88,8 +88,8 @@ func main() {
 The gossip library supports multiple address formats for binding and connecting to the cluster:
 
 - **IP:port** - Standard TCP/UDP address (e.g., 127.0.0.1:8000)
-- **hostname:port** - DNS hostname with port
-- **hostname** or **IP** - The default port will be used
+- **hostname:port** - DNS hostname with port, when multiple addresses are returned the node will attempt to connect to each address in turn assuming each is a node within the cluster
+- **hostname** or **IP** - The default port will be used, for a hostname returning multiple addresses the node will attempt to connect to each address in turn assuming each is a node within the cluster
 - **srv+service-name** - SRV DNS record lookup, when multiple addresses are returned the node will attempt to connect to each address in turn assuming each is a node within the cluster
 - **ws://hostname:port/endpoint** - WebSocket connection
 - **wss://hostname:port/endpoint** - Secure WebSocket connection
