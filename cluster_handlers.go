@@ -95,22 +95,34 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 		return nilMsg, nil, err
 	}
 
-	// Check add the peer to our list of known peers unless it already exists
-	node := newNode(joinMsg.ID, joinMsg.Address)
-	if c.nodes.addOrUpdate(node) {
-		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+	// Check the protocol version and application version, reject if not compatible
+	accepted := true
+	if joinMsg.ProtocolVersion != c.localNode.ProtocolVersion || (c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck.CheckVersion(joinMsg.ApplicationVersion)) {
+		accepted = false
+	} else {
+		// Check add the peer to our list of known peers unless it already exists
+		node := newNode(joinMsg.ID, joinMsg.Address)
+		node.ProtocolVersion = joinMsg.ProtocolVersion
+		node.ApplicationVersion = joinMsg.ApplicationVersion
+
+		if c.nodes.addOrUpdate(node) {
+			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+		}
+
+		// Gossip the node to our peers
+		packet.MessageType = nodeJoiningMsg
+		c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
 	}
 
-	// Gossip the node to our peers
-	packet.MessageType = nodeJoiningMsg
-	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
-
 	// Respond to the sender with our information
-	selfJoinMsg := joinMessage{
-		ID:                c.localNode.ID,
-		Address:           c.localNode.address,
-		MetadataTimestamp: c.localNode.Metadata.GetTimestamp(),
-		Metadata:          c.localNode.Metadata.GetAll(),
+	selfJoinMsg := joinReplyMessage{
+		Accepted:           accepted,
+		ID:                 c.localNode.ID,
+		Address:            c.localNode.address,
+		MetadataTimestamp:  c.localNode.Metadata.GetTimestamp(),
+		Metadata:           c.localNode.Metadata.GetAll(),
+		ProtocolVersion:    c.localNode.ProtocolVersion,
+		ApplicationVersion: c.localNode.ApplicationVersion,
 	}
 
 	return nodeJoinAckMsg, &selfJoinMsg, nil
@@ -124,9 +136,15 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 		return err
 	}
 
-	node := newNode(joinMsg.ID, joinMsg.Address)
-	node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
-	c.nodes.addOrUpdate(node)
+	// Check the protocol version and application version, reject if not compatible
+	if joinMsg.ProtocolVersion == c.localNode.ProtocolVersion && (c.config.ApplicationVersionCheck == nil || c.config.ApplicationVersionCheck.CheckVersion(joinMsg.ApplicationVersion)) {
+		node := newNode(joinMsg.ID, joinMsg.Address)
+		node.ProtocolVersion = joinMsg.ProtocolVersion
+		node.ApplicationVersion = joinMsg.ApplicationVersion
+
+		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+		c.nodes.addOrUpdate(node)
+	}
 
 	return nil
 }

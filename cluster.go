@@ -21,6 +21,10 @@ var (
 	ErrUnsupportedAddressFormat = fmt.Errorf("unsupported address format")
 )
 
+const (
+	PROTOCOL_VERSION = 1
+)
+
 type Cluster struct {
 	config          *Config
 	shutdownContext context.Context
@@ -95,6 +99,9 @@ func NewCluster(config *Config) (*Cluster, error) {
 		handlers:        newHandlerRegistry(),
 		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
 	}
+
+	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
+	cluster.localNode.ApplicationVersion = config.ApplicationVersion
 
 	// Resolve the local node's address
 	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)
@@ -406,25 +413,36 @@ func (c *Cluster) Join(peers []string) error {
 			continue
 		}
 
+		joinMsg := &joinMessage{
+			ID:                 c.localNode.ID,
+			Address:            c.localNode.address,
+			MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
+			Metadata:           c.localNode.metadata.GetAll(),
+			ProtocolVersion:    PROTOCOL_VERSION,
+			ApplicationVersion: c.config.ApplicationVersion,
+		}
+
 		for _, addr := range addresses {
-			joinMsg := &joinMessage{
-				ID:                c.localNode.ID,
-				Address:           c.localNode.address,
-				MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
-				Metadata:          c.localNode.metadata.GetAll(),
-			}
+			joinReply := &joinReplyMessage{}
 
 			node := newNode(c.localNode.ID, addr)
-			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinMsg)
+			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinReply)
 			if err != nil {
 				c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
 				continue
 			}
 
+			if !joinReply.Accepted {
+				c.config.Logger.Warnf("Peer %s rejected our join request", peerAddr)
+				continue
+			}
+
 			// Update the node with the peer's advertised address and ID then save it
-			node.ID = joinMsg.ID
-			node.address = joinMsg.Address
-			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
+			node.ID = joinReply.ID
+			node.address = joinReply.Address
+			node.ProtocolVersion = joinReply.ProtocolVersion
+			node.ApplicationVersion = joinReply.ApplicationVersion
+			node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
 			if c.nodes.addIfNotExists(node) {
 				err = c.exchangeState(node, []NodeID{c.localNode.ID})
 				if err != nil {

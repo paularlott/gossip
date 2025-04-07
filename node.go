@@ -30,13 +30,15 @@ func (ns NodeState) String() string {
 }
 
 type Node struct {
-	ID              NodeID
-	address         Address
-	stateChangeTime time.Time
-	state           NodeState
-	lastActivity    atomic.Int64 // Timestamp of last message received
-	Metadata        MetadataReader
-	metadata        *Metadata
+	ID                 NodeID
+	address            Address
+	stateChangeTime    time.Time
+	state              NodeState
+	lastActivity       atomic.Int64 // Timestamp of last message received
+	Metadata           MetadataReader
+	metadata           *Metadata
+	ProtocolVersion    uint16
+	ApplicationVersion string
 }
 
 func newNode(id NodeID, address Address) *Node {

@@ -45,10 +45,22 @@ func (p *Packet) Codec() MsgCodec {
 }
 
 type joinMessage struct {
-	ID                NodeID                 `msgpack:"id" json:"id"`
-	Address           Address                `msgpack:"addr" json:"addr"`
-	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
-	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	ID                 NodeID                 `msgpack:"id" json:"id"`
+	Address            Address                `msgpack:"addr" json:"addr"`
+	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
+	ApplicationVersion string                 `msgpack:"av" json:"av"`
+	MetadataTimestamp  int64                  `msgpack:"mdts" json:"mdts"`
+	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
+}
+
+type joinReplyMessage struct {
+	Accepted           bool                   `msgpack:"acc" json:"acc"`
+	ID                 NodeID                 `msgpack:"id" json:"id"`
+	Address            Address                `msgpack:"addr" json:"addr"`
+	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
+	ApplicationVersion string                 `msgpack:"av" json:"av"`
+	MetadataTimestamp  int64                  `msgpack:"mdts" json:"mdts"`
+	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type exchangeNodeState struct {

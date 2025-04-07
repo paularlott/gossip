@@ -33,6 +33,11 @@ type EventListener interface {
 	OnNodeMetadataChanged(node *Node)
 }
 
+// Used when a node joins to check if the application version is compatible
+type ApplicationVersionCheck interface {
+	CheckVersion(version string) bool
+}
+
 // Interface for decoupling the message serialization and deserialization
 type MsgCodec interface {
 	Marshal(v interface{}) ([]byte, error)

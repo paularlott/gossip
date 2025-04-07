@@ -24,6 +24,13 @@ const (
 	GossipMsg gossip.MessageType = gossip.UserMsg + iota // User message
 )
 
+type AppVersionCheck struct{}
+
+func (av *AppVersionCheck) CheckVersion(version string) bool {
+	fmt.Println("Checking application version:", version)
+	return true
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -64,6 +71,9 @@ func main() {
 	config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
 
 	config.Compressor = compression.NewSnappyCompressor()
+
+	config.ApplicationVersion = "0.0.1"
+	config.ApplicationVersionCheck = &AppVersionCheck{}
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
