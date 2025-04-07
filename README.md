@@ -156,6 +156,6 @@ config.MsgCodec = codec.NewJSONCodec()
 
 The `examples` directory contains various examples demonstrating the library's capabilities. Each example is self-contained and can be run independently.
 
-- **[basic](example/basic/README.md)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
-- **[events](example/events/README.md)**: Example that installs an event handler to display cluster events.
-- **[usermessages](example/usermessages/README.md)**: Example that demonstrates user defined message handling.
+- **[basic](examples/basic)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
+- **[events](examples/events)**: Example that installs an event handler to display cluster events.
+- **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
