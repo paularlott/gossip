@@ -6,7 +6,6 @@ type Logger interface {
 	Infof(format string, args ...interface{})
 	Warnf(format string, args ...interface{})
 	Errorf(format string, args ...interface{})
-
 	Field(key string, value interface{}) Logger
 	Err(err error) Logger
 }
@@ -18,13 +17,9 @@ func NewNullLogger() *NullLogger {
 	return &NullLogger{}
 }
 
-func (l *NullLogger) Debugf(format string, args ...interface{}) {}
-func (l *NullLogger) Infof(format string, args ...interface{})  {}
-func (l *NullLogger) Warnf(format string, args ...interface{})  {}
-func (l *NullLogger) Errorf(format string, args ...interface{}) {}
-func (l *NullLogger) Field(key string, value interface{}) Logger {
-	return l
-}
-func (l *NullLogger) Err(err error) Logger {
-	return l
-}
+func (l *NullLogger) Debugf(format string, args ...interface{})  {}
+func (l *NullLogger) Infof(format string, args ...interface{})   {}
+func (l *NullLogger) Warnf(format string, args ...interface{})   {}
+func (l *NullLogger) Errorf(format string, args ...interface{})  {}
+func (l *NullLogger) Field(key string, value interface{}) Logger { return l }
+func (l *NullLogger) Err(err error) Logger                       { return l }

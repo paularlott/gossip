@@ -207,7 +207,7 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
 				Field("since_activity", timeSinceActivity).
-				Infof("Recent activity from suspect node, marking as alive")
+				Debugf("Recent activity from suspect node, marking as alive")
 
 			hm.cluster.nodes.updateState(node.ID, nodeAlive)
 			hm.cleanNodeState(node.ID)
@@ -229,7 +229,7 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 
 		// If node was suspect, restore to alive
 		if node.state == nodeSuspect {
-			hm.config.Logger.Field("node", node.ID.String()).Infof("Suspect node is now reachable, marking as alive")
+			hm.config.Logger.Field("node", node.ID.String()).Debugf("Suspect node is now reachable, marking as alive")
 			hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
 			hm.cleanNodeState(node.ID)
@@ -269,7 +269,7 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 		hm.config.Logger.
 			Field("node", node.ID.String()).
 			Field("failures", currentFailures).
-			Infof("Node exceeded failure threshold, marking as suspect")
+			Debugf("Node exceeded failure threshold, marking as suspect")
 
 		hm.cluster.nodes.updateState(node.ID, nodeSuspect)
 
@@ -352,7 +352,7 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 			Field("node", node.ID.String()).
 			Field("confirmations", confirmationCount).
 			Field("quorum", quorum).
-			Infof("Suspect node confirmed dead by quorum, marking as dead")
+			Debugf("Suspect node confirmed dead by quorum, marking as dead")
 
 		hm.cluster.nodes.updateState(node.ID, nodeDead)
 		return
@@ -363,7 +363,7 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 		hm.config.Logger.
 			Field("node", node.ID.String()).
 			Field("refutations", refutationCount).
-			Infof("Suspect node reported alive by multiple peers, restoring to alive")
+			Debugf("Suspect node reported alive by multiple peers, restoring to alive")
 
 		hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
@@ -380,7 +380,7 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 			if alive, _ := hm.pingAny(node); alive {
 				hm.config.Logger.
 					Field("node", node.ID.String()).
-					Infof("Suspect node responded after timeout, marking as alive")
+					Debugf("Suspect node responded after timeout, marking as alive")
 
 				hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
@@ -389,14 +389,14 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 			} else {
 				hm.config.Logger.
 					Field("node", node.ID.String()).
-					Infof("Suspect node timed out and is unreachable, marking as dead")
+					Debugf("Suspect node timed out and is unreachable, marking as dead")
 
 				hm.cluster.nodes.updateState(node.ID, nodeDead)
 			}
 		} else {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
-				Infof("Suspect node can't be checked as no compatible transport, marking as dead")
+				Debugf("Suspect node can't be checked as no compatible transport, marking as dead")
 
 			hm.cluster.nodes.updateState(node.ID, nodeDead)
 		}
@@ -431,7 +431,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 		if deadDuration > hm.config.DeadNodeTimeout {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
-				Infof("Dead node timeout expired, removing from cluster")
+				Debugf("Dead node timeout expired, removing from cluster")
 
 			hm.removeNodeEvidenceFromAllNodes(node.ID)
 			hm.cluster.nodes.removeIfInState(node.ID, []NodeState{nodeDead, nodeLeaving})
@@ -551,7 +551,7 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 		hm.config.Logger.
 			Field("node", suspectNode.ID.String()).
 			Field("from", sender.ID.String()).
-			Infof("Node reported suspect by peer, marking as suspect")
+			Debugf("Node reported suspect by peer, marking as suspect")
 
 		hm.cluster.nodes.updateState(suspectNode.ID, nodeSuspect)
 	}
@@ -594,7 +594,7 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 				Field("node", aliveNode.ID.String()).
 				Field("from", sender.ID.String()).
 				Field("state", aliveNode.state.String()).
-				Infof("Node reported alive no compatible transport accepting state, marking as alive")
+				Debugf("Node reported alive no compatible transport accepting state, marking as alive")
 
 			hm.cluster.nodes.updateState(aliveNode.ID, nodeAlive)
 
@@ -610,7 +610,7 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 				Field("node", aliveNode.ID.String()).
 				Field("from", sender.ID.String()).
 				Field("state", aliveNode.state.String()).
-				Infof("Node reported alive and confirmed by ping, marking as alive")
+				Debugf("Node reported alive and confirmed by ping, marking as alive")
 
 			hm.cluster.nodes.updateState(aliveNode.ID, nodeAlive)
 
@@ -676,7 +676,7 @@ func (hm *healthMonitor) handleLeaving(sender *Node, packet *Packet) error {
 		hm.config.Logger.
 			Field("node", node.ID.String()).
 			Field("old_state", node.state.String()).
-			Infof("Moving node directly to leaving state")
+			Debugf("Moving node directly to leaving state")
 
 		// Update node state to leaving
 		hm.cluster.nodes.updateState(node.ID, nodeLeaving)
@@ -700,7 +700,7 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 
 	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, aliveMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
-		hm.config.Logger.Err(err).Errorf("Failed to build alive message packet")
+		hm.config.Logger.Err(err).Debugf("Failed to build alive message packet")
 		return
 	}
 
@@ -717,7 +717,7 @@ func (hm *healthMonitor) broadcastSuspicion(suspectNode *Node) {
 
 	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, suspicionMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
-		hm.config.Logger.Err(err).Errorf("Failed to build suspicion message packet")
+		hm.config.Logger.Err(err).Debugf("Failed to build suspicion message packet")
 		return
 	}
 
@@ -732,7 +732,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 
 	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, leavingMsg, hm.cluster.getMaxTTL(), &msg)
 	if err != nil {
-		hm.config.Logger.Err(err).Errorf("Failed to build leaving message packet")
+		hm.config.Logger.Err(err).Debugf("Failed to build leaving message packet")
 		return
 	}
 
@@ -875,7 +875,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 		if err := hm.cluster.sendMessageTo(TransportBestEffort, indirectPeer, 1, indirectPingMsg, &ping); err == nil {
 			sentCount++
 		} else {
-			hm.config.Logger.Err(err).Warnf("Failed to send indirect ping message to peer %s", indirectPeer.ID)
+			hm.config.Logger.Err(err).Debugf("Failed to send indirect ping message to peer %s", indirectPeer.ID)
 		}
 	}
 
@@ -933,13 +933,13 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				if hm.cluster.localNode.state == nodeAlive {
 					hm.config.Logger.
 						Field("remote_state", remoteState.State.String()).
-						Warnf("Remote node state does not match local state, broadcasting alive status")
+						Debugf("Remote node state does not match local state, broadcasting alive status")
 
 					hm.broadcastAlive(hm.cluster.localNode)
 				} else if hm.cluster.localNode.state == nodeLeaving {
 					hm.config.Logger.
 						Field("remote_state", remoteState.State.String()).
-						Warnf("Remote node state does not match local state, broadcasting leaving status")
+						Debugf("Remote node state does not match local state, broadcasting leaving status")
 
 					hm.broadcastLeaving(hm.cluster.localNode)
 				}
@@ -1005,7 +1005,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
-						Infof("Remote reports node as dead, marking as suspect after ping failure")
+						Debugf("Remote reports node as dead, marking as suspect after ping failure")
 					hm.cluster.nodes.updateState(localNode.ID, nodeSuspect)
 
 					// Create suspicion tracking and record this confirmation
@@ -1100,7 +1100,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
 						Field("local_state", localNode.state.String()).
-						Infof("Remote reports node as alive, restored to alive state after ping success")
+						Debugf("Remote reports node as alive, restored to alive state after ping success")
 					hm.cluster.nodes.updateState(localNode.ID, nodeAlive)
 
 					// Clean up any failure tracking and suspicion evidence
@@ -1138,7 +1138,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			if localNode.state != nodeLeaving {
 				hm.config.Logger.
 					Field("node", localNode.ID.String()).
-					Infof("Remote reports node as leaving, updating state")
+					Debugf("Remote reports node as leaving, updating state")
 				hm.cluster.nodes.updateState(localNode.ID, nodeLeaving)
 
 				// Clean up any failure tracking and suspicion evidence

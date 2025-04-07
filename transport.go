@@ -56,11 +56,11 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 
 	// Check we have a bind address
 	if bindAddress.Port == 0 && bindAddress.URL == "" {
-		return nil, fmt.Errorf("no bind address given or websocket URL")
+		return nil, fmt.Errorf("no bind address given or websocket url")
 	}
 
 	if bindAddress.URL != "" && config.WebsocketProvider == nil {
-		return nil, fmt.Errorf("no websocket provider given")
+		return nil, fmt.Errorf("no websocket provider")
 	}
 
 	// Create the transport
@@ -72,7 +72,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 	}
 
 	if bindAddress.Port == 0 {
-		config.Logger.Infof("No bind port given relying on websocket connections")
+		config.Logger.Infof("Using WebSockets for communication")
 	} else {
 		config.Logger.
 			Field("bind_addr", bindAddress.IP.String()).
@@ -88,7 +88,6 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TCP listener: %w", err)
 		}
-		config.Logger.Field("tcp_addr", transport.tcpListener.Addr().String()).Debugf("TCP listener created")
 
 		// Create a UDP listener
 		udpAddr := &net.UDPAddr{
@@ -99,7 +98,6 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UDP listener: %w", err)
 		}
-		config.Logger.Field("udp_addr", transport.udpListener.LocalAddr().String()).Debugf("UDP listener created")
 
 		// Start the transports
 		wg.Add(2)
@@ -114,7 +112,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		transport.shutdown(wg)
 	}()
 
-	config.Logger.Infof("Transport started")
+	config.Logger.Debugf("Transport started")
 
 	return transport, nil
 }
@@ -131,7 +129,7 @@ func (t *transport) shutdown(wg *sync.WaitGroup) {
 
 	close(t.packetChannel)
 
-	t.config.Logger.Infof("Transport stopped")
+	t.config.Logger.Debugf("Transport stopped")
 }
 
 func (t *transport) PacketChannel() chan *IncomingPacket {

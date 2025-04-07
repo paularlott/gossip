@@ -160,7 +160,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Start periodic state synchronization
 	cluster.startStateSync()
 
-	cluster.config.Logger.Infof("Cluster initialized with Node ID: %s", u.String())
+	cluster.config.Logger.Infof("Gossip cluster started, local node ID: %s", u.String())
 
 	return cluster, nil
 }
@@ -184,8 +184,6 @@ func (c *Cluster) Shutdown() {
 
 	// Wait for all goroutines to finish
 	c.shutdownWg.Wait()
-
-	c.config.Logger.Infof("Cluster stopped")
 }
 
 // Handler for incoming WebSocket connections when gossiping over web sockets
@@ -462,7 +460,7 @@ func (c *Cluster) Join(peers []string) error {
 
 // MMarks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
-	c.config.Logger.Infof("Local node is leaving the cluster")
+	c.config.Logger.Debugf("Local node is leaving the cluster")
 	c.healthMonitor.MarkNodeLeaving(c.localNode)
 }
 
@@ -626,7 +624,7 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 		// Successfully queued
 	default:
 		// Queue full, log and skip this message
-		c.config.Logger.Errorf("Broadcast queue is full, skipping message")
+		c.config.Logger.Warnf("Broadcast queue is full, skipping message")
 	}
 }
 
