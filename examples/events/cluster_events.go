@@ -6,16 +6,15 @@ import (
 	"github.com/paularlott/gossip"
 )
 
-type GossipMessage struct {
-	Message string `msgpack:"message" json:"message"`
-}
-
 type MyListener struct{}
 
 func (l *MyListener) OnInit(cluster *gossip.Cluster) {
 	fmt.Println("MyListener: Cluster init")
 
-	cluster.LocalMetadata().SetString("location", "testing")
+	// Set some metadata for the local node
+	cluster.LocalMetadata().
+		SetString("dc", "development").
+		SetInt32("intValue", 42)
 }
 
 func (l *MyListener) OnNodeJoined(node *gossip.Node) {

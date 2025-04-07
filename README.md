@@ -154,20 +154,8 @@ config.MsgCodec = codec.NewJSONCodec()
 
 ### Examples
 
-TODO write examples
+The `examples` directory contains various examples demonstrating the library's capabilities. Each example is self-contained and can be run independently.
 
-Run tests:
-
-```shell
-cd examples/test
-go run . --port=8000 --web-port=8080 --peers=127.0.0.1:8001 --node-id=0196042b-1caa-7ad9-9ea3-c57b2e189b23
-go run . --port=8001 --web-port=8081 --peers=127.0.0.1:8000 --node-id=01960421-c1c4-7a06-87a0-970cf4c4dbd3
-
-go run . --port=8000 --web-port=8080 --peers=wss://127.0.0.1:8081/ --node-id=0196042b-1caa-7ad9-9ea3-c57b2e189b23
-go run . --port=8001 --web-port=8081 --peers=wss://127.0.0.1:8080/ --node-id=01960421-c1c4-7a06-87a0-970cf4c4dbd3
-
-go run . --web-port=8080 --peers=ws://127.0.0.1:8081/ --node-id=0196042b-1caa-7ad9-9ea3-c57b2e189b23
-go run . --web-port=8081 --peers=ws://127.0.0.1:8080/ --node-id=01960421-c1c4-7a06-87a0-970cf4c4dbd3
-
-go run . --peers=127.0.0.1:8001 --port=8002 --node-id=01960a1c-6852-7da4-a237-e41868ca3960
-```
+- **[basic](example/basic/README.md)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
+- **[events](example/events/README.md)**: Example that installs an event handler to display cluster events.
+- **[usermessages](example/usermessages/README.md)**: Example that demonstrates user defined message handling.

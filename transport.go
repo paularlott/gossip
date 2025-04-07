@@ -56,15 +56,6 @@ type IncomingPacket struct {
 func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address, localNode *Node) (*transport, error) {
 	var err error
 
-	// Check we have a bind address
-	if bindAddress.Port == 0 && bindAddress.URL == "" {
-		return nil, fmt.Errorf("no bind address given or websocket url")
-	}
-
-	if bindAddress.URL != "" && config.WebsocketProvider == nil {
-		return nil, fmt.Errorf("no websocket provider")
-	}
-
 	// Create the transport
 	transport := &transport{
 		config:        config,

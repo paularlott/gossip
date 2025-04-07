@@ -130,6 +130,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("failed to resolve local address: %v", err)
 	}
 
+	// Check we have a bind port or advertised address
+	if addresses[0].Port == 0 && cluster.localNode.address.URL == "" {
+		return nil, fmt.Errorf("no bind port or advertised WebSocket address specified")
+	}
+
 	if config.Transport == nil {
 		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0], cluster.localNode)
 		if err != nil {

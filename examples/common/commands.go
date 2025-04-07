@@ -1,4 +1,4 @@
-package main
+package common
 
 import (
 	"bufio"
@@ -6,11 +6,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/paularlott/gossip"
+
+	"github.com/google/uuid"
 )
 
-func handleCLIInput(c *gossip.Cluster) {
+type CommandHandler func(c *gossip.Cluster, args []string)
+type Command struct {
+	Cmd      string
+	HelpText string
+	Handler  CommandHandler
+}
+
+var Commands = []Command{}
+
+func HandleCLIInput(c *gossip.Cluster) {
 	fmt.Printf("Cluster started local node ID %s\n\n", c.GetLocalNode().ID.String())
 	fmt.Println("Enter 'help' to show available commands. Press Ctrl+C to exit.")
 
@@ -35,9 +45,6 @@ func handleCLIInput(c *gossip.Cluster) {
 
 		// Process the command
 		switch cmd {
-		case "gossip":
-			handleGossipCommand(c, args)
-
 		case "peers":
 			handlePeersCommand(c)
 
@@ -61,6 +68,14 @@ func handleCLIInput(c *gossip.Cluster) {
 
 		default:
 			fmt.Println("Unknown command. Type 'help' for available commands.")
+		}
+
+		// Look through the registered commands
+		for _, command := range Commands {
+			if command.Cmd == cmd {
+				command.Handler(c, args)
+				break
+			}
 		}
 	}
 }
@@ -95,25 +110,6 @@ func parseCommand(input string) []string {
 	}
 
 	return args
-}
-
-// handleGossipCommand processes the gossip command
-func handleGossipCommand(c *gossip.Cluster, args []string) {
-	if len(args) < 2 {
-		fmt.Println("Usage: gossip <message>")
-		return
-	}
-
-	// Combine all remaining arguments as the message
-	messageText := strings.Join(args[1:], " ")
-
-	msg := GossipMessage{Message: messageText}
-	err := c.Send(GossipMsg, msg)
-	if err != nil {
-		fmt.Printf("Error sending message: %v\n", err)
-	} else {
-		fmt.Println("Message sent")
-	}
 }
 
 // handlePeersCommand displays all peers in the cluster
@@ -209,13 +205,17 @@ func handleShowmetaCommand(c *gossip.Cluster, args []string) {
 func displayHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("-----------------------------------")
-	fmt.Println("  whoami									- Show local node ID")
-	fmt.Println("  gossip <message>        - Send a message to the cluster")
-	fmt.Println("  peers                   - Show all peers in the cluster")
-	fmt.Println("  set-meta <key> <value>  - Set metadata for the local node")
+	fmt.Println("  whoami									  - Show local node ID")
+	fmt.Println("  peers                    - Show all peers in the cluster")
+	fmt.Println("  set-meta <key> <value>   - Set metadata for the local node")
 	fmt.Println("  get-meta <node_id> <key> - Get metadata for the node")
 	fmt.Println("  show-meta <node_id>      - Show all metadata for the node")
-	fmt.Println("  help                    - Show this help message")
+
+	for _, command := range Commands {
+		fmt.Printf("  %s\n", command.HelpText)
+	}
+
+	fmt.Println("  help                     - Show this help message")
 	fmt.Println("  (Ctrl+C to exit)")
 	fmt.Println("-----------------------------------")
 }

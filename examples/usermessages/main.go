@@ -14,6 +14,7 @@ import (
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
+	"github.com/paularlott/gossip/examples/common"
 	"github.com/paularlott/gossip/websocket"
 
 	"github.com/rs/zerolog"
@@ -21,8 +22,13 @@ import (
 )
 
 const (
+	// Define a custom message type for user messages
 	GossipMsg gossip.MessageType = gossip.UserMsg + iota // User message
 )
+
+type GossipMessage struct {
+	Content string `msgpack:"content" json:"content"`
+}
 
 type AppVersionCheck struct{}
 
@@ -47,29 +53,27 @@ func main() {
 		peers = strings.Split(*peersArg, ",")
 	}
 
-	// Create the bind address
-	bindAddr := ""
+	// Create the advertise address
+	advertiseAddr := ""
 	if *port > 0 {
-		bindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
+		advertiseAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	}
 	if *webPort > 0 {
-		if bindAddr != "" {
-			bindAddr += "|"
+		if advertiseAddr != "" {
+			advertiseAddr += "|"
 		}
-		bindAddr += fmt.Sprintf("ws://127.0.0.1:%d", *webPort)
+		advertiseAddr += fmt.Sprintf("ws://127.0.0.1:%d", *webPort)
 	}
 
 	// Build configuration
 	config := gossip.DefaultConfig()
 	config.NodeID = *nodeID
-	config.BindAddr = bindAddr
-	config.AdvertiseAddr = ""
+	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
+	config.AdvertiseAddr = advertiseAddr
 	config.EncryptionKey = "1234567890123456"
-	config.EventListener = &MyListener{}
-	config.Logger = NewZerologLogger(log.Logger)
+	config.Logger = common.NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
-
 	config.Compressor = compression.NewSnappyCompressor()
 
 	config.ApplicationVersion = "0.0.1"
@@ -81,25 +85,38 @@ func main() {
 	}
 	defer cluster.Shutdown()
 
-	// Join the cluster
-	err = cluster.Join(peers)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to join cluster")
-	}
-
-	// Add a handler for a custom message which can be sent by typing "gossip <message>" in the CLI
+	// Register a handler for the gossip message
 	cluster.HandleFunc(GossipMsg, func(sender *gossip.Node, packet *gossip.Packet) error {
 		var msg GossipMessage
 		if err := packet.Unmarshal(&msg); err != nil {
 			return err
 		}
 
-		fmt.Printf("Received GossipMsg message from %s: %s\n", sender.ID, msg.Message)
+		fmt.Printf("Received message from %s: %s\n", sender.ID, msg.Content)
 		return nil
 	})
 
+	// Join the cluster
+	err = cluster.Join(peers)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to join cluster")
+	}
+
 	// Handle CLI input
-	go handleCLIInput(cluster)
+	common.Commands = append(common.Commands, common.Command{
+		Cmd:      "gossip",
+		HelpText: "gossip <message>         - Send a message to the cluster",
+		Handler: func(c *gossip.Cluster, args []string) {
+			if len(args) < 2 {
+				fmt.Println("Usage: gossip <message>")
+				return
+			}
+
+			msg := GossipMessage{Content: strings.Join(args[1:], " ")}
+			cluster.Send(GossipMsg, &msg)
+		},
+	})
+	go common.HandleCLIInput(cluster)
 
 	// If web port is specified then start a web server to handle websocket traffic
 	var httpServer *http.Server

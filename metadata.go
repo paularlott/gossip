@@ -53,7 +53,7 @@ func (md *Metadata) get(key string) (interface{}, bool) {
 }
 
 // Internal setter with timestamp update
-func (md *Metadata) set(key string, value interface{}) {
+func (md *Metadata) set(key string, value interface{}) *Metadata {
 	currentData := md.data.Load().(map[string]interface{})
 	newData := make(map[string]interface{}, len(currentData)+1)
 
@@ -64,6 +64,8 @@ func (md *Metadata) set(key string, value interface{}) {
 
 	md.data.Store(newData)
 	md.lastMod.Store(time.Now().UnixNano())
+
+	return md
 }
 
 // GetString returns a string value
@@ -333,58 +335,58 @@ func (md *Metadata) GetTime(key string) time.Time {
 // Type-specific setters
 
 // SetString sets a string value
-func (md *Metadata) SetString(key, value string) {
-	md.set(key, value)
+func (md *Metadata) SetString(key, value string) *Metadata {
+	return md.set(key, value)
 }
 
 // SetBool sets a boolean value
-func (md *Metadata) SetBool(key string, value bool) {
-	md.set(key, value)
+func (md *Metadata) SetBool(key string, value bool) *Metadata {
+	return md.set(key, value)
 }
 
 // SetInt sets an integer value
-func (md *Metadata) SetInt(key string, value int) {
-	md.set(key, value)
+func (md *Metadata) SetInt(key string, value int) *Metadata {
+	return md.set(key, value)
 }
 
 // SetInt32 sets a 32-bit integer value
-func (md *Metadata) SetInt32(key string, value int32) {
-	md.set(key, value)
+func (md *Metadata) SetInt32(key string, value int32) *Metadata {
+	return md.set(key, value)
 }
 
 // SetInt64 sets a 64-bit integer value
-func (md *Metadata) SetInt64(key string, value int64) {
-	md.set(key, value)
+func (md *Metadata) SetInt64(key string, value int64) *Metadata {
+	return md.set(key, value)
 }
 
 // SetUint sets an unsigned integer value
-func (md *Metadata) SetUint(key string, value uint) {
-	md.set(key, value)
+func (md *Metadata) SetUint(key string, value uint) *Metadata {
+	return md.set(key, value)
 }
 
 // SetUint32 sets a 32-bit unsigned integer value
-func (md *Metadata) SetUint32(key string, value uint32) {
-	md.set(key, value)
+func (md *Metadata) SetUint32(key string, value uint32) *Metadata {
+	return md.set(key, value)
 }
 
 // SetUint64 sets a 64-bit unsigned integer value
-func (md *Metadata) SetUint64(key string, value uint64) {
-	md.set(key, value)
+func (md *Metadata) SetUint64(key string, value uint64) *Metadata {
+	return md.set(key, value)
 }
 
 // SetFloat32 sets a 32-bit float value
-func (md *Metadata) SetFloat32(key string, value float32) {
-	md.set(key, value)
+func (md *Metadata) SetFloat32(key string, value float32) *Metadata {
+	return md.set(key, value)
 }
 
 // SetFloat64 sets a 64-bit float value
-func (md *Metadata) SetFloat64(key string, value float64) {
-	md.set(key, value)
+func (md *Metadata) SetFloat64(key string, value float64) *Metadata {
+	return md.set(key, value)
 }
 
 // SetTime sets a time value
-func (md *Metadata) SetTime(key string, value time.Time) {
-	md.set(key, value)
+func (md *Metadata) SetTime(key string, value time.Time) *Metadata {
+	return md.set(key, value)
 }
 
 // Delete removes a key from the metadata
