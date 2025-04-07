@@ -140,13 +140,17 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	// Add all background goroutines to the WaitGroup
-	cluster.shutdownWg.Add(1 + config.NumSendWorkers)
+	cluster.shutdownWg.Add(1 + config.NumSendWorkers + config.NumIncomingWorkers)
 
-	// Start the workers
+	// Start the send workers
 	for range config.NumSendWorkers {
 		go cluster.broadcastWorker()
 	}
-	go cluster.acceptPackets()
+
+	// Start the incoming workers
+	for range config.NumIncomingWorkers {
+		go cluster.acceptPackets()
+	}
 
 	// Start the health monitor
 	cluster.healthMonitor = newHealthMonitor(cluster)
@@ -470,7 +474,7 @@ func (c *Cluster) acceptPackets() {
 		select {
 		case incomingPacket := <-c.transport.PacketChannel():
 			if incomingPacket != nil {
-				go c.handleIncomingPacket(incomingPacket)
+				c.handleIncomingPacket(incomingPacket)
 			}
 
 		case <-c.shutdownContext.Done():

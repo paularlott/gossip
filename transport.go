@@ -67,7 +67,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 	transport := &transport{
 		config:        config,
 		localNode:     localNode,
-		packetChannel: make(chan *IncomingPacket, 128),
+		packetChannel: make(chan *IncomingPacket, config.IncomingPacketQueueDepth),
 		wsProvider:    config.WebsocketProvider,
 	}
 

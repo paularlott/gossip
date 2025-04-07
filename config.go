@@ -1,6 +1,8 @@
 package gossip
 
-import "time"
+import (
+	"time"
+)
 
 type Config struct {
 	NodeID   string // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
@@ -32,6 +34,8 @@ type Config struct {
 	NodeShardCount                int                     // NodeShardCount is the number of shards to use for storing node information, 4 for up to 50 nodes, 16 for up to 500 nodes and 32 for larger clusters.
 	NumSendWorkers                int                     // The number of workers to use for sending messages
 	SendQueueSize                 int                     // SendQueueSize is the size of the send queue
+	NumIncomingWorkers            int                     // The number of workers to use for processing incoming messages
+	IncomingPacketQueueDepth      int                     // Depth of the queue for incoming packets
 	HealthCheckInterval           time.Duration           // How often to perform health checks
 	HealthCheckSampleSize         int                     // Number of random nodes to check each interval
 	ActivityThresholdPercent      float64                 // Percentage of activity threshold for a node to be considered alive, multiplied with HealthCheckInterval
@@ -66,8 +70,10 @@ func DefaultConfig() *Config {
 		MsgHistoryMaxAge:              30 * time.Second,
 		MsgHistoryShardCount:          16,
 		NodeShardCount:                4,
-		NumSendWorkers:                4,
-		SendQueueSize:                 128,
+		NumSendWorkers:                8,
+		SendQueueSize:                 512,
+		NumIncomingWorkers:            8,
+		IncomingPacketQueueDepth:      512,
 		HealthCheckInterval:           1 * time.Second,
 		HealthCheckSampleSize:         7,
 		ActivityThresholdPercent:      0.5,
