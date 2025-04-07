@@ -134,13 +134,13 @@ func TestNodeListGetRandomLiveNodes(t *testing.T) {
 	}
 
 	// Test getting all live nodes
-	allLive := nl.getRandomLiveNodes(100, nil)
+	allLive := nl.getRandomLiveNodes(100, nil, nil)
 	if got, want := len(allLive), 50; got != want {
 		t.Errorf("getRandomLiveNodes(100, nil) returned %v nodes, want %v", got, want)
 	}
 
 	// Test getting a subset of live nodes
-	someLive := nl.getRandomLiveNodes(20, nil)
+	someLive := nl.getRandomLiveNodes(20, nil, nil)
 	if got, want := len(someLive), 20; got != want {
 		t.Errorf("getRandomLiveNodes(20, nil) returned %v nodes, want %v", got, want)
 	}
@@ -154,7 +154,7 @@ func TestNodeListGetRandomLiveNodes(t *testing.T) {
 
 	// Verify randomness - multiple calls should not return identical results
 	// Note: There's a small probability this could fail by chance
-	someLiveAgain := nl.getRandomLiveNodes(20, nil)
+	someLiveAgain := nl.getRandomLiveNodes(20, nil, nil)
 	identical := true
 	for i := 0; i < len(someLive); i++ {
 		if someLive[i].ID != someLiveAgain[i].ID {
@@ -180,7 +180,7 @@ func TestNodeListExclusions(t *testing.T) {
 
 	// Test exclusion of one node
 	excludeIDs := []NodeID{nodes[0].ID}
-	result := nl.getRandomLiveNodes(10, excludeIDs)
+	result := nl.getRandomLiveNodes(10, excludeIDs, nil)
 
 	// Should have 9 nodes
 	if got, want := len(result), 9; got != want {
@@ -196,7 +196,7 @@ func TestNodeListExclusions(t *testing.T) {
 
 	// Test exclusion of multiple nodes
 	excludeIDs = []NodeID{nodes[0].ID, nodes[1].ID, nodes[2].ID}
-	result = nl.getRandomLiveNodes(10, excludeIDs)
+	result = nl.getRandomLiveNodes(10, excludeIDs, nil)
 
 	// Should have 7 nodes
 	if got, want := len(result), 7; got != want {
@@ -338,7 +338,7 @@ func TestConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < opsPerGoroutine; j++ {
 				k := (j % 10) + 1 // Request 1-10 nodes
-				_ = nl.getRandomLiveNodes(k, nil)
+				_ = nl.getRandomLiveNodes(k, nil, nil)
 			}
 		}()
 	}

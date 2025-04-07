@@ -169,6 +169,7 @@ func (hm *healthMonitor) checkRandomNodes() {
 	nodesToCheck := hm.cluster.nodes.getRandomLiveNodes(
 		hm.config.HealthCheckSampleSize,
 		[]NodeID{hm.cluster.localNode.ID},
+		hm.cluster.localNode,
 	)
 
 	// Queue nodes for checking by the worker pool
@@ -865,7 +866,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 	)
 
 	sentCount := 0
-	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
+	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID}, hm.cluster.localNode)
 	if len(indirectPeers) == 0 {
 		return false, fmt.Errorf("no indirect peers found")
 	}

@@ -292,7 +292,8 @@ func (nl *nodeList) updateCountersForStateChange(oldState, newState NodeState) {
 	}
 }
 
-func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs []NodeID) []*Node {
+// GetRandomNodesInStates returns up to k random nodes in the specified states, excluding specified IDs and if sender is given checking the node shares a transport with the sender
+func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs []NodeID, sender *Node) []*Node {
 	if len(states) == 0 {
 		return []*Node{}
 	}
@@ -321,6 +322,9 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 							continue
 						}
 					}
+					if sender != nil && !sender.HasCompatibleTransport(node) {
+						continue
+					}
 					candidateNodes = append(candidateNodes, node)
 				}
 			}
@@ -347,13 +351,13 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 }
 
 // GetRandomLiveNodes returns up to k random live nodes (Alive or Suspect)
-func (nl *nodeList) getRandomLiveNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect}, excludeIDs)
+func (nl *nodeList) getRandomLiveNodes(k int, excludeIDs []NodeID, sender *Node) []*Node {
+	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect}, excludeIDs, sender)
 }
 
 // GetRandomNodes returns up to k random nodes in any state
-func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect, nodeLeaving, nodeDead}, excludeIDs)
+func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID, sender *Node) []*Node {
+	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect, nodeLeaving, nodeDead}, excludeIDs, sender)
 }
 
 // GetTotalCount returns the total number of nodes in the cluster

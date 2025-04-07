@@ -546,7 +546,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	sampleSize := c.getPeerSubsetSize(c.nodes.getTotalCount(), purposeStateExchange)
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
+	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude, nil)
 
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
@@ -616,7 +616,7 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers)
+			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers, c.localNode)
 			for _, peer := range peerSubset {
 				if err := c.transport.SendPacket(item.transportType, peer, item.packet); err != nil {
 					c.config.Logger.Err(err).Debugf("Failed to send packet to peer %s", peer.ID)
@@ -649,7 +649,7 @@ func (c *Cluster) startStateSync() {
 				}
 
 				// Get random subset, excluding ourselves
-				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
+				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID}, c.localNode)
 
 				// Perform state exchange with selected peers
 				for _, peer := range peers {
