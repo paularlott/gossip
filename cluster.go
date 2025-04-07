@@ -139,16 +139,15 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cluster.transport = config.Transport
 	}
 
-	// Add all background goroutines to the WaitGroup
-	cluster.shutdownWg.Add(1 + config.NumSendWorkers + config.NumIncomingWorkers)
-
 	// Start the send workers
 	for range config.NumSendWorkers {
+		cluster.shutdownWg.Add(1)
 		go cluster.broadcastWorker()
 	}
 
 	// Start the incoming workers
 	for range config.NumIncomingWorkers {
+		cluster.shutdownWg.Add(1)
 		go cluster.acceptPackets()
 	}
 
