@@ -227,7 +227,9 @@ func (kv *KVStore) handleSync(sender *gossip.Node, packet *gossip.Packet) error 
 
 // handleFullSync handles a request for full synchronization
 func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) error {
-	kv.sendFullSyncToNode(sender)
+	if sender != nil {
+		kv.sendFullSyncToNode(sender)
+	}
 	return nil
 }
 
