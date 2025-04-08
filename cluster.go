@@ -797,5 +797,9 @@ func (c *Cluster) GetCandidates() []*Node {
 
 // Get the amount of data to send in a gossip message
 func (c *Cluster) GetBatchSize(size int) int {
-	return c.getPeerSubsetSize(size, purposeStateExchange)
+	batchSize := c.getPeerSubsetSize(size, purposeStateExchange)
+	if batchSize > size {
+		batchSize = size
+	}
+	return batchSize
 }
