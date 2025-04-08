@@ -67,14 +67,18 @@ func HandleCLIInput(c *gossip.Cluster) {
 			// Do nothing for empty input
 
 		default:
-			fmt.Println("Unknown command. Type 'help' for available commands.")
-		}
+			// Look through the registered commands
+			found := false
+			for _, command := range Commands {
+				if command.Cmd == cmd {
+					command.Handler(c, args)
+					found = true
+					break
+				}
+			}
 
-		// Look through the registered commands
-		for _, command := range Commands {
-			if command.Cmd == cmd {
-				command.Handler(c, args)
-				break
+			if !found {
+				fmt.Println("Unknown command. Type 'help' for available commands.")
 			}
 		}
 	}
