@@ -38,6 +38,7 @@ type Cluster struct {
 	broadcastQueue  chan *broadcastQItem
 	healthMonitor   *healthMonitor
 	messageIdGen    atomic.Pointer[MessageID]
+	eventListener   EventListener
 }
 
 type broadcastQItem struct {
@@ -98,6 +99,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		localNode:       newNode(NodeID(u), Address{}),
 		handlers:        newHandlerRegistry(),
 		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
+		eventListener:   config.EventListener,
 	}
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
@@ -117,8 +119,8 @@ func NewCluster(config *Config) (*Cluster, error) {
 	cluster.messageIdGen.Store(&initialMessageID)
 
 	// Trigger the event listener
-	if config.EventListener != nil {
-		config.EventListener.OnInit(cluster)
+	if cluster.eventListener != nil {
+		cluster.eventListener.OnInit(cluster)
 	}
 
 	// Add the local node to the node list
@@ -163,7 +165,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	cluster.registerSystemHandlers()
 
 	// Start periodic state synchronization
-	cluster.startStateSync()
+	cluster.periodicStateSync()
 
 	cluster.config.Logger.Infof("Gossip cluster started, local node ID: %s", u.String())
 
@@ -655,7 +657,7 @@ func (c *Cluster) broadcastWorker() {
 }
 
 // Start periodic state synchronization with random peers
-func (c *Cluster) startStateSync() {
+func (c *Cluster) periodicStateSync() {
 	go func() {
 		// Add jitter to prevent all nodes syncing at the same time
 		jitter := time.Duration(rand.Int63n(int64(c.config.StateSyncInterval / 4)))
@@ -774,4 +776,26 @@ func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) e
 
 func (c *Cluster) NodeIsLocal(node *Node) bool {
 	return node.ID == c.localNode.ID
+}
+
+func (c *Cluster) AddEventListener(listener EventListener) {
+	c.eventListener = listener
+	c.nodes.eventListener = listener
+}
+
+// Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
+func (c *Cluster) GetCandidates() []*Node {
+	// Calculate appropriate number of peers based on cluster size
+	peerCount := c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeStateExchange)
+	if peerCount == 0 {
+		return []*Node{}
+	}
+
+	// Get random subset, excluding ourselves
+	return c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID}, c.localNode)
+}
+
+// Get the amount of data to send in a gossip message
+func (c *Cluster) GetBatchSize(size int) int {
+	return c.getPeerSubsetSize(size, purposeStateExchange)
 }

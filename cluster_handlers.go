@@ -196,8 +196,8 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	}
 
 	if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
-		if c.config.EventListener != nil {
-			c.config.EventListener.OnNodeMetadataChanged(node)
+		if c.eventListener != nil {
+			c.eventListener.OnNodeMetadataChanged(node)
 		}
 	}
 

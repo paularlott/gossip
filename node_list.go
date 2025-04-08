@@ -16,11 +16,11 @@ type nodeListShard struct {
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
-	config     *Config
-	shardCount int
-	shardMask  uint32
-	shards     []*nodeListShard
-	randSource *rand.Rand // For thread-safe random selection
+	eventListener EventListener
+	shardCount    int
+	shardMask     uint32
+	shards        []*nodeListShard
+	randSource    *rand.Rand // For thread-safe random selection
 
 	// Atomic counters for quick access without traversing the map
 	totalCount   atomic.Int64
@@ -35,10 +35,10 @@ type nodeList struct {
 func newNodeList(config *Config) *nodeList {
 	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 	nl := &nodeList{
-		config:     config,
-		shardCount: config.NodeShardCount,
-		shardMask:  uint32(config.NodeShardCount - 1),
-		randSource: source,
+		eventListener: config.EventListener,
+		shardCount:    config.NodeShardCount,
+		shardMask:     uint32(config.NodeShardCount - 1),
+		randSource:    source,
 	}
 
 	// Initialize shards
@@ -112,8 +112,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		nl.updateCountersForStateChange(oldState, node.state)
 
 		// If old state was leaving or dead, trigger event listener
-		if nl.config.EventListener != nil && (oldState == nodeLeaving || oldState == nodeDead) {
-			nl.config.EventListener.OnNodeJoined(node)
+		if nl.eventListener != nil && (oldState == nodeLeaving || oldState == nodeDead) {
+			nl.eventListener.OnNodeJoined(node)
 		}
 	} else {
 		// New node
@@ -139,8 +139,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		}
 
 		// Trigger event listener if configured
-		if nl.config.EventListener != nil {
-			nl.config.EventListener.OnNodeJoined(node)
+		if nl.eventListener != nil {
+			nl.eventListener.OnNodeJoined(node)
 		}
 	}
 
@@ -241,14 +241,14 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 		nl.updateCountersForStateChange(oldState, state)
 
 		// Trigger event listener if configured
-		if nl.config.EventListener != nil {
+		if nl.eventListener != nil {
 			switch state {
 			case nodeLeaving:
-				nl.config.EventListener.OnNodeLeft(node)
+				nl.eventListener.OnNodeLeft(node)
 			case nodeDead:
-				nl.config.EventListener.OnNodeDead(node)
+				nl.eventListener.OnNodeDead(node)
 			default:
-				nl.config.EventListener.OnNodeStateChanged(node, oldState)
+				nl.eventListener.OnNodeStateChanged(node, oldState)
 			}
 		}
 
