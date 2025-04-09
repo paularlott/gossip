@@ -189,8 +189,8 @@ func (hm *healthMonitor) checkRandomNodes() {
 
 // Check health for a single node
 func (hm *healthMonitor) checkNodeHealth(node *Node) {
-	// Skip if node is already marked dead or leaving, also don't do active checks where there's no shared transport with the node
-	if node.state == nodeDead || node.state == nodeLeaving || !hm.cluster.localNode.HasCompatibleTransport(node) {
+	// Skip if node is already marked dead or leaving
+	if node.state == nodeDead || node.state == nodeLeaving {
 		return
 	}
 
@@ -198,8 +198,7 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 	lastActivityTime := node.getLastActivity()
 	timeSinceActivity := time.Since(lastActivityTime)
 
-	// If we've heard from this node within half the health check interval, consider it alive without pinging
-	//activityThreshold := hm.config.HealthCheckInterval / 2
+	// If we've heard from this node within the health check interval, consider it alive without pinging
 	activityThreshold := time.Duration(float64(hm.config.HealthCheckInterval) * hm.config.ActivityThresholdPercent)
 	if timeSinceActivity < activityThreshold {
 		// If node was previously marked suspect, restore to alive
@@ -210,14 +209,21 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 				Debugf("Recent activity from suspect node, marking as alive")
 
 			hm.cluster.nodes.updateState(node.ID, nodeAlive)
-			hm.cleanNodeState(node.ID)
 		}
 
-		// Clean up failure tracking if it exists
-		if _, exists := hm.nodeFailures.Load(node.ID); exists {
-			hm.nodeFailures.Delete(node.ID)
-		}
+		hm.cleanNodeState(node.ID)
 
+		return
+	}
+
+	// If we cannot directly check, rely solely on gossip - log this condition
+	if !hm.cluster.localNode.HasCompatibleTransport(node) {
+		hm.config.Logger.
+			Field("node", node.ID.String()).
+			Field("transport", node.address.String()).
+			Debugf("Cannot directly check node health (incompatible transport), relying on gossip")
+
+		// Don't mark the node as suspect just because we can't check it
 		return
 	}
 
@@ -347,6 +353,9 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 
 	// Check if we have enough peer confirmations to mark node as dead
 	quorum := hm.getSuspicionQuorum()
+	if !hm.cluster.localNode.HasCompatibleTransport(node) {
+		quorum = int(float64(quorum) * 1.5) // Increase quorum for indirect checks where no transport is shared
+	}
 	if confirmationCount >= quorum {
 		hm.config.Logger.
 			Field("node", node.ID.String()).
