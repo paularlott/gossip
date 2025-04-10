@@ -460,6 +460,11 @@ func (c *Cluster) Join(peers []string) error {
 		}
 	}
 
+	// Add the list of peers to the health monitor so they can be used for recovery
+	for _, peerAddr := range peers {
+		c.healthMonitor.addJoinPeer(peerAddr)
+	}
+
 	return nil
 }
 

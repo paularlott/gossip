@@ -27,6 +27,8 @@ type healthMonitor struct {
 	healthCheckQueue chan *Node
 	nodeFailures     sync.Map // NodeID -> *nodeFailureCount
 	suspicionMap     sync.Map // NodeID -> *suspicionEvidence
+	joinPeersMutex   sync.Mutex
+	joinPeers        []string
 }
 
 type nodeFailureCount struct {
@@ -53,6 +55,8 @@ func newHealthMonitor(c *Cluster) *healthMonitor {
 		pingSeq:          0,
 		peerPingAck:      make(map[healthPingID]chan bool),
 		healthCheckQueue: make(chan *Node, c.config.HealthCheckSampleSize),
+		joinPeersMutex:   sync.Mutex{},
+		joinPeers:        make([]string, 0),
 	}
 
 	// Start health check workers
@@ -82,6 +86,18 @@ func newHealthMonitor(c *Cluster) *healthMonitor {
 func (hm *healthMonitor) stop() {
 	hm.shutdownCancel()
 	close(hm.healthCheckQueue)
+}
+
+func (hm *healthMonitor) addJoinPeer(peer string) {
+	hm.joinPeersMutex.Lock()
+	defer hm.joinPeersMutex.Unlock()
+
+	for _, existingPeer := range hm.joinPeers {
+		if existingPeer == peer {
+			return
+		}
+	}
+	hm.joinPeers = append(hm.joinPeers, peer)
 }
 
 func (hm *healthMonitor) cleanNodeState(nodeID NodeID) {
@@ -165,6 +181,19 @@ func (hm *healthMonitor) cleanupNodeFailures() {
 }
 
 func (hm *healthMonitor) checkRandomNodes() {
+
+	// If no live peers then try joining, a count of 1 means only the local node is present
+	if hm.cluster.nodes.getLiveCount() <= 1 {
+		fmt.Println("Number of live nodes in the cluster:", hm.cluster.nodes.getLiveCount(), " - trying to join peers")
+
+		hm.joinPeersMutex.Lock()
+		peers := make([]string, len(hm.joinPeers))
+		copy(peers, hm.joinPeers)
+		hm.joinPeersMutex.Unlock()
+
+		hm.cluster.Join(peers)
+	}
+
 	// Get a random selection of nodes to check
 	nodesToCheck := hm.cluster.nodes.getRandomLiveNodes(
 		hm.config.HealthCheckSampleSize,
