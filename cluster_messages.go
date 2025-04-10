@@ -70,7 +70,7 @@ func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, pa
 }
 
 func (c *Cluster) sendMessage(transportType TransportType, msgType MessageType, data interface{}) error {
-	packet, err := c.createPacket(c.localNode.ID, msgType, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), data)
+	packet, err := c.createPacket(c.localNode.ID, msgType, c.getMaxTTL(), data)
 	if err != nil {
 		return err
 	}
@@ -107,14 +107,14 @@ func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) e
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessageTo(TransportBestEffort, dstNode, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), msgType, data)
+	return c.sendMessageTo(TransportBestEffort, dstNode, c.getMaxTTL(), msgType, data)
 }
 
 func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
 	if msgType < UserMsg {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessageTo(TransportReliable, dstNode, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), msgType, data)
+	return c.sendMessageTo(TransportReliable, dstNode, c.getMaxTTL(), msgType, data)
 }
 
 // Send a message to the peer then accept a response message.
@@ -173,7 +173,7 @@ func (c *Cluster) SendMetadataUpdate() error {
 		Metadata:          c.localNode.metadata.GetAll(),
 	}
 
-	packet, err := c.createPacket(c.localNode.ID, metadataUpdateMsg, uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL)), &updateMsg)
+	packet, err := c.createPacket(c.localNode.ID, metadataUpdateMsg, c.getMaxTTL(), &updateMsg)
 	if err != nil {
 		return err
 	}

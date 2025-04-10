@@ -524,51 +524,55 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *IncomingPacket) {
 	}
 }
 
-// GetPeerSubsetSize calculates the number of peers to use for operations based on cluster size and purpose
-func (c *Cluster) getPeerSubsetSize(totalNodes int, purpose peerSelectionPurpose) int {
+func (c *Cluster) getPeerSubsetSizeBroadcast(totalNodes int) int {
 	if totalNodes <= 0 {
 		return 0
 	}
 
-	// Get the base count
-	basePeerCount := math.Log2(float64(totalNodes))
+	basePeerCount := math.Ceil(math.Log2(float64(totalNodes)) * c.config.BroadcastMultiplier)
 	cap := 10.0
 
-	// Apply purpose-specific adjustments
-	switch purpose {
-	case purposeBroadcast:
-		basePeerCount = math.Ceil(basePeerCount * c.config.BroadcastMultiplier)
+	return int(math.Max(1, math.Min(basePeerCount, cap)))
+}
 
-	case purposeStateExchange:
-		// Add 2 to the base for more aggressive state propagation
-		basePeerCount = math.Ceil(basePeerCount*c.config.StateExchangeMultiplier) + 2
-		cap = 16
-
-	case purposeIndirectPing:
-		basePeerCount = math.Ceil(basePeerCount * c.config.IndirectPingMultiplier)
-		cap = 6
-
-	case purposeTTL:
-		// Add 2 to the base for more aggressive state propagation
-		basePeerCount = math.Ceil(basePeerCount*c.config.TTLMultiplier) + 2
-		cap = 8
-
-	default:
-		basePeerCount = math.Ceil(basePeerCount)
+func (c *Cluster) getPeerSubsetSizeStateExchange(totalNodes int) int {
+	if totalNodes <= 0 {
+		return 0
 	}
 
-	// Apply the cap
+	basePeerCount := math.Ceil(math.Log2(float64(totalNodes))*c.config.StateExchangeMultiplier) + 2
+	cap := 16.0
+
+	return int(math.Max(1, math.Min(basePeerCount, cap)))
+}
+
+func (c *Cluster) getPeerSubsetSizeIndirectPing(totalNodes int) int {
+	if totalNodes <= 0 {
+		return 0
+	}
+
+	basePeerCount := math.Ceil(math.Log2(float64(totalNodes)) * c.config.IndirectPingMultiplier)
+	cap := 6.0
+
 	return int(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
 func (c *Cluster) getMaxTTL() uint8 {
-	return uint8(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeTTL))
+	totalNodes := c.nodes.getLiveCount()
+	if totalNodes <= 0 {
+		return 0
+	}
+
+	basePeerCount := math.Ceil(math.Log2(float64(totalNodes))*c.config.TTLMultiplier) + 2
+	cap := 8.0
+
+	return uint8(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	// Determine how many nodes to include in the exchange
-	sampleSize := c.getPeerSubsetSize(c.nodes.getTotalCount(), purposeStateExchange)
+	sampleSize := c.getPeerSubsetSizeStateExchange(c.nodes.getTotalCount())
 
 	// Get a random selection of nodes, excluding specified nodes
 	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude, nil)
@@ -641,7 +645,7 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeBroadcast), item.excludePeers, c.localNode)
+			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getLiveCount()), item.excludePeers, c.localNode)
 			for _, peer := range peerSubset {
 				if err := c.transport.SendPacket(item.transportType, peer, item.packet); err != nil {
 					c.config.Logger.Err(err).Debugf("Failed to send packet to peer %s", peer.ID)
@@ -668,7 +672,7 @@ func (c *Cluster) periodicStateSync() {
 			select {
 			case <-ticker.C:
 				// Calculate appropriate number of peers based on cluster size
-				peerCount := c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeStateExchange)
+				peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount())
 				if peerCount == 0 {
 					continue
 				}
@@ -801,7 +805,7 @@ func (c *Cluster) NodeIsLocal(node *Node) bool {
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
 func (c *Cluster) GetCandidates() []*Node {
 	// Calculate appropriate number of peers based on cluster size
-	peerCount := c.getPeerSubsetSize(c.nodes.getLiveCount(), purposeStateExchange)
+	peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount())
 	if peerCount == 0 {
 		return []*Node{}
 	}
@@ -812,7 +816,7 @@ func (c *Cluster) GetCandidates() []*Node {
 
 // Get the amount of data to send in a gossip message
 func (c *Cluster) GetBatchSize(size int) int {
-	batchSize := c.getPeerSubsetSize(size, purposeStateExchange)
+	batchSize := c.getPeerSubsetSizeStateExchange(size)
 	if batchSize > size {
 		batchSize = size
 	}
