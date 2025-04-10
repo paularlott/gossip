@@ -20,7 +20,5 @@ const (
 	purposeTTL                                       // TTL calculation
 )
 
-// Used when a node joins to check if the application version is compatible
-type ApplicationVersionCheck interface {
-	CheckVersion(version string) bool
-}
+// ApplicationVersionCheck is a function that checks if an application version is compatible
+type ApplicationVersionCheck func(version string) bool

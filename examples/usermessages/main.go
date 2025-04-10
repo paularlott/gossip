@@ -30,13 +30,6 @@ type GossipMessage struct {
 	Content string `msgpack:"content" json:"content"`
 }
 
-type AppVersionCheck struct{}
-
-func (av *AppVersionCheck) CheckVersion(version string) bool {
-	fmt.Println("Checking application version:", version)
-	return true
-}
-
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -77,7 +70,10 @@ func main() {
 	config.Compressor = compression.NewSnappyCompressor()
 
 	config.ApplicationVersion = "0.0.1"
-	config.ApplicationVersionCheck = &AppVersionCheck{}
+	config.ApplicationVersionCheck = func(version string) bool {
+		fmt.Println("Checking application version:", version)
+		return true
+	}
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
