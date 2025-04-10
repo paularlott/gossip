@@ -434,7 +434,7 @@ func (c *Cluster) Join(peers []string) error {
 			node := newNode(c.localNode.ID, addr)
 			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinReply)
 			if err != nil {
-				c.config.Logger.Err(err).Warnf("Failed to join peer %s", peerAddr)
+				c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
 				continue
 			}
 
@@ -456,7 +456,7 @@ func (c *Cluster) Join(peers []string) error {
 				}
 			}
 
-			c.config.Logger.Infof("Joined peer: %s (%s)", peerAddr, addr.String())
+			c.config.Logger.Debugf("Joined peer: %s (%s)", peerAddr, addr.String())
 		}
 	}
 
