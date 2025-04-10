@@ -984,9 +984,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		}
 
 		if localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, false) {
-			if hm.cluster.eventListener != nil {
-				hm.cluster.eventListener.OnNodeMetadataChanged(localNode)
-			}
+			hm.cluster.notifyMetadataChanged(localNode)
 		}
 
 		// We know about this node, determine if we should update our state

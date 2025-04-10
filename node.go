@@ -8,7 +8,8 @@ import (
 type NodeState uint8
 
 const (
-	nodeAlive NodeState = iota
+	nodeUnknown NodeState = iota
+	nodeAlive
 	nodeLeaving
 	nodeDead
 	nodeSuspect
@@ -16,6 +17,8 @@ const (
 
 func (ns NodeState) String() string {
 	switch ns {
+	case nodeUnknown:
+		return "Unknown"
 	case nodeAlive:
 		return "Alive"
 	case nodeLeaving:

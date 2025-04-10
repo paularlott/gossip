@@ -159,3 +159,4 @@ The `examples` directory contains various examples demonstrating the library's c
 - **[basic](examples/basic)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
 - **[events](examples/events)**: Example that installs an event handler to display cluster events.
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
+- **[kv](examples/kv)**: Example Key Value store.

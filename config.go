@@ -55,7 +55,6 @@ type Config struct {
 	StateExchangeMultiplier       float64                 // Scale of peer sampling for state exchange messages
 	IndirectPingMultiplier        float64                 // Scale of peer sampling for indirect ping messages
 	TTLMultiplier                 float64                 // Multiplier for TTL, used to determine how many hops a message can take
-	EventListener                 EventListener           // Event listener for cluster membership changes
 }
 
 func DefaultConfig() *Config {
@@ -93,6 +92,5 @@ func DefaultConfig() *Config {
 		StateExchangeMultiplier:       0.8,
 		IndirectPingMultiplier:        0.7,
 		TTLMultiplier:                 1.0,
-		EventListener:                 nil,
 	}
 }

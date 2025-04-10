@@ -26,19 +26,20 @@ const (
 )
 
 type Cluster struct {
-	config          *Config
-	shutdownContext context.Context
-	cancelFunc      context.CancelFunc
-	shutdownWg      sync.WaitGroup
-	msgHistory      *messageHistory
-	transport       Transport
-	nodes           *nodeList
-	localNode       *Node
-	handlers        *handlerRegistry
-	broadcastQueue  chan *broadcastQItem
-	healthMonitor   *healthMonitor
-	messageIdGen    atomic.Pointer[MessageID]
-	eventListener   EventListener
+	config                      *Config
+	shutdownContext             context.Context
+	cancelFunc                  context.CancelFunc
+	shutdownWg                  sync.WaitGroup
+	msgHistory                  *messageHistory
+	transport                   Transport
+	nodes                       *nodeList
+	localNode                   *Node
+	handlers                    *handlerRegistry
+	broadcastQueue              chan *broadcastQItem
+	healthMonitor               *healthMonitor
+	messageIdGen                atomic.Pointer[MessageID]
+	stateEventHandlers          *eventHandlers[NodeStateChangeHandler]
+	metadataChangeEventHandlers *eventHandlers[NodeMetadataChangeHandler]
 }
 
 type broadcastQItem struct {
@@ -91,16 +92,18 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
-		config:          config,
-		shutdownContext: ctx,
-		cancelFunc:      cancel,
-		msgHistory:      newMessageHistory(config),
-		nodes:           newNodeList(config),
-		localNode:       newNode(NodeID(u), Address{}),
-		handlers:        newHandlerRegistry(),
-		broadcastQueue:  make(chan *broadcastQItem, config.SendQueueSize),
-		eventListener:   config.EventListener,
+		config:                      config,
+		shutdownContext:             ctx,
+		cancelFunc:                  cancel,
+		msgHistory:                  newMessageHistory(config),
+		localNode:                   newNode(NodeID(u), Address{}),
+		handlers:                    newHandlerRegistry(),
+		broadcastQueue:              make(chan *broadcastQItem, config.SendQueueSize),
+		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
+		metadataChangeEventHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
 	}
+
+	cluster.nodes = newNodeList(cluster)
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
@@ -117,11 +120,6 @@ func NewCluster(config *Config) (*Cluster, error) {
 		Seq:       0,
 	}
 	cluster.messageIdGen.Store(&initialMessageID)
-
-	// Trigger the event listener
-	if cluster.eventListener != nil {
-		cluster.eventListener.OnInit(cluster)
-	}
 
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
@@ -774,13 +772,30 @@ func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) e
 	return nil
 }
 
-func (c *Cluster) NodeIsLocal(node *Node) bool {
-	return node.ID == c.localNode.ID
+func (c *Cluster) HandleNodeStateChangeFunc(handler NodeStateChangeHandler) {
+	c.stateEventHandlers.Add(handler)
 }
 
-func (c *Cluster) AddEventListener(listener EventListener) {
-	c.eventListener = listener
-	c.nodes.eventListener = listener
+func (c *Cluster) HandleNodeMetadataChangeFunc(handler NodeMetadataChangeHandler) {
+	c.metadataChangeEventHandlers.Add(handler)
+}
+
+func (c *Cluster) notifyNodeStateChanged(node *Node, prevState NodeState) {
+	currentHandlers := c.stateEventHandlers.handlers.Load().([]NodeStateChangeHandler)
+	for _, handler := range currentHandlers {
+		go handler(node, prevState)
+	}
+}
+
+func (c *Cluster) notifyMetadataChanged(node *Node) {
+	currentHandlers := c.metadataChangeEventHandlers.handlers.Load().([]NodeMetadataChangeHandler)
+	for _, handler := range currentHandlers {
+		go handler(node)
+	}
+}
+
+func (c *Cluster) NodeIsLocal(node *Node) bool {
+	return node.ID == c.localNode.ID
 }
 
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves

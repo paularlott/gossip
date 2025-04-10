@@ -20,16 +20,6 @@ const (
 	purposeTTL                                       // TTL calculation
 )
 
-// EventListener defines the interface for receiving events
-type EventListener interface {
-	OnInit(cluster *Cluster)
-	OnNodeJoined(node *Node)
-	OnNodeLeft(node *Node)
-	OnNodeDead(node *Node)
-	OnNodeStateChanged(node *Node, prevState NodeState)
-	OnNodeMetadataChanged(node *Node)
-}
-
 // Used when a node joins to check if the application version is compatible
 type ApplicationVersionCheck interface {
 	CheckVersion(version string) bool

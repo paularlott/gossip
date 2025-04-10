@@ -70,14 +70,24 @@ func main() {
 	config.ApplicationVersion = "0.0.1"
 	config.ApplicationVersionCheck = &AppVersionCheck{}
 
-	// Add a custom event listener
-	config.EventListener = &MyListener{}
-
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
 	defer cluster.Shutdown()
+
+	// Register event listeners
+	cluster.HandleNodeStateChangeFunc(func(node *gossip.Node, prevState gossip.NodeState) {
+		log.Info().Msgf("Node %s state changed from %s to %s", node.ID, prevState.String(), node.GetState().String())
+	})
+	cluster.HandleNodeMetadataChangeFunc(func(node *gossip.Node) {
+		log.Info().Msgf("Node %s metadata changed", node.ID)
+	})
+
+	// Set some metadata for the local node
+	cluster.LocalMetadata().
+		SetString("dc", "development").
+		SetInt32("intValue", 42)
 
 	// Join the cluster
 	err = cluster.Join(peers)

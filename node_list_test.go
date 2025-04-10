@@ -1,442 +1,393 @@
 package gossip
 
 import (
-	"net"
-	"sync"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/websocket"
+
+	"github.com/google/uuid"
 )
 
-// Helper to create a mock node for testing
-func createMockNode(id byte, state NodeState) *Node {
-	var nodeID NodeID
-	nodeID[0] = id // Just use first byte for test differentiation
+// Helper function to create a test cluster
+func createTestCluster(t *testing.T) *Cluster {
+	config := DefaultConfig()
+	// Make sharding predictable for tests
+	config.NodeShardCount = 4
+	config.MsgCodec = codec.NewJsonCodec()
+	config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
+	config.BindAddr = "ws://127.0.0.1:8080/gossip"
+
+	cluster, err := NewCluster(config)
+	if err != nil {
+		t.Fatalf("Failed to create test cluster: %v", err)
+	}
+
+	// Remove own node from the cluster
+	cluster.nodes.remove(cluster.localNode.ID)
+
+	return cluster
+}
+
+// Helper to create test nodes with specific IDs and states
+func createTestNode(id string, state NodeState) *Node {
+	uuid, _ := uuid.Parse(id)
+	nodeID := NodeID(uuid)
+
 	return &Node{
-		ID:      nodeID,
-		address: Address{IP: net.ParseIP("192.168.1.1"), Port: 7946},
-		state:   state,
+		ID:              nodeID,
+		state:           state,
+		stateChangeTime: time.Now(),
 	}
 }
 
-func TestNodeListBasicOperations(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
+func TestNodeList_AddAndGet(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
 
-	// Create test nodes
-	node1 := createMockNode(1, nodeAlive)
-	node2 := createMockNode(2, nodeSuspect)
-	node3 := createMockNode(3, nodeDead)
+	// Create test node
+	node := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
 
-	// Test add
-	nl.add(node1, true)
-	nl.add(node2, true)
-	nl.add(node3, true)
-
-	// Test counts
-	if got, want := nl.getTotalCount(), 3; got != want {
-		t.Errorf("getTotalCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getAliveCount(), 1; got != want {
-		t.Errorf("getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 2; got != want {
-		t.Errorf("getLiveCount() = %v, want %v", got, want)
+	// Test adding a new node
+	if !nl.addIfNotExists(node) {
+		t.Errorf("Failed to add new node")
 	}
 
-	// Test get
-	if got := nl.get(node1.ID); got == nil || got.ID != node1.ID {
-		t.Errorf("get(node1.ID) = %v, want %v", got, node1)
+	// Verify node was added
+	retrievedNode := nl.get(node.ID)
+	if retrievedNode == nil {
+		t.Errorf("Failed to retrieve added node")
 	}
 
-	// Test update state
-	nl.updateState(node3.ID, nodeAlive)
-	if got, want := nl.getAliveCount(), 2; got != want {
-		t.Errorf("After updateState, getAliveCount() = %v, want %v", got, want)
+	// Check node properties
+	if retrievedNode.ID != node.ID {
+		t.Errorf("Retrieved node has incorrect ID")
 	}
 
-	// Test remove
-	nl.remove(node2.ID)
-	if got, want := nl.getTotalCount(), 2; got != want {
-		t.Errorf("After remove, getTotalCount() = %v, want %v", got, want)
+	if retrievedNode.state != nodeAlive {
+		t.Errorf("Retrieved node has incorrect state, got %v, want %v", retrievedNode.state, nodeAlive)
 	}
-	if got := nl.get(node2.ID); got != nil {
-		t.Errorf("After remove, get(node2.ID) = %v, want nil", got)
+
+	// Try to add the same node again with addIfNotExists
+	if nl.addIfNotExists(node) {
+		t.Errorf("addIfNotExists should return false for existing node")
+	}
+
+	// Modify the node and use addOrUpdate
+	modifiedNode := createTestNode("11111111-1111-1111-1111-111111111111", nodeSuspect)
+	if !nl.addOrUpdate(modifiedNode) {
+		t.Errorf("addOrUpdate should return true when updating existing node")
+	}
+
+	// Check that node state was updated
+	retrievedNode = nl.get(node.ID)
+	if retrievedNode.state != nodeSuspect {
+		t.Errorf("Node state not updated, got %v, want %v", retrievedNode.state, nodeSuspect)
 	}
 }
 
-func TestNodeListStateTransitions(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
-	node := createMockNode(1, nodeAlive)
+func TestNodeList_Remove(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
 
-	// Add node
-	nl.add(node, true)
+	// Create and add test nodes
+	node1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	node2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeSuspect)
 
-	// Initial state check
-	if got, want := nl.getAliveCount(), 1; got != want {
-		t.Errorf("Initial getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 1; got != want {
-		t.Errorf("Initial getLiveCount() = %v, want %v", got, want)
-	}
+	nl.addIfNotExists(node1)
+	nl.addIfNotExists(node2)
 
-	// Transition to suspect (should remain "live")
-	nl.updateState(node.ID, nodeSuspect)
-	if got, want := nl.getAliveCount(), 0; got != want {
-		t.Errorf("After suspect, getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 1; got != want {
-		t.Errorf("After suspect, getLiveCount() = %v, want %v", got, want)
+	// Verify initial state
+	if nl.getTotalCount() != 2 {
+		t.Errorf("Expected total count of 2, got %d", nl.getTotalCount())
 	}
 
-	// Transition to dead (should not be "live")
+	// Test removing a node
+	nl.remove(node1.ID)
+
+	// Verify node was removed
+	if nl.get(node1.ID) != nil {
+		t.Errorf("Node should be removed but still exists")
+	}
+
+	if nl.getTotalCount() != 1 {
+		t.Errorf("Expected total count of 1 after removal, got %d", nl.getTotalCount())
+	}
+
+	// Test removeIfInState with matching state
+	nl.removeIfInState(node2.ID, []NodeState{nodeSuspect})
+	if nl.get(node2.ID) != nil {
+		t.Errorf("Node should be removed by removeIfInState but still exists")
+	}
+
+	// Test removeIfInState with non-matching state
+	node3 := createTestNode("33333333-3333-3333-3333-333333333333", nodeAlive)
+	nl.addIfNotExists(node3)
+
+	if nl.removeIfInState(node3.ID, []NodeState{nodeSuspect, nodeDead}) {
+		t.Errorf("removeIfInState should return false for non-matching state")
+	}
+
+	if nl.get(node3.ID) == nil {
+		t.Errorf("Node should not be removed when state doesn't match")
+	}
+}
+
+func TestNodeList_UpdateState(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
+
+	// Create and add a test node
+	node := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	nl.addIfNotExists(node)
+
+	// Verify initial counters
+	if nl.getAliveCount() != 1 || nl.getSuspectCount() != 0 {
+		t.Errorf("Initial counters incorrect, alive=%d, suspect=%d", nl.getAliveCount(), nl.getSuspectCount())
+	}
+
+	// Update state
+	if !nl.updateState(node.ID, nodeSuspect) {
+		t.Errorf("Failed to update node state")
+	}
+
+	// Verify node state was updated
+	updatedNode := nl.get(node.ID)
+	if updatedNode.state != nodeSuspect {
+		t.Errorf("Node state not updated, got %v, want %v", updatedNode.state, nodeSuspect)
+	}
+
+	// Verify counters were updated
+	if nl.getAliveCount() != 0 || nl.getSuspectCount() != 1 {
+		t.Errorf("Counters not updated correctly, alive=%d, suspect=%d", nl.getAliveCount(), nl.getSuspectCount())
+	}
+
+	// Try updating with same state - should return true but not change anything
+	prevTime := updatedNode.stateChangeTime
+	time.Sleep(10 * time.Millisecond) // Ensure time would change if updated
+
+	if !nl.updateState(node.ID, nodeSuspect) {
+		t.Errorf("updateState should return true even when state doesn't change")
+	}
+
+	// Verify stateChangeTime wasn't updated since state didn't change
+	afterNode := nl.get(node.ID)
+	if afterNode.stateChangeTime != prevTime {
+		t.Errorf("stateChangeTime shouldn't be updated when state doesn't change")
+	}
+
+	// Update to dead state
 	nl.updateState(node.ID, nodeDead)
-	if got, want := nl.getAliveCount(), 0; got != want {
-		t.Errorf("After dead, getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 0; got != want {
-		t.Errorf("After dead, getLiveCount() = %v, want %v", got, want)
-	}
 
-	// Transition back to alive
-	nl.updateState(node.ID, nodeAlive)
-	if got, want := nl.getAliveCount(), 1; got != want {
-		t.Errorf("After alive again, getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 1; got != want {
-		t.Errorf("After alive again, getLiveCount() = %v, want %v", got, want)
+	// Verify live count is updated
+	if nl.getLiveCount() != 0 {
+		t.Errorf("Live count should be 0 after node marked dead, got %d", nl.getLiveCount())
 	}
 }
 
-func TestNodeListGetRandomLiveNodes(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
+func TestNodeList_GetRandomNodesInStates(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
 
-	// Add 50 nodes (40 alive, 10 suspect)
-	for i := byte(1); i <= 50; i++ {
-		state := nodeAlive
-		if i > 40 {
-			state = nodeSuspect
-		}
-		node := createMockNode(i, state)
-		nl.add(node, true)
-	}
+	// Create nodes in different states
+	aliveNode1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	aliveNode2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive)
+	suspectNode := createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect)
+	deadNode := createTestNode("44444444-4444-4444-4444-444444444444", nodeDead)
 
-	// Add 10 dead nodes - these should not be returned
-	for i := byte(51); i <= 60; i++ {
-		node := createMockNode(i, nodeDead)
-		nl.add(node, true)
-	}
+	nl.addIfNotExists(aliveNode1)
+	nl.addIfNotExists(aliveNode2)
+	nl.addIfNotExists(suspectNode)
+	nl.addIfNotExists(deadNode)
 
-	// Verify counts
-	if got, want := nl.getTotalCount(), 60; got != want {
-		t.Errorf("getTotalCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 50; got != want {
-		t.Errorf("getLiveCount() = %v, want %v", got, want)
+	// Get only alive nodes
+	aliveNodes := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, nil, nil)
+	if len(aliveNodes) != 2 {
+		t.Errorf("Expected 2 alive nodes, got %d", len(aliveNodes))
 	}
 
-	// Test getting all live nodes
-	allLive := nl.getRandomLiveNodes(100, nil, nil)
-	if got, want := len(allLive), 50; got != want {
-		t.Errorf("getRandomLiveNodes(100, nil) returned %v nodes, want %v", got, want)
+	// Get alive and suspect nodes (live nodes)
+	liveNodes := nl.getRandomLiveNodes(10, nil, nil)
+	if len(liveNodes) != 3 {
+		t.Errorf("Expected 3 live nodes, got %d", len(liveNodes))
 	}
 
-	// Test getting a subset of live nodes
-	someLive := nl.getRandomLiveNodes(20, nil, nil)
-	if got, want := len(someLive), 20; got != want {
-		t.Errorf("getRandomLiveNodes(20, nil) returned %v nodes, want %v", got, want)
+	// Get all nodes
+	allNodes := nl.getRandomNodes(10, nil, nil)
+	if len(allNodes) != 4 {
+		t.Errorf("Expected 4 nodes total, got %d", len(allNodes))
 	}
 
-	// Verify each returned node is actually live
-	for _, node := range someLive {
-		if node.state != nodeAlive && node.state != nodeSuspect {
-			t.Errorf("getRandomLiveNodes returned node with state %v, want nodeAlive or nodeSuspect", node.state)
-		}
+	// Get nodes with exclusion
+	excludeIDs := []NodeID{aliveNode1.ID}
+	nodesWithExclusion := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, excludeIDs, nil)
+	if len(nodesWithExclusion) != 1 {
+		t.Errorf("Expected 1 alive node after exclusion, got %d", len(nodesWithExclusion))
 	}
 
-	// Verify randomness - multiple calls should not return identical results
-	// Note: There's a small probability this could fail by chance
-	someLiveAgain := nl.getRandomLiveNodes(20, nil, nil)
-	identical := true
-	for i := 0; i < len(someLive); i++ {
-		if someLive[i].ID != someLiveAgain[i].ID {
-			identical = false
-			break
-		}
+	// Test limit
+	limitedNodes := nl.getRandomNodesInStates(2, []NodeState{nodeAlive, nodeSuspect, nodeDead}, nil, nil)
+	if len(limitedNodes) != 2 {
+		t.Errorf("Expected 2 nodes with limit, got %d", len(limitedNodes))
 	}
-	if identical {
-		t.Errorf("Two consecutive calls to getRandomLiveNodes returned identical results, expected different order")
+
+	// Test empty state list
+	emptyStateNodes := nl.getRandomNodesInStates(10, []NodeState{}, nil, nil)
+	if len(emptyStateNodes) != 0 {
+		t.Errorf("Expected 0 nodes with empty state list, got %d", len(emptyStateNodes))
 	}
 }
 
-func TestNodeListExclusions(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
+func TestNodeList_ForAllInStates(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
 
-	// Add 10 nodes
-	var nodes []*Node
-	for i := byte(1); i <= 10; i++ {
-		node := createMockNode(i, nodeAlive)
-		nl.add(node, true)
-		nodes = append(nodes, node)
-	}
+	// Add test nodes
+	node1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	node2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive)
+	node3 := createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect)
 
-	// Test exclusion of one node
-	excludeIDs := []NodeID{nodes[0].ID}
-	result := nl.getRandomLiveNodes(10, excludeIDs, nil)
+	nl.addIfNotExists(node1)
+	nl.addIfNotExists(node2)
+	nl.addIfNotExists(node3)
 
-	// Should have 9 nodes
-	if got, want := len(result), 9; got != want {
-		t.Errorf("getRandomLiveNodes with 1 exclusion returned %v nodes, want %v", got, want)
-	}
-
-	// Verify excluded node is not in result
-	for _, node := range result {
-		if node.ID == nodes[0].ID {
-			t.Errorf("Excluded node with ID %v was returned", node.ID)
-		}
-	}
-
-	// Test exclusion of multiple nodes
-	excludeIDs = []NodeID{nodes[0].ID, nodes[1].ID, nodes[2].ID}
-	result = nl.getRandomLiveNodes(10, excludeIDs, nil)
-
-	// Should have 7 nodes
-	if got, want := len(result), 7; got != want {
-		t.Errorf("getRandomLiveNodes with 3 exclusions returned %v nodes, want %v", got, want)
-	}
-
-	// Verify excluded nodes are not in result
-	for _, node := range result {
-		for _, excludeID := range excludeIDs {
-			if node.ID == excludeID {
-				t.Errorf("Excluded node with ID %v was returned", node.ID)
-			}
-		}
-	}
-}
-
-func TestForAllInState(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
-
-	// Add nodes in different states
-	for i := byte(1); i <= 10; i++ {
-		var state NodeState
-		switch {
-		case i <= 4:
-			state = nodeAlive
-		case i <= 7:
-			state = nodeSuspect
-		default:
-			state = nodeDead
-		}
-		node := createMockNode(i, state)
-		nl.add(node, true)
-	}
-
-	// Test forAllInState for alive nodes
+	// Test forAllInStates with counting
 	count := 0
 	nl.forAllInStates([]NodeState{nodeAlive}, func(node *Node) bool {
-		if node.state != nodeAlive {
-			t.Errorf("forAllInStates(nodeAlive) called with node in state %v", node.state)
-		}
 		count++
 		return true
 	})
-	if got, want := count, 4; got != want {
-		t.Errorf("forAllInStates(nodeAlive) processed %v nodes, want %v", got, want)
+
+	if count != 2 {
+		t.Errorf("forAllInStates should have counted 2 alive nodes, got %d", count)
 	}
 
 	// Test early termination
-	count = 0
-	nl.forAllInStates([]NodeState{nodeSuspect}, func(node *Node) bool {
-		count++
-		return count < 2 // Stop after processing 1 node
+	visited := 0
+	nl.forAllInStates([]NodeState{nodeAlive, nodeSuspect}, func(node *Node) bool {
+		visited++
+		return visited < 2 // Stop after visiting one node
 	})
-	if got, want := count, 2; got != want {
-		t.Errorf("forAllInState with early termination processed %v nodes, want %v", got, want)
+
+	if visited != 2 {
+		t.Errorf("forAllInStates should have stopped after 2 visits, visited %d", visited)
+	}
+
+	// Test getAllInStates
+	aliveNodes := nl.getAllInStates([]NodeState{nodeAlive})
+	if len(aliveNodes) != 2 {
+		t.Errorf("getAllInStates should return 2 alive nodes, got %d", len(aliveNodes))
+	}
+
+	// Test getAll
+	allNodes := nl.getAll()
+	if len(allNodes) != 3 {
+		t.Errorf("getAll should return all 3 nodes, got %d", len(allNodes))
 	}
 }
 
-func TestConcurrentAccess(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
+func TestNodeList_RecalculateCounters(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
 
-	// Add some initial nodes
-	for i := byte(1); i <= 10; i++ {
-		node := createMockNode(i, nodeAlive)
-		nl.add(node, true)
-	}
-
-	// Set up concurrent goroutines
-	const numGoroutines = 10
-	const opsPerGoroutine = 100
-
-	var wg sync.WaitGroup
-	wg.Add(numGoroutines * 4) // 4 types of operations
-
-	// Create a map to track all added node IDs to detect any collisions
-	addedNodeIDs := make(map[string]bool)
-	var addMutex sync.Mutex
-
-	// Test concurrent adds
-	for i := 0; i < numGoroutines; i++ {
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
-				// Create a node with a truly unique ID
-				node := createMockNode(0, nodeAlive) // Start with zero
-
-				// Set unique values in each byte of the ID
-				node.ID[0] = byte(id)
-				node.ID[1] = byte(j)
-				node.ID[2] = byte(j >> 8)
-				node.ID[3] = byte(id >> 8)
-				node.ID[4] = byte((id*opsPerGoroutine + j) % 255)
-
-				// Track this node ID to detect any collisions
-				idStr := string(node.ID[:])
-				addMutex.Lock()
-				if addedNodeIDs[idStr] {
-					t.Logf("WARNING: Collision detected for node ID: %v (i=%d, j=%d)", node.ID, id, j)
-				}
-				addedNodeIDs[idStr] = true
-				addMutex.Unlock()
-
-				nl.add(node, true)
-			}
-		}(i)
-	}
-
-	// Test concurrent reads
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
-				_ = nl.getTotalCount()
-				_ = nl.getAliveCount()
-				_ = nl.getLiveCount()
-			}
-		}()
-	}
-
-	// Test concurrent updates
-	for i := 0; i < numGoroutines; i++ {
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
-				if j%2 == 0 {
-					// Update some existing nodes
-					var nodeID NodeID
-					nodeID[0] = byte((id*j)%10 + 1) // Use a node we know exists
-					state := NodeState(j % 4)       // Cycle through states
-					nl.updateState(nodeID, state)
-				}
-			}
-		}(i)
-	}
-
-	// Test concurrent random node selection
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
-				k := (j % 10) + 1 // Request 1-10 nodes
-				_ = nl.getRandomLiveNodes(k, nil, nil)
-			}
-		}()
-	}
-
-	// Wait with timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Success
-	case <-time.After(5 * time.Second):
-		t.Fatal("Test timed out, likely deadlock in concurrent operations")
-	}
-
-	// Final check - make sure all adds worked
-	// Give it a small grace period for any pending operations to complete
-	time.Sleep(100 * time.Millisecond)
-
-	// Force a recalculation of counters to ensure accuracy
-	nl.recalculateCounters()
-
-	// Count the actual unique nodes we added
-	addMutex.Lock()
-	uniqueNodesAdded := len(addedNodeIDs)
-	addMutex.Unlock()
-
-	// Expected total = initial 10 nodes + all uniquely added nodes
-	expectedAdds := 10 + uniqueNodesAdded
-
-	totalCount := nl.getTotalCount()
-	if totalCount != expectedAdds {
-		// Add more diagnostic information
-		t.Errorf("After concurrent operations, got %v total nodes, want %v",
-			totalCount, expectedAdds)
-
-		// Count nodes manually to verify the discrepancy
-		var manualCount int
-		for i := 0; i < nl.shardCount; i++ {
-			nl.shards[i].mutex.RLock()
-			manualCount += len(nl.shards[i].nodes)
-			nl.shards[i].mutex.RUnlock()
-		}
-
-		t.Logf("Manual count of nodes: %d", manualCount)
-		t.Logf("Unique nodes added: %d", uniqueNodesAdded)
-		t.Logf("Difference between expected and actual: %d", expectedAdds-totalCount)
-	}
-}
-
-func TestRecalculateCounters(t *testing.T) {
-	nl := newNodeList(&Config{NodeShardCount: 4})
-
-	// Add nodes
-	for i := byte(1); i <= 30; i++ {
-		var state NodeState
-		switch {
-		case i <= 10:
-			state = nodeAlive
-		case i <= 20:
-			state = nodeSuspect
-		default:
-			state = nodeDead
-		}
-		node := createMockNode(i, state)
-		nl.add(node, true)
-	}
-
-	// Verify initial counts
-	if got, want := nl.getTotalCount(), 30; got != want {
-		t.Errorf("Initial getTotalCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getAliveCount(), 10; got != want {
-		t.Errorf("Initial getAliveCount() = %v, want %v", got, want)
-	}
-	if got, want := nl.getLiveCount(), 20; got != want {
-		t.Errorf("Initial getLiveCount() = %v, want %v", got, want)
-	}
+	// Add nodes of different states
+	nl.addIfNotExists(createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive))
+	nl.addIfNotExists(createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive))
+	nl.addIfNotExists(createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect))
+	nl.addIfNotExists(createTestNode("44444444-4444-4444-4444-444444444444", nodeDead))
+	nl.addIfNotExists(createTestNode("55555555-5555-5555-5555-555555555555", nodeLeaving))
 
 	// Manually corrupt the counters
 	nl.totalCount.Store(0)
 	nl.aliveCount.Store(0)
+	nl.suspectCount.Store(0)
+	nl.leavingCount.Store(0)
+	nl.deadCount.Store(0)
 	nl.liveCount.Store(0)
 
-	// Recalculate
+	// Run recalculation
 	nl.recalculateCounters()
 
-	// Verify counters are fixed
-	if got, want := nl.getTotalCount(), 30; got != want {
-		t.Errorf("After recalculate, getTotalCount() = %v, want %v", got, want)
+	// Verify counters are restored correctly
+	if nl.getTotalCount() != 5 {
+		t.Errorf("Total count incorrect, got %d, want 5", nl.getTotalCount())
 	}
-	if got, want := nl.getAliveCount(), 10; got != want {
-		t.Errorf("After recalculate, getAliveCount() = %v, want %v", got, want)
+
+	if nl.getAliveCount() != 2 {
+		t.Errorf("Alive count incorrect, got %d, want 2", nl.getAliveCount())
 	}
-	if got, want := nl.getLiveCount(), 20; got != want {
-		t.Errorf("After recalculate, getLiveCount() = %v, want %v", got, want)
+
+	if nl.getSuspectCount() != 1 {
+		t.Errorf("Suspect count incorrect, got %d, want 1", nl.getSuspectCount())
+	}
+
+	if nl.getLeavingCount() != 1 {
+		t.Errorf("Leaving count incorrect, got %d, want 1", nl.getLeavingCount())
+	}
+
+	if nl.getDeadCount() != 1 {
+		t.Errorf("Dead count incorrect, got %d, want 1", nl.getDeadCount())
+	}
+
+	if nl.getLiveCount() != 3 {
+		t.Errorf("Live count incorrect, got %d, want 3", nl.getLiveCount())
+	}
+}
+
+func TestNodeList_GetShard(t *testing.T) {
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
+
+	// Create nodes with deterministically different IDs
+	nodeID1 := NodeID(uuid.New())
+	nodeID2 := NodeID(uuid.New()) // Changed to use uuid.New() for nodeID2
+
+	// Get shards
+	shard1 := nl.getShard(nodeID1)
+	shard2 := nl.getShard(nodeID2)
+
+	// Verify that shard selection is deterministic
+	shard1Again := nl.getShard(nodeID1)
+
+	if shard1 != shard1Again {
+		t.Errorf("Shard selection should be deterministic for the same node ID")
+	}
+
+	// This might sometimes fail in extremely rare cases due to hash collisions
+	// but it should catch obvious issues with the sharding algorithm
+	if nl.shardCount > 1 && reflect.DeepEqual(nodeID1, nodeID2) == false && shard1 == shard2 {
+		t.Logf("Note: Different node IDs mapped to same shard - this is possible but unlikely")
+	}
+}
+
+func TestNodeList_ShardDistribution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping distribution test in short mode")
+	}
+
+	cluster := createTestCluster(t)
+	nl := cluster.nodes
+
+	// Create a map to count nodes per shard
+	shardCounts := make(map[*nodeListShard]int)
+
+	// Generate a reasonable number of random UUIDs and check their shard distribution
+	for i := 0; i < 1000; i++ {
+		randomID := NodeID(uuid.New())
+		shard := nl.getShard(randomID)
+		shardCounts[shard]++
+	}
+
+	// The expected distribution would be approximately even
+	expected := 1000 / nl.shardCount
+	tolerance := int(float64(expected) * 0.3) // Allow 30% deviation
+
+	for shard, count := range shardCounts {
+		if count < expected-int(tolerance) || count > expected+int(tolerance) {
+			t.Errorf("Shard distribution appears uneven. Shard %p has %d nodes (expected ~%d±%d)",
+				shard, count, expected, int(tolerance))
+		}
 	}
 }

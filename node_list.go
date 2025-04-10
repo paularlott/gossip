@@ -16,11 +16,11 @@ type nodeListShard struct {
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
-	eventListener EventListener
-	shardCount    int
-	shardMask     uint32
-	shards        []*nodeListShard
-	randSource    *rand.Rand // For thread-safe random selection
+	cluster    *Cluster
+	shardCount int
+	shardMask  uint32
+	shards     []*nodeListShard
+	randSource *rand.Rand // For thread-safe random selection
 
 	// Atomic counters for quick access without traversing the map
 	totalCount   atomic.Int64
@@ -32,18 +32,18 @@ type nodeList struct {
 }
 
 // NewNodeList creates a new node list
-func newNodeList(config *Config) *nodeList {
+func newNodeList(c *Cluster) *nodeList {
 	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 	nl := &nodeList{
-		eventListener: config.EventListener,
-		shardCount:    config.NodeShardCount,
-		shardMask:     uint32(config.NodeShardCount - 1),
-		randSource:    source,
+		cluster:    c,
+		shardCount: c.config.NodeShardCount,
+		shardMask:  uint32(c.config.NodeShardCount - 1),
+		randSource: source,
 	}
 
 	// Initialize shards
-	nl.shards = make([]*nodeListShard, config.NodeShardCount)
-	for i := 0; i < config.NodeShardCount; i++ {
+	nl.shards = make([]*nodeListShard, c.config.NodeShardCount)
+	for i := 0; i < c.config.NodeShardCount; i++ {
 		nl.shards[i] = &nodeListShard{
 			nodes:   make(map[NodeID]*Node),
 			byState: make(map[NodeState]map[NodeID]*Node),
@@ -61,24 +61,14 @@ func newNodeList(config *Config) *nodeList {
 
 // getShard returns the appropriate shard for a node ID
 func (nl *nodeList) getShard(nodeID NodeID) *nodeListShard {
-	// Simple hash of NodeID to determine shard
-	// Assuming NodeID is a type that can be converted to bytes
-	var hash uint32
+	// FNV-1a hash for better distribution - inlined for performance
+	idBytes := nodeID[:]
 
-	// Mix bytes from the NodeID to create a hash
-	// Assuming NodeID is 16 bytes (UUID)
-	for i := 0; i < len(nodeID); i += 4 {
-		h := uint32(nodeID[i])
-		if i+1 < len(nodeID) {
-			h |= uint32(nodeID[i+1]) << 8
-		}
-		if i+2 < len(nodeID) {
-			h |= uint32(nodeID[i+2]) << 16
-		}
-		if i+3 < len(nodeID) {
-			h |= uint32(nodeID[i+3]) << 24
-		}
-		hash ^= h
+	hash := uint32(2166136261) // FNV offset basis
+
+	for _, b := range idBytes {
+		hash ^= uint32(b)
+		hash *= 16777619 // FNV prime
 	}
 
 	return nl.shards[hash&nl.shardMask]
@@ -112,8 +102,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		nl.updateCountersForStateChange(oldState, node.state)
 
 		// If old state was leaving or dead, trigger event listener
-		if nl.eventListener != nil && (oldState == nodeLeaving || oldState == nodeDead) {
-			nl.eventListener.OnNodeJoined(node)
+		if oldState == nodeLeaving || oldState == nodeDead {
+			nl.cluster.notifyNodeStateChanged(node, oldState)
 		}
 	} else {
 		// New node
@@ -138,10 +128,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 			nl.liveCount.Add(1)
 		}
 
-		// Trigger event listener if configured
-		if nl.eventListener != nil {
-			nl.eventListener.OnNodeJoined(node)
-		}
+		// Trigger event listener
+		nl.cluster.notifyNodeStateChanged(node, nodeUnknown)
 	}
 
 	return true
@@ -240,17 +228,8 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 		// Update counters
 		nl.updateCountersForStateChange(oldState, state)
 
-		// Trigger event listener if configured
-		if nl.eventListener != nil {
-			switch state {
-			case nodeLeaving:
-				nl.eventListener.OnNodeLeft(node)
-			case nodeDead:
-				nl.eventListener.OnNodeDead(node)
-			default:
-				nl.eventListener.OnNodeStateChanged(node, oldState)
-			}
-		}
+		// Trigger event
+		nl.cluster.notifyNodeStateChanged(node, oldState)
 
 		return true
 	}
