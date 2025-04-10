@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -12,52 +13,60 @@ import (
 
 const (
 	// Message types
-	KVSyncMsg gossip.MessageType = iota + gossip.UserMsg
-	KVFullSyncMsg
+	KVFullSyncMsg gossip.MessageType = iota + gossip.UserMsg
+	KVSyncMsg
 
 	// Configuration
 	defaultSyncInterval  = 10 * time.Second
 	defaultRetentionTime = 2 * time.Hour
 )
 
+// ValueVersion represents version information for a key-value pair
+type ValueVersion struct {
+	Timestamp int64  `msgpack:"ts" json:"ts"`   // Nanosecond timestamp
+	Version   uint16 `msgpack:"ver" json:"ver"` // Version counter
+}
+
 // ValueState represents a value and its metadata
 type ValueState struct {
-	Value     interface{} `msgpack:"value" json:"value"`
-	Timestamp time.Time   `msgpack:"timestamp" json:"timestamp"`
-	Deleted   bool        `msgpack:"deleted" json:"deleted"`
-	Version   uint64      `msgpack:"version" json:"version"`
+	Value   interface{}  `msgpack:"val" json:"val"`
+	Version ValueVersion `msgpack:"v" json:"v"`
+	Deleted bool         `msgpack:"d" json:"d"`
 }
 
 // SyncPayload is the data structure sent during gossip sync
 type SyncPayload struct {
-	Entries map[string]ValueState `msgpack:"entries" json:"entries"`
+	Entries map[string]ValueState `msgpack:"e" json:"e"`
 }
 
 // KVStore implements a distributed key-value store using gossip protocol
 type KVStore struct {
 	data          map[string]ValueState
 	cluster       *gossip.Cluster
-	nodeID        gossip.NodeID
 	mu            sync.RWMutex
 	syncInterval  time.Duration
 	retentionTime time.Duration
-	quit          chan struct{}
-	version       uint64
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // NewKVStore creates a new KV store instance
 func NewKVStore(cluster *gossip.Cluster) *KVStore {
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	store := &KVStore{
 		data:          make(map[string]ValueState),
 		cluster:       cluster,
 		syncInterval:  defaultSyncInterval,
 		retentionTime: defaultRetentionTime,
-		quit:          make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
 	// Register message handlers
+	cluster.HandleFuncWithReply(KVFullSyncMsg, store.handleFullSync)
 	cluster.HandleFunc(KVSyncMsg, store.handleSync)
-	cluster.HandleFunc(KVFullSyncMsg, store.handleFullSync)
 
 	return store
 }
@@ -73,7 +82,7 @@ func (kv *KVStore) Start() {
 
 // Stop terminates the periodic processes
 func (kv *KVStore) Stop() {
-	close(kv.quit)
+	kv.cancel()
 }
 
 // Set stores a value with the given key
@@ -81,12 +90,25 @@ func (kv *KVStore) Set(key string, value interface{}) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	kv.version++
+	now := time.Now().UnixNano()
+	var version uint16 = 0
+
+	// Check if key exists to handle versioning
+	if existingValue, exists := kv.data[key]; exists {
+		// If timestamp is the same, increment version
+		if existingValue.Version.Timestamp == now {
+			version = existingValue.Version.Version + 1
+		}
+		// Otherwise version remains 0 for new timestamp
+	}
+
 	kv.data[key] = ValueState{
-		Value:     value,
-		Timestamp: time.Now(),
-		Deleted:   false,
-		Version:   kv.version,
+		Value: value,
+		Version: ValueVersion{
+			Timestamp: now,
+			Version:   version,
+		},
+		Deleted: false,
 	}
 
 	// Broadcast the change to other nodes
@@ -114,13 +136,22 @@ func (kv *KVStore) Delete(key string) {
 	defer kv.mu.Unlock()
 
 	// If the key exists, mark it as deleted
-	if _, exists := kv.data[key]; exists {
-		kv.version++
+	if existingValue, exists := kv.data[key]; exists {
+		now := time.Now().UnixNano()
+		var version uint16 = 0
+
+		// If timestamp is the same, increment version
+		if existingValue.Version.Timestamp == now {
+			version = existingValue.Version.Version + 1
+		}
+
 		kv.data[key] = ValueState{
-			Value:     nil,
-			Timestamp: time.Now(),
-			Deleted:   true,
-			Version:   kv.version,
+			Value: nil,
+			Version: ValueVersion{
+				Timestamp: now,
+				Version:   version,
+			},
+			Deleted: true,
 		}
 
 		// Broadcast the change to other nodes
@@ -155,7 +186,7 @@ func (kv *KVStore) periodicSync() {
 		select {
 		case <-ticker.C:
 			kv.syncRandomSubset()
-		case <-kv.quit:
+		case <-kv.ctx.Done():
 			return
 		}
 	}
@@ -204,14 +235,44 @@ func (kv *KVStore) syncRandomSubset() {
 	kv.cluster.Send(KVSyncMsg, payload)
 }
 
-// RequestFullSync requests a full data sync from a random nodes
+// RequestFullSync requests a full data sync from random nodes
 func (kv *KVStore) RequestFullSync() {
 	nodes := kv.cluster.GetCandidates()
 
-	// Send empty sync message which will trigger a full response
+	// Try each node in order until we get a successful response
 	for _, node := range nodes {
-		kv.cluster.SendTo(node, KVFullSyncMsg, nil)
+		var syncPayload SyncPayload
+		err := kv.cluster.SendToWithResponse(node, KVFullSyncMsg, nil, KVFullSyncMsg, &syncPayload)
+		if err != nil {
+			// Log error and try next node
+			fmt.Printf("Failed to get sync from %s: %v\n", node.ID, err)
+			continue
+		}
+
+		// If we got a response, merge the data
+		if len(syncPayload.Entries) > 0 {
+			kv.mergeEntries(syncPayload.Entries)
+			return // Successfully got data, no need to continue
+		}
 	}
+}
+
+// handleFullSync handles a request for full synchronization and returns the full dataset
+func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) (gossip.MessageType, interface{}, error) {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+
+	payload := SyncPayload{
+		Entries: make(map[string]ValueState, len(kv.data)),
+	}
+
+	// Copy all entries
+	for k, v := range kv.data {
+		payload.Entries[k] = v
+	}
+
+	// Return the full dataset directly as response
+	return KVFullSyncMsg, &payload, nil
 }
 
 // handleSync processes incoming sync messages
@@ -223,30 +284,6 @@ func (kv *KVStore) handleSync(sender *gossip.Node, packet *gossip.Packet) error 
 
 	kv.mergeEntries(payload.Entries)
 	return nil
-}
-
-// handleFullSync handles a request for full synchronization
-func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) error {
-	if sender != nil {
-		kv.sendFullSyncToNode(sender)
-	}
-	return nil
-}
-
-// sendFullSyncToNode sends the complete dataset to a specific node
-func (kv *KVStore) sendFullSyncToNode(node *gossip.Node) {
-	kv.mu.RLock()
-	payload := SyncPayload{
-		Entries: make(map[string]ValueState, len(kv.data)),
-	}
-
-	// Copy all entries
-	for k, v := range kv.data {
-		payload.Entries[k] = v
-	}
-	kv.mu.RUnlock()
-
-	kv.cluster.SendTo(node, KVSyncMsg, payload)
 }
 
 // mergeEntries merges received entries with local data
@@ -263,16 +300,12 @@ func (kv *KVStore) mergeEntries(entries map[string]ValueState) {
 		// 2. Incoming entry has a newer timestamp, or
 		// 3. Timestamps match but incoming has higher version
 		if !exists ||
-			incomingEntry.Timestamp.After(existingEntry.Timestamp) ||
-			(incomingEntry.Timestamp.Equal(existingEntry.Timestamp) && incomingEntry.Version > existingEntry.Version) {
+			incomingEntry.Version.Timestamp > existingEntry.Version.Timestamp ||
+			(incomingEntry.Version.Timestamp == existingEntry.Version.Timestamp &&
+				incomingEntry.Version.Version > existingEntry.Version.Version) {
 
 			// Update with a copy of the entry
 			kv.data[key] = incomingEntry
-
-			// Update our version counter if needed
-			if incomingEntry.Version > kv.version {
-				kv.version = incomingEntry.Version
-			}
 		}
 	}
 }
@@ -286,7 +319,7 @@ func (kv *KVStore) periodicGC() {
 		select {
 		case <-ticker.C:
 			kv.garbageCollect()
-		case <-kv.quit:
+		case <-kv.ctx.Done():
 			return
 		}
 	}
@@ -295,13 +328,13 @@ func (kv *KVStore) periodicGC() {
 // garbageCollect removes entries that have been deleted and older than retention time
 func (kv *KVStore) garbageCollect() {
 	now := time.Now()
-	threshold := now.Add(-kv.retentionTime)
+	thresholdNano := now.Add(-kv.retentionTime).UnixNano()
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
 	for key, entry := range kv.data {
-		if entry.Deleted && entry.Timestamp.Before(threshold) {
+		if entry.Deleted && entry.Version.Timestamp < thresholdNano {
 			delete(kv.data, key)
 		}
 	}
