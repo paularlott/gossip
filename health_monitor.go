@@ -960,7 +960,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 	for _, remoteState := range remoteStates {
 		// Handle self states
 		if remoteState.ID == hm.cluster.localNode.ID {
-			// Sates don't match so refute the remote state
+			// Remote sates don't match our state so refute the remote state
 			if hm.cluster.localNode.state != remoteState.State {
 				if hm.cluster.localNode.state == nodeAlive {
 					hm.config.Logger.
