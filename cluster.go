@@ -40,6 +40,9 @@ type Cluster struct {
 	messageIdGen                atomic.Pointer[MessageID]
 	stateEventHandlers          *eventHandlers[NodeStateChangeHandler]
 	metadataChangeEventHandlers *eventHandlers[NodeMetadataChangeHandler]
+	gossipEventHandlers         *eventHandlers[GossipHandler]
+	gossipTicker                *time.Ticker
+	gossipInterval              time.Duration
 }
 
 type broadcastQItem struct {
@@ -101,6 +104,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		broadcastQueue:              make(chan *broadcastQItem, config.SendQueueSize),
 		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
 		metadataChangeEventHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
+		gossipEventHandlers:         NewEventHandlers[GossipHandler](),
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -164,6 +168,9 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	// Start periodic state synchronization
 	cluster.periodicStateSync()
+
+	// Start the gossip notification manager
+	cluster.gossipManager()
 
 	cluster.config.Logger.Infof("Gossip cluster started, local node ID: %s", u.String())
 
@@ -826,4 +833,71 @@ func (c *Cluster) GetBatchSize(size int) int {
 		batchSize = size
 	}
 	return batchSize
+}
+
+func (c *Cluster) HandleGossipFunc(handler GossipHandler) {
+	c.gossipEventHandlers.Add(handler)
+}
+
+func (c *Cluster) notifyDoGossip() {
+	currentHandlers := c.gossipEventHandlers.handlers.Load().([]GossipHandler)
+	for _, handler := range currentHandlers {
+		handler()
+	}
+}
+
+func (c *Cluster) gossipManager() {
+	// Add jitter to prevent all nodes syncing at the same time
+	jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 4)))
+	time.Sleep(jitter)
+
+	c.gossipInterval = c.config.GossipInterval
+	c.gossipTicker = time.NewTicker(c.config.GossipInterval)
+
+	go func() {
+		for {
+			select {
+			case <-c.gossipTicker.C:
+				start := time.Now()
+				c.notifyDoGossip()
+				elapsed := time.Since(start)
+
+				c.adjustGossipInterval(elapsed)
+
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) adjustGossipInterval(duration time.Duration) {
+	// If handlers take >80% of interval, increase the interval
+	if duration > c.gossipInterval {
+		// Set interval to slightly more than the duration (25% buffer)
+		newInterval := duration * 5 / 4 // 25% more than duration
+
+		// Apply a maximum bound
+		if newInterval > c.config.GossipMaxInterval {
+			newInterval = c.config.GossipMaxInterval
+		}
+
+		c.gossipInterval = newInterval
+		c.gossipTicker.Reset(c.gossipInterval)
+
+		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("Gossip interval increased")
+	} else if c.gossipInterval > c.config.GossipInterval && duration < time.Duration(float64(c.gossipInterval)*0.8) {
+		// If handlers are fast and we're above original interval, gradually return to base
+
+		// Move halfway back toward original interval
+		c.gossipInterval = (duration + c.gossipInterval) / 2
+
+		// Never go below original interval
+		if c.gossipInterval < c.config.GossipInterval {
+			c.gossipInterval = c.config.GossipInterval
+		}
+
+		c.gossipTicker.Reset(c.gossipInterval)
+		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("Gossip interval decreased")
+	}
 }

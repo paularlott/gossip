@@ -184,8 +184,6 @@ func (hm *healthMonitor) checkRandomNodes() {
 
 	// If no live peers then try joining, a count of 1 means only the local node is present
 	if hm.cluster.nodes.getLiveCount() <= 1 {
-		fmt.Println("Number of live nodes in the cluster:", hm.cluster.nodes.getLiveCount(), " - trying to join peers")
-
 		hm.joinPeersMutex.Lock()
 		peers := make([]string, len(hm.joinPeers))
 		copy(peers, hm.joinPeers)

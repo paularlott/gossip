@@ -27,6 +27,8 @@ type Config struct {
 	WebsocketProvider             websocket.Provider      // The provider to use for WebSocket connections
 	SocketTransportEnabled        bool                    // Whether to use the socket transport layer
 	ApplicationVersionCheck       ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
+	GossipInterval                time.Duration           // How often to send gossip messages
+	GossipMaxInterval             time.Duration           // Maximum interval between gossip messages
 	TCPDialTimeout                time.Duration           // TCPDialTimeout is the duration to wait for a TCP connection to be established
 	TCPDeadline                   time.Duration           // TCPDeadline is the duration to wait for a TCP operation to complete
 	UDPDeadline                   time.Duration           // UDPDeadline is the duration to wait for a UDP operation to complete
@@ -64,6 +66,8 @@ func DefaultConfig() *Config {
 		DefaultPort:                   3500,
 		CompressMinSize:               256,
 		SocketTransportEnabled:        true,
+		GossipInterval:                20 * time.Second,
+		GossipMaxInterval:             60 * time.Second,
 		TCPDialTimeout:                5 * time.Second,
 		TCPDeadline:                   5 * time.Second,
 		UDPDeadline:                   5 * time.Second,

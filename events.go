@@ -7,10 +7,11 @@ import (
 // NodeStateChangeHandler and NodeMetadataChangeHandler are used to handle node state and metadata changes
 type NodeStateChangeHandler func(*Node, NodeState)
 type NodeMetadataChangeHandler func(*Node)
+type GossipHandler func()
 
 // eventHandlerFunc is a type constraint for the supported event handler types
 type eventHandlerFunc interface {
-	NodeStateChangeHandler | NodeMetadataChangeHandler
+	NodeStateChangeHandler | NodeMetadataChangeHandler | GossipHandler
 }
 
 // EventHandlers manages a collection of handlers of a specific type

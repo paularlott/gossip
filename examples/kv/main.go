@@ -68,13 +68,6 @@ func main() {
 
 	// Create KV store
 	store := NewKVStore(cluster)
-
-	// Configure options if needed
-	store.SetSyncInterval(5 * time.Second) // Sync every 5 seconds
-	store.SetRetentionTime(1 * time.Hour)  // Keep deleted items for 1 hour
-
-	// Start the store
-	store.Start()
 	defer store.Stop()
 
 	// Join the cluster

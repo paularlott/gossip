@@ -17,7 +17,6 @@ const (
 	KVSyncMsg
 
 	// Configuration
-	defaultSyncInterval  = 10 * time.Second
 	defaultRetentionTime = 2 * time.Hour
 )
 
@@ -44,7 +43,6 @@ type KVStore struct {
 	data          map[string]ValueState
 	cluster       *gossip.Cluster
 	mu            sync.RWMutex
-	syncInterval  time.Duration
 	retentionTime time.Duration
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -58,7 +56,6 @@ func NewKVStore(cluster *gossip.Cluster) *KVStore {
 	store := &KVStore{
 		data:          make(map[string]ValueState),
 		cluster:       cluster,
-		syncInterval:  defaultSyncInterval,
 		retentionTime: defaultRetentionTime,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -67,17 +64,12 @@ func NewKVStore(cluster *gossip.Cluster) *KVStore {
 	// Register message handlers
 	cluster.HandleFuncWithReply(KVFullSyncMsg, store.handleFullSync)
 	cluster.HandleFunc(KVSyncMsg, store.handleSync)
-
-	return store
-}
-
-// Start begins the periodic sync process and garbage collection
-func (kv *KVStore) Start() {
-	// Start sync goroutine
-	go kv.periodicSync()
+	cluster.HandleGossipFunc(store.syncRandomSubset)
 
 	// Start garbage collection goroutine
-	go kv.periodicGC()
+	go store.periodicGC()
+
+	return store
 }
 
 // Stop terminates the periodic processes
@@ -175,21 +167,6 @@ func (kv *KVStore) Keys() []string {
 		}
 	}
 	return keys
-}
-
-// periodicSync sends a subset of data to other nodes periodically
-func (kv *KVStore) periodicSync() {
-	ticker := time.NewTicker(kv.syncInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			kv.syncRandomSubset()
-		case <-kv.ctx.Done():
-			return
-		}
-	}
 }
 
 // syncRandomSubset selects a random subset of keys and gossips them
@@ -338,16 +315,6 @@ func (kv *KVStore) garbageCollect() {
 			delete(kv.data, key)
 		}
 	}
-}
-
-// SetSyncInterval changes the gossip synchronization interval
-func (kv *KVStore) SetSyncInterval(d time.Duration) {
-	kv.syncInterval = d
-}
-
-// SetRetentionTime changes the tombstone retention duration
-func (kv *KVStore) SetRetentionTime(d time.Duration) {
-	kv.retentionTime = d
 }
 
 // Dump returns a copy of the current key-value state (for debugging)
