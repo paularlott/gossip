@@ -36,17 +36,3 @@ func (eh *eventHandlers[T]) Add(handler T) {
 
 	eh.handlers.Store(newHandlers)
 }
-
-func notifyNodeStateChanged(handlers *eventHandlers[NodeStateChangeHandler], node *Node, prevState NodeState) {
-	currentHandlers := handlers.handlers.Load().([]NodeStateChangeHandler)
-	for _, handler := range currentHandlers {
-		handler(node, prevState)
-	}
-}
-
-func notifyNodeMetadataChanged(handlers *eventHandlers[NodeMetadataChangeHandler], node *Node) {
-	currentHandlers := handlers.handlers.Load().([]NodeMetadataChangeHandler)
-	for _, handler := range currentHandlers {
-		handler(node)
-	}
-}

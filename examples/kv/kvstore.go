@@ -220,7 +220,7 @@ func (kv *KVStore) syncRandomSubset() {
 
 	// Create the sync payload
 	payload := SyncPayload{
-		Entries: make(map[string]ValueState, len(subset)),
+		Entries: make(map[string]ValueState, batchSize),
 	}
 
 	kv.mu.RLock()
