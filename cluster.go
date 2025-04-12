@@ -72,6 +72,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("missing MsgCodec")
 	}
 
+	// If both socket and websocket transports are enabled then block this
+	if config.SocketTransportEnabled && config.WebsocketProvider != nil {
+		return nil, fmt.Errorf("both socket and websocket transports are enabled")
+	}
+
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	if len(config.EncryptionKey) != 0 && len(config.EncryptionKey) != 16 && len(config.EncryptionKey) != 24 && len(config.EncryptionKey) != 32 {
 		return nil, fmt.Errorf("invalid encrypt key length: must be 0, 16, 24, or 32 bytes")
@@ -117,7 +122,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Resolve the local node's address
 	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve local address: %v", err)
+		return nil, fmt.Errorf("failed to resolve advertise address: %v", err)
 	}
 	cluster.localNode.address = addresses[0]
 
@@ -131,9 +136,13 @@ func NewCluster(config *Config) (*Cluster, error) {
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
 	// Resolve the local node's address
-	addresses, err = cluster.ResolveAddress(config.BindAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve local address: %v", err)
+	if config.SocketTransportEnabled {
+		addresses, err = cluster.ResolveAddress(config.BindAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve bind address: %v", err)
+		}
+	} else {
+		addresses = []Address{cluster.localNode.address}
 	}
 
 	// Check we have a bind port or advertised address
@@ -142,12 +151,17 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	if config.Transport == nil {
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0], cluster.localNode)
+		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0])
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %v", err)
 		}
 	} else {
 		cluster.transport = config.Transport
+	}
+
+	// If using websockets then see if we should disable compression
+	if cluster.config.WebsocketProvider != nil && cluster.config.WebsocketProvider.CompressionEnabled() {
+		cluster.config.Compressor = nil
 	}
 
 	// Start the send workers
@@ -206,43 +220,6 @@ func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
-
-	// If the address has a | in it then split it as we're giving a IP:port|url combination
-	if strings.Contains(addressStr, "|") {
-		parts := strings.Split(addressStr, "|")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid address format: %s", addressStr)
-		}
-
-		// Part 1 must not be http(s)://
-		if strings.Contains(parts[0], "http://") || strings.Contains(parts[0], "https://") || strings.Contains(parts[0], "ws://") || strings.Contains(parts[0], "wss://") {
-			return nil, fmt.Errorf("invalid address format: %s", addressStr)
-		}
-		// Part 2 must be http(s)://
-		if !strings.Contains(parts[1], "http://") && !strings.Contains(parts[1], "https://") && !strings.Contains(parts[1], "ws://") && !strings.Contains(parts[1], "wss://") {
-			return nil, fmt.Errorf("invalid address format: %s", addressStr)
-		}
-
-		// Resolve the 2 parts
-		part1, err := c.ResolveAddress(parts[0])
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve address: %s", err)
-		}
-		part2, err := c.ResolveAddress(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve address: %s", err)
-		}
-
-		// Combine the 2 parts, we only take the first address from each
-		addr := Address{
-			IP:   part1[0].IP,
-			Port: part1[0].Port,
-			URL:  part2[0].URL,
-		}
-
-		return []Address{addr}, nil
-	}
-
 	// If SRV record
 	if strings.HasPrefix(addressStr, "srv+") {
 		serviceName := addressStr[4:] // Remove the "srv+" prefix
@@ -252,7 +229,7 @@ func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
 			addresses := make([]Address, 0)
 
 			// If no web socket provider is set then we can't do this
-			if c.config.WebsocketProvider == nil {
+			if c.config.WebsocketProvider == nil || (!c.config.AllowInsecureWebsockets && (strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "http://"))) {
 				return addresses, ErrUnsupportedAddressFormat
 			}
 
@@ -291,7 +268,7 @@ func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
 
 	// If http(s):// then we're doing web sockets, lets resolve the address
 	if strings.HasPrefix(addressStr, "http://") || strings.HasPrefix(addressStr, "https://") || strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "wss://") {
-		if c.config.WebsocketProvider == nil {
+		if c.config.WebsocketProvider == nil || (!c.config.AllowInsecureWebsockets && (strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "http://"))) {
 			return []Address{}, ErrUnsupportedAddressFormat
 		}
 
@@ -593,7 +570,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	sampleSize := c.getPeerSubsetSizeStateExchange(c.nodes.getTotalCount())
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude, nil)
+	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
 
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
@@ -662,11 +639,9 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getLiveCount()), item.excludePeers, c.localNode)
-			for _, peer := range peerSubset {
-				if err := c.transport.SendPacket(item.transportType, peer, item.packet); err != nil {
-					c.config.Logger.Err(err).Debugf("Failed to send packet to peer %s", peer.ID)
-				}
+			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getLiveCount()), item.excludePeers)
+			if err := c.transport.SendPacket(item.transportType, peerSubset, item.packet); err != nil {
+				c.config.Logger.Err(err).Debugf("Failed to send packet to peers")
 			}
 
 			// Release the broadcast item back to the pool
@@ -699,7 +674,7 @@ func (c *Cluster) periodicStateSync() {
 				}
 
 				// Get random subset, excluding ourselves
-				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID}, c.localNode)
+				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
 
 				// Perform state exchange with selected peers
 				for _, peer := range peers {
@@ -832,7 +807,7 @@ func (c *Cluster) GetCandidates() []*Node {
 	}
 
 	// Get random subset, excluding ourselves
-	return c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID}, c.localNode)
+	return c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
 }
 
 // Get the amount of data to send in a gossip message

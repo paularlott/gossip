@@ -203,38 +203,38 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 	nl.addIfNotExists(deadNode)
 
 	// Get only alive nodes
-	aliveNodes := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, nil, nil)
+	aliveNodes := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, nil)
 	if len(aliveNodes) != 2 {
 		t.Errorf("Expected 2 alive nodes, got %d", len(aliveNodes))
 	}
 
 	// Get alive and suspect nodes (live nodes)
-	liveNodes := nl.getRandomLiveNodes(10, nil, nil)
+	liveNodes := nl.getRandomLiveNodes(10, nil)
 	if len(liveNodes) != 3 {
 		t.Errorf("Expected 3 live nodes, got %d", len(liveNodes))
 	}
 
 	// Get all nodes
-	allNodes := nl.getRandomNodes(10, nil, nil)
+	allNodes := nl.getRandomNodes(10, nil)
 	if len(allNodes) != 4 {
 		t.Errorf("Expected 4 nodes total, got %d", len(allNodes))
 	}
 
 	// Get nodes with exclusion
 	excludeIDs := []NodeID{aliveNode1.ID}
-	nodesWithExclusion := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, excludeIDs, nil)
+	nodesWithExclusion := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, excludeIDs)
 	if len(nodesWithExclusion) != 1 {
 		t.Errorf("Expected 1 alive node after exclusion, got %d", len(nodesWithExclusion))
 	}
 
 	// Test limit
-	limitedNodes := nl.getRandomNodesInStates(2, []NodeState{nodeAlive, nodeSuspect, nodeDead}, nil, nil)
+	limitedNodes := nl.getRandomNodesInStates(2, []NodeState{nodeAlive, nodeSuspect, nodeDead}, nil)
 	if len(limitedNodes) != 2 {
 		t.Errorf("Expected 2 nodes with limit, got %d", len(limitedNodes))
 	}
 
 	// Test empty state list
-	emptyStateNodes := nl.getRandomNodesInStates(10, []NodeState{}, nil, nil)
+	emptyStateNodes := nl.getRandomNodesInStates(10, []NodeState{}, nil)
 	if len(emptyStateNodes) != 0 {
 		t.Errorf("Expected 0 nodes with empty state list, got %d", len(emptyStateNodes))
 	}

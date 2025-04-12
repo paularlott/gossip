@@ -196,7 +196,6 @@ func (hm *healthMonitor) checkRandomNodes() {
 	nodesToCheck := hm.cluster.nodes.getRandomLiveNodes(
 		hm.config.HealthCheckSampleSize,
 		[]NodeID{hm.cluster.localNode.ID},
-		hm.cluster.localNode,
 	)
 
 	// Queue nodes for checking by the worker pool
@@ -240,17 +239,6 @@ func (hm *healthMonitor) checkNodeHealth(node *Node) {
 
 		hm.cleanNodeState(node.ID)
 
-		return
-	}
-
-	// If we cannot directly check, rely solely on gossip - log this condition
-	if !hm.cluster.localNode.HasCompatibleTransport(node) {
-		hm.config.Logger.
-			Field("node", node.ID.String()).
-			Field("transport", node.address.String()).
-			Debugf("Cannot directly check node health (incompatible transport), relying on gossip")
-
-		// Don't mark the node as suspect just because we can't check it
 		return
 	}
 
@@ -380,9 +368,6 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 
 	// Check if we have enough peer confirmations to mark node as dead
 	quorum := hm.getSuspicionQuorum()
-	if !hm.cluster.localNode.HasCompatibleTransport(node) {
-		quorum = int(float64(quorum) * 1.5) // Increase quorum for indirect checks where no transport is shared
-	}
 	if confirmationCount >= quorum {
 		hm.config.Logger.
 			Field("node", node.ID.String()).
@@ -411,28 +396,20 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 	// If the node has been suspect for too long, check it one more time
 	suspectDuration := time.Since(evidence.suspectTime)
 	if suspectDuration > hm.config.SuspectTimeout {
-		if hm.cluster.localNode.HasCompatibleTransport(node) {
-			// Try one final ping
-			if alive, _ := hm.pingAny(node); alive {
-				hm.config.Logger.
-					Field("node", node.ID.String()).
-					Debugf("Suspect node responded after timeout, marking as alive")
+		// Try one final ping
+		if alive, _ := hm.pingAny(node); alive {
+			hm.config.Logger.
+				Field("node", node.ID.String()).
+				Debugf("Suspect node responded after timeout, marking as alive")
 
-				hm.cluster.nodes.updateState(node.ID, nodeAlive)
+			hm.cluster.nodes.updateState(node.ID, nodeAlive)
 
-				// Clean up tracking
-				hm.nodeFailures.Delete(node.ID)
-			} else {
-				hm.config.Logger.
-					Field("node", node.ID.String()).
-					Debugf("Suspect node timed out and is unreachable, marking as dead")
-
-				hm.cluster.nodes.updateState(node.ID, nodeDead)
-			}
+			// Clean up tracking
+			hm.nodeFailures.Delete(node.ID)
 		} else {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
-				Debugf("Suspect node can't be checked as no compatible transport, marking as dead")
+				Debugf("Suspect node timed out and is unreachable, marking as dead")
 
 			hm.cluster.nodes.updateState(node.ID, nodeDead)
 		}
@@ -556,8 +533,8 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 		return nil
 	}
 
-	// If we've seen this node alive recently, refute the suspicion, only works if nodes share a compatible connection
-	if suspectNode.state == nodeAlive && hm.cluster.localNode.HasCompatibleTransport(suspectNode) {
+	// If we've seen this node alive recently, refute the suspicion
+	if suspectNode.state == nodeAlive {
 		// Try to ping to confirm it's still alive
 		if alive, _ := hm.pingAny(suspectNode); alive {
 			// Refute the suspicion by reporting node is alive
@@ -625,20 +602,6 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 
 	// If node is suspect or dead, try a direct ping to confirm
 	if aliveNode.state == nodeSuspect || aliveNode.state == nodeDead {
-		if !hm.cluster.localNode.HasCompatibleTransport(aliveNode) {
-			hm.config.Logger.
-				Field("node", aliveNode.ID.String()).
-				Field("from", sender.ID.String()).
-				Field("state", aliveNode.state.String()).
-				Debugf("Node reported alive no compatible transport accepting state, marking as alive")
-
-			hm.cluster.nodes.updateState(aliveNode.ID, nodeAlive)
-
-			// Clean up any suspicion evidence
-			hm.cleanNodeState(aliveNode.ID)
-
-			return nil
-		}
 
 		// Try to ping to verify
 		if alive, _ := hm.pingAny(aliveNode); alive {
@@ -879,7 +842,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 
 	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing(hm.cluster.nodes.getLiveCount())
 	sentCount := 0
-	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID}, hm.cluster.localNode)
+	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
 	if len(indirectPeers) == 0 {
 		return false, fmt.Errorf("no indirect peers found")
 	}
@@ -1004,15 +967,9 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeDead:
 			// If we think it's alive, try to confirm with a ping
 			if localNode.state == nodeAlive {
-				var alive bool
 
-				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
-					// Ping to verify
-					alive, _ = hm.pingAny(localNode)
-				} else {
-					alive = false
-				}
-
+				// Ping to verify
+				alive, _ := hm.pingAny(localNode)
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
@@ -1071,14 +1028,9 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeSuspect:
 			// If we think it's alive, verify
 			if localNode.state == nodeAlive {
-				var alive bool
-				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
-					// Ping to verify
-					alive, _ = hm.pingAny(localNode)
-				} else {
-					alive = false
-				}
 
+				// Ping to verify
+				alive, _ := hm.pingAny(localNode)
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
@@ -1098,15 +1050,9 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		case remoteState.State == nodeAlive:
 			// If we think it's suspect or dead, verify
 			if localNode.state == nodeSuspect || localNode.state == nodeDead {
-				var alive bool
 
-				if hm.cluster.localNode.HasCompatibleTransport(localNode) {
-					// Try to ping and verify
-					alive, _ = hm.pingAny(localNode)
-				} else {
-					alive = false
-				}
-
+				// Try to ping and verify
+				alive, _ := hm.pingAny(localNode)
 				if alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).

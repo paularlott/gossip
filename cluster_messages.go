@@ -100,7 +100,7 @@ func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, ttl 
 		return err
 	}
 
-	return c.transport.SendPacket(transportType, dstNode, packet)
+	return c.transport.SendPacket(transportType, []*Node{dstNode}, packet)
 }
 
 func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {

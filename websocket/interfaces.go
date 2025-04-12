@@ -30,6 +30,9 @@ type Provider interface {
 
 	// ToNetConn wraps a WebSocket as a net.Conn
 	ToNetConn(ws WebSocket) net.Conn
+
+	// CompressionEnabled returns true if the provider is configured to use compression; else false
+	CompressionEnabled() bool
 }
 
 // Conn extends net.Conn with WebSocket-specific information
