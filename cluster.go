@@ -535,7 +535,9 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
-		packet.conn.Close()
+		if packet.conn != nil {
+			packet.conn.Close()
+		}
 		c.config.Logger.Warnf("No handler registered for message type: %d", packet.MessageType)
 	}
 }
