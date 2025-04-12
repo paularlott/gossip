@@ -734,13 +734,7 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 		Address: aliveNode.address,
 	}
 
-	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, aliveMsg, hm.cluster.getMaxTTL(), &msg)
-	if err != nil {
-		hm.config.Logger.Err(err).Debugf("Failed to build alive message packet")
-		return
-	}
-
-	hm.cluster.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{hm.cluster.localNode.ID})
+	hm.cluster.sendMessage(TransportBestEffort, aliveMsg, &msg)
 }
 
 // Broadcast suspicion about a node to the cluster
@@ -751,13 +745,7 @@ func (hm *healthMonitor) broadcastSuspicion(suspectNode *Node) {
 		NodeID: suspectNode.ID,
 	}
 
-	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, suspicionMsg, hm.cluster.getMaxTTL(), &msg)
-	if err != nil {
-		hm.config.Logger.Err(err).Debugf("Failed to build suspicion message packet")
-		return
-	}
-
-	hm.cluster.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{hm.cluster.localNode.ID})
+	hm.cluster.sendMessage(TransportBestEffort, suspicionMsg, &msg)
 }
 
 // Broadcast leaving status about a node to the cluster
@@ -766,14 +754,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 		NodeID: leavingNode.ID,
 	}
 
-	packet, err := hm.cluster.createPacket(hm.cluster.localNode.ID, leavingMsg, hm.cluster.getMaxTTL(), &msg)
-	if err != nil {
-		hm.config.Logger.Err(err).Debugf("Failed to build leaving message packet")
-		return
-	}
-
-	// Use reliable transport for leaving messages to ensure delivery
-	hm.cluster.enqueuePacketForBroadcast(packet, TransportReliable, []NodeID{hm.cluster.localNode.ID})
+	hm.cluster.sendMessage(TransportBestEffort, leavingMsg, &msg)
 }
 
 // pingNode sends a ping message direct to the specified node and waits for an acknowledgment.
