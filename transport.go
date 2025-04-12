@@ -30,7 +30,7 @@ var (
 // Interface to define the transport layer, the transport layer is responsible for placing packets onto the wire and reading them off
 // it also handles encryption and compression of packets.
 type Transport interface {
-	PacketChannel() chan *IncomingPacket
+	PacketChannel() chan *Packet
 	DialPeer(node *Node) (net.Conn, error)
 	WritePacket(conn net.Conn, packet *Packet) error
 	ReadPacket(conn net.Conn) (*Packet, error)
@@ -43,14 +43,8 @@ type transport struct {
 	localNode     *Node
 	tcpListener   *net.TCPListener
 	udpListener   *net.UDPConn
-	packetChannel chan *IncomingPacket
+	packetChannel chan *Packet
 	wsProvider    websocket.Provider
-}
-
-// Holds the information for an incoming packet waiting on the queue for processing
-type IncomingPacket struct {
-	Conn   net.Conn
-	Packet *Packet
 }
 
 func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address, localNode *Node) (*transport, error) {
@@ -60,7 +54,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 	transport := &transport{
 		config:        config,
 		localNode:     localNode,
-		packetChannel: make(chan *IncomingPacket, config.IncomingPacketQueueDepth),
+		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		wsProvider:    config.WebsocketProvider,
 	}
 
@@ -125,7 +119,7 @@ func (t *transport) shutdown(wg *sync.WaitGroup) {
 	t.config.Logger.Debugf("Transport stopped")
 }
 
-func (t *transport) PacketChannel() chan *IncomingPacket {
+func (t *transport) PacketChannel() chan *Packet {
 	return t.packetChannel
 }
 
@@ -141,17 +135,11 @@ func (t *transport) packetToQueue(conn net.Conn, ctx context.Context) {
 		return
 	}
 
-	// Create an incoming packet
-	incomingPacket := &IncomingPacket{
-		Conn:   conn,
-		Packet: packet,
-	}
-
 	select {
 	case <-ctx.Done():
 		conn.Close()
 		return
-	case t.packetChannel <- incomingPacket:
+	case t.packetChannel <- packet:
 	}
 }
 
@@ -217,16 +205,10 @@ func (t *transport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 					return
 				}
 
-				// Create an incoming packet
-				incomingPacket := &IncomingPacket{
-					Conn:   nil,
-					Packet: packet,
-				}
-
 				select {
 				case <-ctx.Done():
 					return
-				case t.packetChannel <- incomingPacket:
+				case t.packetChannel <- packet:
 				}
 			}()
 		}
@@ -489,7 +471,11 @@ func (t *transport) ReadPacket(conn net.Conn) (*Packet, error) {
 		underlyingTransportIsSecure = wsConn.IsSecure()
 	}
 
-	return t.packetFromBuffer(receivedData, underlyingTransportIsSecure)
+	packet, err := t.packetFromBuffer(receivedData, underlyingTransportIsSecure)
+	if err == nil {
+		packet.conn = conn
+	}
+	return packet, nil
 }
 
 func (t *transport) SendPacket(transportType TransportType, node *Node, packet *Packet) error {

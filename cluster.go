@@ -497,18 +497,12 @@ func (c *Cluster) acceptPackets() {
 	}
 }
 
-func (c *Cluster) handleIncomingPacket(incomingPacket *IncomingPacket) {
-	var transportType TransportType
-	if incomingPacket.Conn != nil {
-		defer incomingPacket.Conn.Close()
-		transportType = TransportReliable
-	} else {
-		transportType = TransportBestEffort
-	}
-
+func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// If the sender is us or already seen then ignore the message
-	packet := incomingPacket.Packet
 	if packet.SenderID == c.localNode.ID || c.msgHistory.contains(packet.SenderID, packet.MessageID) {
+		if packet.conn != nil {
+			packet.conn.Close()
+		}
 		return
 	}
 
@@ -519,6 +513,13 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *IncomingPacket) {
 	h := c.handlers.getHandler(packet.MessageType)
 	if h != nil {
 		if h.forward {
+			var transportType TransportType
+			if packet.conn != nil {
+				transportType = TransportReliable
+			} else {
+				transportType = TransportBestEffort
+			}
+
 			c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID})
 		}
 
@@ -527,11 +528,12 @@ func (c *Cluster) handleIncomingPacket(incomingPacket *IncomingPacket) {
 			senderNode.updateLastActivity()
 		}
 
-		err := h.dispatch(incomingPacket.Conn, c, senderNode, packet)
+		err := h.dispatch(c, senderNode, packet)
 		if err != nil {
 			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
+		packet.conn.Close()
 		c.config.Logger.Warnf("No handler registered for message type: %d", packet.MessageType)
 	}
 }

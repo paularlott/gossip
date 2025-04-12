@@ -1,6 +1,10 @@
 package gossip
 
-import "github.com/paularlott/gossip/codec"
+import (
+	"net"
+
+	"github.com/paularlott/gossip/codec"
+)
 
 type MessageType uint16
 type MessageID struct {
@@ -36,6 +40,7 @@ type Packet struct {
 	TTL         uint8       `msgpack:"ttl" json:"ttl"`
 	payload     []byte
 	codec       codec.Serializer
+	conn        net.Conn
 }
 
 func (p *Packet) Unmarshal(v interface{}) error {

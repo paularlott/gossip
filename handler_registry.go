@@ -18,24 +18,35 @@ type msgHandler struct {
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
-func (mh *msgHandler) dispatch(conn net.Conn, c *Cluster, node *Node, packet *Packet) error {
-	if conn != nil && mh.replyHandler != nil {
+func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
+
+	if packet.conn != nil && mh.streamHandler != nil {
+		// Start stream handlers in their own go routine as they could run for a while
+		go func() {
+			defer packet.conn.Close()
+			mh.streamHandler(node, packet, packet.conn)
+		}()
+		return nil
+	}
+
+	// Ensure the connection is closed after processing
+	if packet.conn != nil {
+		defer packet.conn.Close()
+	}
+
+	if packet.conn != nil && mh.replyHandler != nil {
 		replyType, replyData, err := mh.replyHandler(node, packet)
 		if err != nil {
 			return err
 		}
 
 		if replyType != nilMsg && c != nil {
-			packet, err := c.createPacket(c.localNode.ID, replyType, 1, replyData)
+			replyPacket, err := c.createPacket(c.localNode.ID, replyType, 1, replyData)
 			if err != nil {
 				return err
 			}
-			return c.transport.WritePacket(conn, packet)
+			return c.transport.WritePacket(packet.conn, replyPacket)
 		}
-		return nil
-	} else if conn != nil && mh.streamHandler != nil {
-		// Start stream handlers in their own go routine as they could run for a while
-		go mh.streamHandler(node, packet, conn)
 		return nil
 	} else if mh.handler != nil {
 		return mh.handler(node, packet)

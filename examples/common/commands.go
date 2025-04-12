@@ -183,6 +183,11 @@ func handleGetmetaCommand(c *gossip.Cluster, args []string) {
 }
 
 func handleShowmetaCommand(c *gossip.Cluster, args []string) {
+	if len(args) < 2 {
+		fmt.Println("Usage: show-meta <node_id>")
+		return
+	}
+
 	u, err := uuid.Parse(args[1])
 	if err != nil {
 		return
