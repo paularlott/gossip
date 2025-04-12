@@ -43,6 +43,7 @@ type Cluster struct {
 	gossipEventHandlers         *eventHandlers[GossipHandler]
 	gossipTicker                *time.Ticker
 	gossipInterval              time.Duration
+	broadcastQItemPool          sync.Pool
 }
 
 type broadcastQItem struct {
@@ -105,6 +106,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
 		metadataChangeEventHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
 		gossipEventHandlers:         NewEventHandlers[GossipHandler](),
+		broadcastQItemPool:          sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -635,11 +637,10 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 	}
 	packet.TTL--
 
-	item := &broadcastQItem{
-		packet:        packet,
-		transportType: transportType,
-		excludePeers:  excludePeers,
-	}
+	item := c.broadcastQItemPool.Get().(*broadcastQItem)
+	item.packet = packet
+	item.transportType = transportType
+	item.excludePeers = excludePeers
 
 	// Use non-blocking send to avoid getting stuck if queue is full
 	select {
@@ -665,6 +666,10 @@ func (c *Cluster) broadcastWorker() {
 					c.config.Logger.Err(err).Debugf("Failed to send packet to peer %s", peer.ID)
 				}
 			}
+
+			// Release the broadcast item back to the pool
+			item.packet = nil
+			c.broadcastQItemPool.Put(item)
 
 		case <-c.shutdownContext.Done():
 			return
