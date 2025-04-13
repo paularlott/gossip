@@ -463,7 +463,7 @@ func (t *transport) ReadPacket(conn net.Conn) (*Packet, error) {
 	if err == nil {
 		packet.conn = conn
 	}
-	return packet, nil
+	return packet, err
 }
 
 func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packet *Packet) error {

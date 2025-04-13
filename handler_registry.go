@@ -45,6 +45,8 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			if err != nil {
 				return err
 			}
+			defer replyPacket.Close()
+
 			return c.transport.WritePacket(packet.conn, replyPacket)
 		}
 		return nil
