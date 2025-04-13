@@ -171,45 +171,58 @@ func (kv *KVStore) Keys() []string {
 
 // syncRandomSubset selects a random subset of keys and gossips them
 func (kv *KVStore) syncRandomSubset() {
+	// Get the batch size early to avoid holding the lock while calculating it
+	totalKeys := kv.getTotalKeyCount()
+	if totalKeys == 0 {
+		return // No data to sync
+	}
+
+	batchSize := kv.cluster.GetBatchSize(totalKeys)
+	if batchSize == 0 {
+		return // No keys to send in this batch
+	}
+
+	subset := make([]string, 0, batchSize)
+	keysSeen := 0
+	source := rand.New(rand.NewSource(time.Now().UnixNano()))
+
 	kv.mu.RLock()
+	for key := range kv.data {
+		keysSeen++
 
-	// Quick check if we have data
-	if len(kv.data) == 0 {
-		kv.mu.RUnlock()
-		return
+		if len(subset) < batchSize {
+			subset = append(subset, key)
+		} else {
+			j := source.Intn(keysSeen)
+			if j < batchSize {
+				subset[j] = key
+			}
+		}
 	}
-
-	// Select keys for this sync
-	keys := make([]string, 0, len(kv.data))
-	for k := range kv.data {
-		keys = append(keys, k)
-	}
-	kv.mu.RUnlock()
-
-	// Shuffle the keys
-	rand.Shuffle(len(keys), func(i, j int) {
-		keys[i], keys[j] = keys[j], keys[i]
-	})
-
-	// Take a subset
-	batchSize := kv.cluster.GetBatchSize(len(keys))
-	subset := keys[:batchSize]
 
 	// Create the sync payload
 	payload := SyncPayload{
-		Entries: make(map[string]ValueState, batchSize),
+		Entries: make(map[string]ValueState, len(subset)),
 	}
 
-	kv.mu.RLock()
 	for _, key := range subset {
 		if entry, exists := kv.data[key]; exists {
 			payload.Entries[key] = entry
 		}
 	}
+
 	kv.mu.RUnlock()
 
 	// Broadcast to the cluster
-	kv.cluster.Send(KVSyncMsg, payload)
+	if len(payload.Entries) == 0 {
+		kv.cluster.Send(KVSyncMsg, payload)
+	}
+}
+
+func (kv *KVStore) getTotalKeyCount() int {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+	return len(kv.data)
 }
 
 // RequestFullSync requests a full data sync from random nodes

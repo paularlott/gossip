@@ -273,7 +273,7 @@ func (nl *nodeList) updateCountersForStateChange(oldState, newState NodeState) {
 
 // GetRandomNodesInStates returns up to k random nodes in the specified states, excluding specified IDs
 func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs []NodeID) []*Node {
-	if len(states) == 0 {
+	if len(states) == 0 || k <= 0 {
 		return []*Node{}
 	}
 
@@ -286,23 +286,39 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 		}
 	}
 
-	// Collect nodes matching requested states
-	candidateNodes := make([]*Node, 0)
+	// Initialize reservoir with capacity k
+	result := make([]*Node, 0, k)
+	// Track total eligible nodes seen
+	nodesSeen := 0
 
 	for _, shard := range nl.shards {
 		shard.mutex.RLock()
 
-		// Directly iterate through the requested states
+		// Process each requested state
 		for _, state := range states {
 			if nodesInState, exists := shard.byState[state]; exists {
 				for nodeID, node := range nodesInState {
+					// Skip excluded nodes
 					if excludeSet != nil {
 						if _, excluded := excludeSet[nodeID]; excluded {
 							continue
 						}
 					}
 
-					candidateNodes = append(candidateNodes, node)
+					// Increment count of eligible nodes
+					nodesSeen++
+
+					if len(result) < k {
+						// Phase 1: Fill the reservoir until we have k items
+						result = append(result, node)
+					} else {
+						// Phase 2: Replace items with decreasing probability
+						j := nl.randSource.Intn(nodesSeen)
+						if j < k {
+							// Replace the item at index j
+							result[j] = node
+						}
+					}
 				}
 			}
 		}
@@ -310,21 +326,7 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 		shard.mutex.RUnlock()
 	}
 
-	// If we have zero nodes, return empty slice
-	count := len(candidateNodes)
-	if count == 0 {
-		return []*Node{}
-	}
-
-	// Shuffle and return results
-	nl.randSource.Shuffle(count, func(i, j int) {
-		candidateNodes[i], candidateNodes[j] = candidateNodes[j], candidateNodes[i]
-	})
-
-	if k >= count {
-		return candidateNodes
-	}
-	return candidateNodes[:k]
+	return result
 }
 
 // GetRandomLiveNodes returns up to k random live nodes (Alive or Suspect)

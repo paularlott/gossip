@@ -799,14 +799,7 @@ func (c *Cluster) NodeIsLocal(node *Node) bool {
 
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
 func (c *Cluster) GetCandidates() []*Node {
-	// Calculate appropriate number of peers based on cluster size
-	peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount())
-	if peerCount == 0 {
-		return []*Node{}
-	}
-
-	// Get random subset, excluding ourselves
-	return c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
+	return c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount()), []NodeID{c.localNode.ID})
 }
 
 // Get the amount of data to send in a gossip message
