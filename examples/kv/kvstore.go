@@ -46,6 +46,7 @@ type KVStore struct {
 	retentionTime time.Duration
 	ctx           context.Context
 	cancel        context.CancelFunc
+	source        *rand.Rand
 }
 
 // NewKVStore creates a new KV store instance
@@ -59,6 +60,7 @@ func NewKVStore(cluster *gossip.Cluster) *KVStore {
 		retentionTime: defaultRetentionTime,
 		ctx:           ctx,
 		cancel:        cancel,
+		source:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	// Register message handlers
@@ -184,7 +186,6 @@ func (kv *KVStore) syncRandomSubset() {
 
 	subset := make([]string, 0, batchSize)
 	keysSeen := 0
-	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	kv.mu.RLock()
 	for key := range kv.data {
@@ -193,11 +194,16 @@ func (kv *KVStore) syncRandomSubset() {
 		if len(subset) < batchSize {
 			subset = append(subset, key)
 		} else {
-			j := source.Intn(keysSeen)
+			j := kv.source.Intn(keysSeen)
 			if j < batchSize {
 				subset[j] = key
 			}
 		}
+	}
+	kv.mu.RUnlock()
+
+	if len(subset) == 0 {
+		return // No keys to sync
 	}
 
 	// Create the sync payload
@@ -205,16 +211,16 @@ func (kv *KVStore) syncRandomSubset() {
 		Entries: make(map[string]ValueState, len(subset)),
 	}
 
+	kv.mu.RLock()
 	for _, key := range subset {
 		if entry, exists := kv.data[key]; exists {
 			payload.Entries[key] = entry
 		}
 	}
-
 	kv.mu.RUnlock()
 
 	// Broadcast to the cluster
-	if len(payload.Entries) == 0 {
+	if len(payload.Entries) > 0 {
 		kv.cluster.Send(KVSyncMsg, payload)
 	}
 }
