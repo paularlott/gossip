@@ -362,8 +362,8 @@ func TestDispatchWithNilParameters(t *testing.T) {
 
 	// Test with nil packet
 	msgHandler.dispatch(nil, &Node{}, nil)
-	if !receivedNode {
-		t.Error("Handler did not receive node")
+	if receivedNode {
+		t.Error("Handler received node when nil packet was passed")
 	}
 	if receivedPacket {
 		t.Error("Handler received non-nil packet when nil was passed")

@@ -15,9 +15,11 @@ import (
 func createTestCluster(t *testing.T) *Cluster {
 	config := DefaultConfig()
 	// Make sharding predictable for tests
-	config.NodeShardCount = 4
+	config.NodeShardCount = 8
 	config.MsgCodec = codec.NewJsonCodec()
 	config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
+	config.AllowInsecureWebsockets = true
+	config.SocketTransportEnabled = false
 	config.BindAddr = "ws://127.0.0.1:8080/gossip"
 
 	cluster, err := NewCluster(config)
@@ -342,7 +344,7 @@ func TestNodeList_GetShard(t *testing.T) {
 
 	// Create nodes with deterministically different IDs
 	nodeID1 := NodeID(uuid.New())
-	nodeID2 := NodeID(uuid.New()) // Changed to use uuid.New() for nodeID2
+	nodeID2 := NodeID(uuid.New())
 
 	// Get shards
 	shard1 := nl.getShard(nodeID1)

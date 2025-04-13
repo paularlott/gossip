@@ -19,6 +19,9 @@ type msgHandler struct {
 
 // Dispatch invokes the appropriate handler based on the packet's message type
 func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
+	if packet == nil {
+		return fmt.Errorf("packet is nil")
+	}
 
 	if packet.conn != nil && mh.streamHandler != nil {
 		// Start stream handlers in their own go routine as they could run for a while
