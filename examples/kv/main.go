@@ -41,12 +41,8 @@ func main() {
 	advertiseAddr := ""
 	if *port > 0 {
 		advertiseAddr = fmt.Sprintf("127.0.0.1:%d", *port)
-	}
-	if *webPort > 0 {
-		if advertiseAddr != "" {
-			advertiseAddr += "|"
-		}
-		advertiseAddr += fmt.Sprintf("ws://127.0.0.1:%d", *webPort)
+	} else if *webPort > 0 {
+		advertiseAddr = fmt.Sprintf("ws://127.0.0.1:%d", *webPort)
 	}
 
 	// Build configuration
@@ -57,8 +53,15 @@ func main() {
 	config.EncryptionKey = "1234567890123456"
 	config.Logger = common.NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
-	config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
 	config.Compressor = compression.NewSnappyCompressor()
+
+	if *port == 0 {
+		config.SocketTransportEnabled = false
+	}
+	if *webPort > 0 {
+		config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
+		config.AllowInsecureWebsockets = true
+	}
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {

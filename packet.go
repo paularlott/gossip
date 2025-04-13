@@ -2,6 +2,8 @@ package gossip
 
 import (
 	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/paularlott/gossip/codec"
 )
@@ -32,6 +34,14 @@ const (
 	UserMsg             MessageType = 128  // User messages start here
 )
 
+var (
+	packetPool = &sync.Pool{
+		New: func() interface{} {
+			return &Packet{}
+		},
+	}
+)
+
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
 	MessageType MessageType `msgpack:"mt" json:"mt"`
@@ -41,6 +51,31 @@ type Packet struct {
 	payload     []byte
 	codec       codec.Serializer
 	conn        net.Conn
+	refCount    atomic.Int32
+}
+
+func NewPacket() *Packet {
+	p := packetPool.Get().(*Packet)
+	p.refCount.Add(1)
+	return p
+}
+
+func (p *Packet) AddRef() *Packet {
+	p.refCount.Add(1)
+	return p
+}
+
+func (p *Packet) Release() {
+	if p.refCount.Add(-1) == 0 {
+		if p.conn != nil {
+			p.conn.Close()
+		}
+
+		p.conn = nil
+		p.payload = nil
+
+		packetPool.Put(p)
+	}
 }
 
 func (p *Packet) Unmarshal(v interface{}) error {

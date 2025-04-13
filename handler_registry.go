@@ -23,16 +23,14 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 	if packet.conn != nil && mh.streamHandler != nil {
 		// Start stream handlers in their own go routine as they could run for a while
 		go func() {
-			defer packet.conn.Close()
+			defer packet.Release()
 			mh.streamHandler(node, packet, packet.conn)
 		}()
 		return nil
 	}
 
-	// Ensure the connection is closed after processing
-	if packet.conn != nil {
-		defer packet.conn.Close()
-	}
+	// Ensure the packet is released and connection closed after processing
+	defer packet.Release()
 
 	if packet.conn != nil && mh.replyHandler != nil {
 		replyType, replyData, err := mh.replyHandler(node, packet)
@@ -45,6 +43,8 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			if err != nil {
 				return err
 			}
+			defer replyPacket.Release()
+
 			return c.transport.WritePacket(packet.conn, replyPacket)
 		}
 		return nil

@@ -25,6 +25,7 @@ type Config struct {
 	Compressor                    compression.Codec       // The codec to use for compressing and decompressing messages, if not given messages will not be compressed
 	CompressMinSize               int                     // The minimum size of a message before attempting to compress it
 	WebsocketProvider             websocket.Provider      // The provider to use for WebSocket connections
+	AllowInsecureWebsockets       bool                    // Whether to allow insecure WebSocket connections (ws://)
 	SocketTransportEnabled        bool                    // Whether to use the socket transport layer
 	ApplicationVersionCheck       ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
 	GossipInterval                time.Duration           // How often to send gossip messages
@@ -66,6 +67,7 @@ func DefaultConfig() *Config {
 		DefaultPort:                   3500,
 		CompressMinSize:               256,
 		SocketTransportEnabled:        true,
+		AllowInsecureWebsockets:       false,
 		GossipInterval:                20 * time.Second,
 		GossipMaxInterval:             60 * time.Second,
 		TCPDialTimeout:                5 * time.Second,

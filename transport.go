@@ -34,26 +34,24 @@ type Transport interface {
 	DialPeer(node *Node) (net.Conn, error)
 	WritePacket(conn net.Conn, packet *Packet) error
 	ReadPacket(conn net.Conn) (*Packet, error)
-	SendPacket(transportType TransportType, node *Node, packet *Packet) error
+	SendPacket(transportType TransportType, nodes []*Node, packet *Packet) error
 	WebsocketHandler(ctx context.Context, w http.ResponseWriter, r *http.Request)
 }
 
 type transport struct {
 	config        *Config
-	localNode     *Node
 	tcpListener   *net.TCPListener
 	udpListener   *net.UDPConn
 	packetChannel chan *Packet
 	wsProvider    websocket.Provider
 }
 
-func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address, localNode *Node) (*transport, error) {
+func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address) (*transport, error) {
 	var err error
 
 	// Create the transport
 	transport := &transport{
 		config:        config,
-		localNode:     localNode,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		wsProvider:    config.WebsocketProvider,
 	}
@@ -245,8 +243,7 @@ func (t *transport) DialPeer(node *Node) (net.Conn, error) {
 }
 
 // Assemble the packet and payload into a buffer, compression and encryption applied if needed
-// skipCompression and skipEncryption are used to skip compression and encryption when the underlying transport already applies these e.g. wss
-func (t *transport) packetToBuffer(packet *Packet, skipCompression bool, skipEncryption bool) ([]byte, error) {
+func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 	// Marshal the packet to a byte buffer
 	headerBytes, err := t.config.MsgCodec.Marshal(packet)
 	if err != nil {
@@ -258,7 +255,7 @@ func (t *transport) packetToBuffer(packet *Packet, skipCompression bool, skipEnc
 	// If we have a compressor then compress the packet
 	var compressedData []byte
 	isCompressed := false
-	if !skipCompression && t.config.Compressor != nil && len(packet.payload) >= t.config.CompressMinSize {
+	if t.config.Compressor != nil && len(packet.payload) >= t.config.CompressMinSize {
 		compressedData, err = t.config.Compressor.Compress(packet.payload)
 		if err != nil {
 			return nil, err
@@ -272,7 +269,7 @@ func (t *transport) packetToBuffer(packet *Packet, skipCompression bool, skipEnc
 	}
 
 	// Determine if encryption is needed
-	isEncrypted := !skipEncryption && t.config.EncryptionKey != ""
+	isEncrypted := t.config.EncryptionKey != ""
 	if isEncrypted {
 		headerSize |= 0x4000 // Bit 14: Encryption flag
 	}
@@ -365,7 +362,7 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 	}
 
 	// Unmarshal the header
-	packet := Packet{}
+	packet := NewPacket()
 	err = t.config.MsgCodec.Unmarshal(encryptedPortion[:headerSize], &packet)
 	if err != nil {
 		return nil, err
@@ -383,21 +380,12 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 		packet.payload = encryptedPortion[headerSize:]
 	}
 
-	return &packet, nil
+	return packet, nil
 }
 
 func (t *transport) WritePacket(conn net.Conn, packet *Packet) error {
-
-	// If running on wss then we need to skip compression and encryption to avoid double compression/encryption
-	skipCompression := false
-	skipEncryption := false
-	if wsConn, ok := conn.(websocket.Conn); ok {
-		skipCompression = true
-		skipEncryption = wsConn.IsSecure()
-	}
-
 	// Marshal the packet to a byte buffer
-	buf, err := t.packetToBuffer(packet, skipCompression, skipEncryption)
+	buf, err := t.packetToBuffer(packet)
 	if err != nil {
 		return err
 	}
@@ -475,56 +463,52 @@ func (t *transport) ReadPacket(conn net.Conn) (*Packet, error) {
 	if err == nil {
 		packet.conn = conn
 	}
-	return packet, nil
+	return packet, err
 }
 
-func (t *transport) SendPacket(transportType TransportType, node *Node, packet *Packet) error {
-	skipCompression := false
-	skipEncryption := false
-
-	// If using websockets then we need to use reliable transport and avoid double compression/encryption
-	if t.udpListener == nil || node.address.Port == 0 {
-		transportType = TransportReliable
-		skipCompression = true
-		skipEncryption = strings.HasPrefix(node.address.URL, "wss://")
-	}
-
+func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packet *Packet) error {
 	// Marshal the packet to a byte buffer
-	rawPacket, err := t.packetToBuffer(packet, skipCompression, skipEncryption)
+	rawPacket, err := t.packetToBuffer(packet)
 	if err != nil {
 		return err
 	}
 
 	// If transport type is best effort but the packet is too large, switch to reliable or if not using TCP/UDP
-	if transportType == TransportBestEffort && (len(rawPacket) >= t.config.UDPMaxPacketSize) {
+	if t.config.WebsocketProvider != nil || transportType == TransportBestEffort && (len(rawPacket) >= t.config.UDPMaxPacketSize) {
 		transportType = TransportReliable
 	}
 
-	// If using reliable transport then use TCP
-	if transportType == TransportReliable {
-		conn, err := t.DialPeer(node)
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
+	// Send to each node
+	for _, node := range nodes {
+		// If using reliable transport then use TCP
+		if transportType == TransportReliable {
+			conn, err := t.DialPeer(node)
+			if err != nil {
+				return err
+			}
 
-		// Write the packet to the connection
-		err = t.writeRawPacket(conn, rawPacket)
-		if err != nil {
-			return err
-		}
-	} else { // Send the message over UDP
-		err = t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline))
-		if err != nil {
-			return err
-		}
+			// Write the packet to the connection
+			err = t.writeRawPacket(conn, rawPacket)
+			if err != nil {
+				conn.Close()
+				return err
+			}
 
-		_, err = t.udpListener.WriteToUDP(rawPacket, &net.UDPAddr{
-			IP:   node.address.IP,
-			Port: node.address.Port,
-		})
-		if err != nil {
-			return err
+			conn.Close()
+
+		} else { // Send the message over UDP
+			err = t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline))
+			if err != nil {
+				return err
+			}
+
+			_, err = t.udpListener.WriteToUDP(rawPacket, &net.UDPAddr{
+				IP:   node.address.IP,
+				Port: node.address.Port,
+			})
+			if err != nil {
+				return err
+			}
 		}
 	}
 

@@ -147,3 +147,7 @@ func (p *CoderProvider) ToNetConn(ws WebSocket) net.Conn {
 		isSecure: coderWS.isSecure,
 	}
 }
+
+func (p *CoderProvider) CompressionEnabled() bool {
+	return p.EnableCompression
+}

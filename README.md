@@ -44,7 +44,7 @@ func main() {
   // Create configuration
   config := gossip.DefaultConfig()
   config.NodeID = "01960f9b-72ca-7a51-9efa-47c12f42a138"       // Optional: auto-generated if not specified
-  config.BindAddr = "127.0.0.1:8000|ws://127.0.0.1:8080"       // Listen on TCP and WebSocket
+  config.BindAddr = "127.0.0.1:8000"                           // Listen on TCP and UDP
   config.EncryptionKey = "your-32-byte-key"                    // Optional: enables encryption
   config.MsgCodec = codec.NewShamatonMsgpackCodec()            // Message serialization
   config.Compressor = compression.NewSnappyCompressor()        // Optional: enables compression
@@ -58,7 +58,7 @@ func main() {
   defer cluster.Shutdown()
 
   // Join existing cluster (if any)
-  err = cluster.Join([]string{"127.0.0.1:8001", "ws://127.0.0.1:8081"})
+  err = cluster.Join([]string{"127.0.0.1:8001"})
   if err != nil {
     fmt.Println("Warning:", err)
   }
@@ -93,7 +93,6 @@ The gossip library supports multiple address formats for binding and connecting 
 - **srv+service-name** - SRV DNS record lookup, when multiple addresses are returned the node will attempt to connect to each address in turn assuming each is a node within the cluster
 - **ws://hostname:port/endpoint** - WebSocket connection
 - **wss://hostname:port/endpoint** - Secure WebSocket connection
-- **ip:port|ws://hostname:port/endpoint** - Multiple transport options combined, the TCP/UDP address must be first, followed by the WebSocket address. The node will favour TCP/UDP
 
 ## Configuration Options
 

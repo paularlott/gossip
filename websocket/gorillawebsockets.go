@@ -235,3 +235,7 @@ func (p *GorillaWebSocketProvider) ToNetConn(ws WebSocket) net.Conn {
 		isSecure: gws.isSecure,
 	}
 }
+
+func (p *GorillaWebSocketProvider) CompressionEnabled() bool {
+	return p.EnableCompression
+}
