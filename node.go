@@ -8,24 +8,24 @@ import (
 type NodeState uint8
 
 const (
-	nodeUnknown NodeState = iota
-	nodeAlive
-	nodeLeaving
-	nodeDead
-	nodeSuspect
+	NodeUnknown NodeState = iota
+	NodeAlive
+	NodeLeaving
+	NodeDead
+	NodeSuspect
 )
 
 func (ns NodeState) String() string {
 	switch ns {
-	case nodeUnknown:
+	case NodeUnknown:
 		return "Unknown"
-	case nodeAlive:
+	case NodeAlive:
 		return "Alive"
-	case nodeLeaving:
+	case NodeLeaving:
 		return "Leaving"
-	case nodeDead:
+	case NodeDead:
 		return "Dead"
-	case nodeSuspect:
+	case NodeSuspect:
 		return "Suspect"
 	default:
 		return "Unknown"
@@ -51,7 +51,7 @@ func newNode(id NodeID, address Address) *Node {
 		ID:              id,
 		address:         address,
 		stateChangeTime: time.Now(),
-		state:           nodeAlive,
+		state:           NodeAlive,
 		Metadata:        metadata,
 		metadata:        metadata,
 	}
@@ -79,13 +79,13 @@ func (node *Node) GetAddress() Address {
 }
 
 func (node *Node) DeadOrLeft() bool {
-	return node.state == nodeDead || node.state == nodeLeaving
+	return node.state == NodeDead || node.state == NodeLeaving
 }
 
 func (node *Node) Alive() bool {
-	return node.state == nodeAlive
+	return node.state == NodeAlive
 }
 
 func (node *Node) Suspect() bool {
-	return node.state == nodeSuspect
+	return node.state == NodeSuspect
 }

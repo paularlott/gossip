@@ -1,8 +1,15 @@
 # Gossip Protocol Library
 
-A Go-based library designed for implementing gossip protocols in distributed systems, supporting multiple transport mechanisms including TCP, UDP, and WebSocket.
+A lightweight, Go-based library for implementing the gossip protocol in distributed systems. The library supports multiple transport mechanisms, including TCP, UDP, and WebSocket, providing flexibility for a variety of use cases.
 
-This library enables decentralized communication between nodes in distributed systems with ease. Its simple API allows you to create and manage nodes, exchange messages, and handle key events like node joins and departures. Built with robustness in mind, the library automatically monitors node health within the cluster and efficiently removes nodes that become unreachable.
+With its straightforward API, the library simplifies decentralized communication by enabling the creation and management of nodes, exchanging messages, and handling critical events like node joins and departures. Designed with reliability in mind, it continuously monitors node health within the cluster and seamlessly removes unreachable nodes, ensuring the system stays robust and adaptive.
+
+The library leverages a hybrid approach to gossiping, combining **event-driven gossiping** and **periodic gossiping** to balance rapid updates and eventual consistency across the cluster:
+
+- **Event-Driven Gossiping** swiftly propagates critical updates immediately after events occur, minimizing latency.
+- **Periodic Gossiping** adds redundancy by disseminating updates at regular intervals, ensuring eventual consistency even if some nodes initially miss updates.
+
+This flexible architecture supports the development of resilient distributed systems with efficient data sharing and robust fault tolerance.
 
 ## Features
 
@@ -48,7 +55,6 @@ func main() {
   config.EncryptionKey = "your-32-byte-key"                    // Optional: enables encryption
   config.MsgCodec = codec.NewShamatonMsgpackCodec()            // Message serialization
   config.Compressor = compression.NewSnappyCompressor()        // Optional: enables compression
-  config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
 
   // Create and start the cluster
   cluster, err := gossip.NewCluster(config)
@@ -111,18 +117,21 @@ config.EncryptionKey = "your-32-byte-key"              // Optional: enables encr
 config.Compressor = compression.NewSnappyCompressor()  // Enable payload compression using the provided compressor
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
 
-// Networking, optional but if given allows use of WebSockets for transport
+// Networking, optional but if given allows use of WebSockets for transport and disables TCP/UDP
 config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
+config.AllowInsecureWebsockets = true
+config.SocketTransportEnabled = false
 ```
 
 ## Node States
 
 Nodes in the cluster go through several states:
 
-- **nodeAlive** - Node is active and healthy
-- **nodeSuspect** - Node might be unhealthy (pending confirmation)
-- **nodeDead** - Node is confirmed dead
-- **nodeLeaving** - Node is gracefully leaving the cluster
+- **NodeUnknown** - Node state is unknown, nodes start in this state and change to NodeAlive when joining the cluster
+- **NodeAlive** - Node is active and healthy
+- **NodeSuspect** - Node might be unhealthy (pending confirmation)
+- **NodeDead** - Node is confirmed dead
+- **NodeLeaving** - Node is gracefully leaving the cluster
 
 ## WebSocket Support
 

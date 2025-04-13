@@ -50,10 +50,10 @@ func newNodeList(c *Cluster) *nodeList {
 		}
 
 		// Initialize maps for each state
-		nl.shards[i].byState[nodeAlive] = make(map[NodeID]*Node)
-		nl.shards[i].byState[nodeSuspect] = make(map[NodeID]*Node)
-		nl.shards[i].byState[nodeLeaving] = make(map[NodeID]*Node)
-		nl.shards[i].byState[nodeDead] = make(map[NodeID]*Node)
+		nl.shards[i].byState[NodeAlive] = make(map[NodeID]*Node)
+		nl.shards[i].byState[NodeSuspect] = make(map[NodeID]*Node)
+		nl.shards[i].byState[NodeLeaving] = make(map[NodeID]*Node)
+		nl.shards[i].byState[NodeDead] = make(map[NodeID]*Node)
 	}
 
 	return nl
@@ -102,7 +102,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		nl.updateCountersForStateChange(oldState, node.state)
 
 		// If old state was leaving or dead, trigger event listener
-		if oldState == nodeLeaving || oldState == nodeDead {
+		if oldState == NodeLeaving || oldState == NodeDead {
 			nl.cluster.notifyNodeStateChanged(node, oldState)
 		}
 	} else {
@@ -115,21 +115,21 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		// Update counters
 		nl.totalCount.Add(1)
 		switch node.state {
-		case nodeAlive:
+		case NodeAlive:
 			nl.aliveCount.Add(1)
-		case nodeSuspect:
+		case NodeSuspect:
 			nl.suspectCount.Add(1)
-		case nodeLeaving:
+		case NodeLeaving:
 			nl.leavingCount.Add(1)
-		case nodeDead:
+		case NodeDead:
 			nl.deadCount.Add(1)
 		}
-		if node.state == nodeAlive || node.state == nodeSuspect {
+		if node.state == NodeAlive || node.state == NodeSuspect {
 			nl.liveCount.Add(1)
 		}
 
 		// Trigger event listener
-		nl.cluster.notifyNodeStateChanged(node, nodeUnknown)
+		nl.cluster.notifyNodeStateChanged(node, NodeUnknown)
 	}
 
 	return true
@@ -145,7 +145,7 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
-	nl.removeIfInState(nodeID, []NodeState{nodeAlive, nodeSuspect, nodeLeaving, nodeDead})
+	nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
@@ -163,16 +163,16 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 				// Update counters
 				nl.totalCount.Add(-1)
 				switch node.state {
-				case nodeAlive:
+				case NodeAlive:
 					nl.aliveCount.Add(-1)
-				case nodeSuspect:
+				case NodeSuspect:
 					nl.suspectCount.Add(-1)
-				case nodeLeaving:
+				case NodeLeaving:
 					nl.leavingCount.Add(-1)
-				case nodeDead:
+				case NodeDead:
 					nl.deadCount.Add(-1)
 				}
-				if node.state == nodeAlive || node.state == nodeSuspect {
+				if node.state == NodeAlive || node.state == NodeSuspect {
 					nl.liveCount.Add(-1)
 				}
 
@@ -240,30 +240,30 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 func (nl *nodeList) updateCountersForStateChange(oldState, newState NodeState) {
 	// Update state-specific counters
 	switch oldState {
-	case nodeAlive:
+	case NodeAlive:
 		nl.aliveCount.Add(-1)
-	case nodeSuspect:
+	case NodeSuspect:
 		nl.suspectCount.Add(-1)
-	case nodeLeaving:
+	case NodeLeaving:
 		nl.leavingCount.Add(-1)
-	case nodeDead:
+	case NodeDead:
 		nl.deadCount.Add(-1)
 	}
 
 	switch newState {
-	case nodeAlive:
+	case NodeAlive:
 		nl.aliveCount.Add(1)
-	case nodeSuspect:
+	case NodeSuspect:
 		nl.suspectCount.Add(1)
-	case nodeLeaving:
+	case NodeLeaving:
 		nl.leavingCount.Add(1)
-	case nodeDead:
+	case NodeDead:
 		nl.deadCount.Add(1)
 	}
 
 	// Update live count (nodes in Alive or Suspect state)
-	oldLive := oldState == nodeAlive || oldState == nodeSuspect
-	newLive := newState == nodeAlive || newState == nodeSuspect
+	oldLive := oldState == NodeAlive || oldState == NodeSuspect
+	newLive := newState == NodeAlive || newState == NodeSuspect
 	if oldLive && !newLive {
 		nl.liveCount.Add(-1)
 	} else if !oldLive && newLive {
@@ -329,12 +329,12 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 
 // GetRandomLiveNodes returns up to k random live nodes (Alive or Suspect)
 func (nl *nodeList) getRandomLiveNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect}, excludeIDs)
+	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect}, excludeIDs)
 }
 
 // GetRandomNodes returns up to k random nodes in any state
 func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{nodeAlive, nodeSuspect, nodeLeaving, nodeDead}, excludeIDs)
+	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead}, excludeIDs)
 }
 
 // GetTotalCount returns the total number of nodes in the cluster
@@ -342,7 +342,7 @@ func (nl *nodeList) getTotalCount() int {
 	return int(nl.totalCount.Load())
 }
 
-// GetAliveCount returns the number of nodes with state nodeAlive
+// GetAliveCount returns the number of nodes with state NodeAlive
 func (nl *nodeList) getAliveCount() int {
 	return int(nl.aliveCount.Load())
 }
@@ -433,10 +433,10 @@ func (nl *nodeList) recalculateCounters() {
 		shard.mutex.RLock()
 
 		total += int64(len(shard.nodes))
-		alive += int64(len(shard.byState[nodeAlive]))
-		suspect += int64(len(shard.byState[nodeSuspect]))
-		leaving += int64(len(shard.byState[nodeLeaving]))
-		dead += int64(len(shard.byState[nodeDead]))
+		alive += int64(len(shard.byState[NodeAlive]))
+		suspect += int64(len(shard.byState[NodeSuspect]))
+		leaving += int64(len(shard.byState[NodeLeaving]))
+		dead += int64(len(shard.byState[NodeDead]))
 
 		shard.mutex.RUnlock()
 	}

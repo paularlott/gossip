@@ -194,7 +194,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 }
 
 func (c *Cluster) Shutdown() {
-	if c.localNode.state != nodeLeaving {
+	if c.localNode.state != NodeLeaving {
 		c.Leave()
 	}
 

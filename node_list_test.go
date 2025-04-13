@@ -50,7 +50,7 @@ func TestNodeList_AddAndGet(t *testing.T) {
 	nl := cluster.nodes
 
 	// Create test node
-	node := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	node := createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive)
 
 	// Test adding a new node
 	if !nl.addIfNotExists(node) {
@@ -68,8 +68,8 @@ func TestNodeList_AddAndGet(t *testing.T) {
 		t.Errorf("Retrieved node has incorrect ID")
 	}
 
-	if retrievedNode.state != nodeAlive {
-		t.Errorf("Retrieved node has incorrect state, got %v, want %v", retrievedNode.state, nodeAlive)
+	if retrievedNode.state != NodeAlive {
+		t.Errorf("Retrieved node has incorrect state, got %v, want %v", retrievedNode.state, NodeAlive)
 	}
 
 	// Try to add the same node again with addIfNotExists
@@ -78,15 +78,15 @@ func TestNodeList_AddAndGet(t *testing.T) {
 	}
 
 	// Modify the node and use addOrUpdate
-	modifiedNode := createTestNode("11111111-1111-1111-1111-111111111111", nodeSuspect)
+	modifiedNode := createTestNode("11111111-1111-1111-1111-111111111111", NodeSuspect)
 	if !nl.addOrUpdate(modifiedNode) {
 		t.Errorf("addOrUpdate should return true when updating existing node")
 	}
 
 	// Check that node state was updated
 	retrievedNode = nl.get(node.ID)
-	if retrievedNode.state != nodeSuspect {
-		t.Errorf("Node state not updated, got %v, want %v", retrievedNode.state, nodeSuspect)
+	if retrievedNode.state != NodeSuspect {
+		t.Errorf("Node state not updated, got %v, want %v", retrievedNode.state, NodeSuspect)
 	}
 }
 
@@ -95,8 +95,8 @@ func TestNodeList_Remove(t *testing.T) {
 	nl := cluster.nodes
 
 	// Create and add test nodes
-	node1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
-	node2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeSuspect)
+	node1 := createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive)
+	node2 := createTestNode("22222222-2222-2222-2222-222222222222", NodeSuspect)
 
 	nl.addIfNotExists(node1)
 	nl.addIfNotExists(node2)
@@ -119,16 +119,16 @@ func TestNodeList_Remove(t *testing.T) {
 	}
 
 	// Test removeIfInState with matching state
-	nl.removeIfInState(node2.ID, []NodeState{nodeSuspect})
+	nl.removeIfInState(node2.ID, []NodeState{NodeSuspect})
 	if nl.get(node2.ID) != nil {
 		t.Errorf("Node should be removed by removeIfInState but still exists")
 	}
 
 	// Test removeIfInState with non-matching state
-	node3 := createTestNode("33333333-3333-3333-3333-333333333333", nodeAlive)
+	node3 := createTestNode("33333333-3333-3333-3333-333333333333", NodeAlive)
 	nl.addIfNotExists(node3)
 
-	if nl.removeIfInState(node3.ID, []NodeState{nodeSuspect, nodeDead}) {
+	if nl.removeIfInState(node3.ID, []NodeState{NodeSuspect, NodeDead}) {
 		t.Errorf("removeIfInState should return false for non-matching state")
 	}
 
@@ -142,7 +142,7 @@ func TestNodeList_UpdateState(t *testing.T) {
 	nl := cluster.nodes
 
 	// Create and add a test node
-	node := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
+	node := createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive)
 	nl.addIfNotExists(node)
 
 	// Verify initial counters
@@ -151,14 +151,14 @@ func TestNodeList_UpdateState(t *testing.T) {
 	}
 
 	// Update state
-	if !nl.updateState(node.ID, nodeSuspect) {
+	if !nl.updateState(node.ID, NodeSuspect) {
 		t.Errorf("Failed to update node state")
 	}
 
 	// Verify node state was updated
 	updatedNode := nl.get(node.ID)
-	if updatedNode.state != nodeSuspect {
-		t.Errorf("Node state not updated, got %v, want %v", updatedNode.state, nodeSuspect)
+	if updatedNode.state != NodeSuspect {
+		t.Errorf("Node state not updated, got %v, want %v", updatedNode.state, NodeSuspect)
 	}
 
 	// Verify counters were updated
@@ -170,7 +170,7 @@ func TestNodeList_UpdateState(t *testing.T) {
 	prevTime := updatedNode.stateChangeTime
 	time.Sleep(10 * time.Millisecond) // Ensure time would change if updated
 
-	if !nl.updateState(node.ID, nodeSuspect) {
+	if !nl.updateState(node.ID, NodeSuspect) {
 		t.Errorf("updateState should return true even when state doesn't change")
 	}
 
@@ -181,7 +181,7 @@ func TestNodeList_UpdateState(t *testing.T) {
 	}
 
 	// Update to dead state
-	nl.updateState(node.ID, nodeDead)
+	nl.updateState(node.ID, NodeDead)
 
 	// Verify live count is updated
 	if nl.getLiveCount() != 0 {
@@ -194,10 +194,10 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 	nl := cluster.nodes
 
 	// Create nodes in different states
-	aliveNode1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
-	aliveNode2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive)
-	suspectNode := createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect)
-	deadNode := createTestNode("44444444-4444-4444-4444-444444444444", nodeDead)
+	aliveNode1 := createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive)
+	aliveNode2 := createTestNode("22222222-2222-2222-2222-222222222222", NodeAlive)
+	suspectNode := createTestNode("33333333-3333-3333-3333-333333333333", NodeSuspect)
+	deadNode := createTestNode("44444444-4444-4444-4444-444444444444", NodeDead)
 
 	nl.addIfNotExists(aliveNode1)
 	nl.addIfNotExists(aliveNode2)
@@ -205,7 +205,7 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 	nl.addIfNotExists(deadNode)
 
 	// Get only alive nodes
-	aliveNodes := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, nil)
+	aliveNodes := nl.getRandomNodesInStates(10, []NodeState{NodeAlive}, nil)
 	if len(aliveNodes) != 2 {
 		t.Errorf("Expected 2 alive nodes, got %d", len(aliveNodes))
 	}
@@ -224,13 +224,13 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 
 	// Get nodes with exclusion
 	excludeIDs := []NodeID{aliveNode1.ID}
-	nodesWithExclusion := nl.getRandomNodesInStates(10, []NodeState{nodeAlive}, excludeIDs)
+	nodesWithExclusion := nl.getRandomNodesInStates(10, []NodeState{NodeAlive}, excludeIDs)
 	if len(nodesWithExclusion) != 1 {
 		t.Errorf("Expected 1 alive node after exclusion, got %d", len(nodesWithExclusion))
 	}
 
 	// Test limit
-	limitedNodes := nl.getRandomNodesInStates(2, []NodeState{nodeAlive, nodeSuspect, nodeDead}, nil)
+	limitedNodes := nl.getRandomNodesInStates(2, []NodeState{NodeAlive, NodeSuspect, NodeDead}, nil)
 	if len(limitedNodes) != 2 {
 		t.Errorf("Expected 2 nodes with limit, got %d", len(limitedNodes))
 	}
@@ -247,9 +247,9 @@ func TestNodeList_ForAllInStates(t *testing.T) {
 	nl := cluster.nodes
 
 	// Add test nodes
-	node1 := createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive)
-	node2 := createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive)
-	node3 := createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect)
+	node1 := createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive)
+	node2 := createTestNode("22222222-2222-2222-2222-222222222222", NodeAlive)
+	node3 := createTestNode("33333333-3333-3333-3333-333333333333", NodeSuspect)
 
 	nl.addIfNotExists(node1)
 	nl.addIfNotExists(node2)
@@ -257,7 +257,7 @@ func TestNodeList_ForAllInStates(t *testing.T) {
 
 	// Test forAllInStates with counting
 	count := 0
-	nl.forAllInStates([]NodeState{nodeAlive}, func(node *Node) bool {
+	nl.forAllInStates([]NodeState{NodeAlive}, func(node *Node) bool {
 		count++
 		return true
 	})
@@ -268,7 +268,7 @@ func TestNodeList_ForAllInStates(t *testing.T) {
 
 	// Test early termination
 	visited := 0
-	nl.forAllInStates([]NodeState{nodeAlive, nodeSuspect}, func(node *Node) bool {
+	nl.forAllInStates([]NodeState{NodeAlive, NodeSuspect}, func(node *Node) bool {
 		visited++
 		return visited < 2 // Stop after visiting one node
 	})
@@ -278,7 +278,7 @@ func TestNodeList_ForAllInStates(t *testing.T) {
 	}
 
 	// Test getAllInStates
-	aliveNodes := nl.getAllInStates([]NodeState{nodeAlive})
+	aliveNodes := nl.getAllInStates([]NodeState{NodeAlive})
 	if len(aliveNodes) != 2 {
 		t.Errorf("getAllInStates should return 2 alive nodes, got %d", len(aliveNodes))
 	}
@@ -295,11 +295,11 @@ func TestNodeList_RecalculateCounters(t *testing.T) {
 	nl := cluster.nodes
 
 	// Add nodes of different states
-	nl.addIfNotExists(createTestNode("11111111-1111-1111-1111-111111111111", nodeAlive))
-	nl.addIfNotExists(createTestNode("22222222-2222-2222-2222-222222222222", nodeAlive))
-	nl.addIfNotExists(createTestNode("33333333-3333-3333-3333-333333333333", nodeSuspect))
-	nl.addIfNotExists(createTestNode("44444444-4444-4444-4444-444444444444", nodeDead))
-	nl.addIfNotExists(createTestNode("55555555-5555-5555-5555-555555555555", nodeLeaving))
+	nl.addIfNotExists(createTestNode("11111111-1111-1111-1111-111111111111", NodeAlive))
+	nl.addIfNotExists(createTestNode("22222222-2222-2222-2222-222222222222", NodeAlive))
+	nl.addIfNotExists(createTestNode("33333333-3333-3333-3333-333333333333", NodeSuspect))
+	nl.addIfNotExists(createTestNode("44444444-4444-4444-4444-444444444444", NodeDead))
+	nl.addIfNotExists(createTestNode("55555555-5555-5555-5555-555555555555", NodeLeaving))
 
 	// Manually corrupt the counters
 	nl.totalCount.Store(0)
