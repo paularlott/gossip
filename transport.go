@@ -362,7 +362,7 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 	}
 
 	// Unmarshal the header
-	packet := Packet{}
+	packet := NewPacket()
 	err = t.config.MsgCodec.Unmarshal(encryptedPortion[:headerSize], &packet)
 	if err != nil {
 		return nil, err
@@ -380,7 +380,7 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 		packet.payload = encryptedPortion[headerSize:]
 	}
 
-	return &packet, nil
+	return packet, nil
 }
 
 func (t *transport) WritePacket(conn net.Conn, packet *Packet) error {

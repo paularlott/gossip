@@ -111,7 +111,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 		// Gossip the node to our peers
 		packet.MessageType = nodeJoiningMsg
-		c.enqueuePacketForBroadcast(packet.cloneForBroadcast(), TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
+		c.enqueuePacketForBroadcast(packet.AddRef(), TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID})
 	}
 
 	// Respond to the sender with our information

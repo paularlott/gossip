@@ -1,7 +1,6 @@
 package gossip
 
 import (
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -41,8 +40,6 @@ var (
 			return &Packet{}
 		},
 	}
-
-	pktCount = atomic.Int64{}
 )
 
 // Packet holds the payload of a message being passed between nodes
@@ -54,42 +51,31 @@ type Packet struct {
 	payload     []byte
 	codec       codec.Serializer
 	conn        net.Conn
+	refCount    atomic.Int32
 }
 
 func NewPacket() *Packet {
-
-	pktCount.Add(1)
-
-	return packetPool.Get().(*Packet)
+	p := packetPool.Get().(*Packet)
+	p.refCount.Add(1)
+	return p
 }
 
-func (p *Packet) Close() {
-	if p.conn != nil {
-		p.conn.Close()
+func (p *Packet) AddRef() *Packet {
+	p.refCount.Add(1)
+	return p
+}
+
+func (p *Packet) Release() {
+	if p.refCount.Add(-1) == 0 {
+		if p.conn != nil {
+			p.conn.Close()
+		}
+
+		p.conn = nil
+		p.payload = nil
+
+		packetPool.Put(p)
 	}
-
-	p.conn = nil
-	p.payload = nil
-
-	packetPool.Put(p)
-
-	pktCount.Add(-1)
-
-	count := pktCount.Load()
-	fmt.Println("Packet count: ", count)
-}
-
-func (p *Packet) cloneForBroadcast() *Packet {
-	pktCount.Add(1)
-
-	newPacket := packetPool.Get().(*Packet)
-	newPacket.MessageType = p.MessageType
-	newPacket.SenderID = p.SenderID
-	newPacket.MessageID = p.MessageID
-	newPacket.TTL = p.TTL
-	newPacket.payload = p.payload
-	newPacket.codec = p.codec
-	return newPacket
 }
 
 func (p *Packet) Unmarshal(v interface{}) error {

@@ -481,9 +481,7 @@ func (c *Cluster) acceptPackets() {
 func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// If the sender is us or already seen then ignore the message
 	if packet.SenderID == c.localNode.ID || c.msgHistory.contains(packet.SenderID, packet.MessageID) {
-		if packet.conn != nil {
-			packet.conn.Close()
-		}
+		packet.Release()
 		return
 	}
 
@@ -500,7 +498,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			} else {
 				transportType = TransportBestEffort
 			}
-			c.enqueuePacketForBroadcast(packet.cloneForBroadcast(), transportType, []NodeID{c.localNode.ID, packet.SenderID})
+			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID})
 		}
 
 		senderNode := c.nodes.get(packet.SenderID)
@@ -513,9 +511,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
-		if packet.conn != nil {
-			packet.conn.Close()
-		}
+		packet.Release()
 		c.config.Logger.Warnf("No handler registered for message type: %d", packet.MessageType)
 	}
 }
@@ -613,7 +609,7 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 
 	// Once the packets TTL is 0 we don't forward it stops it bouncing around the cluster
 	if packet.TTL == 0 {
-		packet.Close()
+		packet.Release()
 		return
 	}
 	packet.TTL--
@@ -647,7 +643,7 @@ func (c *Cluster) broadcastWorker() {
 			}
 
 			// Release the broadcast item back to the pool
-			item.packet.Close()
+			item.packet.Release()
 			item.packet = nil
 			c.broadcastQItemPool.Put(item)
 

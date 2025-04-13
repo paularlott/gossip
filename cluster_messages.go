@@ -62,7 +62,7 @@ func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, pa
 	var err error
 	packet.payload, err = packet.codec.Marshal(payload)
 	if err != nil {
-		packet.Close()
+		packet.Release()
 		return nil, err
 	}
 
@@ -100,7 +100,7 @@ func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, ttl 
 	if err != nil {
 		return err
 	}
-	defer packet.Close()
+	defer packet.Release()
 
 	return c.transport.SendPacket(transportType, []*Node{dstNode}, packet)
 }
@@ -126,7 +126,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	if err != nil {
 		return err
 	}
-	defer packet.Close()
+	defer packet.Release()
 
 	conn, err := c.transport.DialPeer(dstNode)
 	if err != nil {
@@ -144,7 +144,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	if err != nil {
 		return err
 	}
-	// TODO will need this when readpacket allocates from the pool	defer responsePacket.Close()
+	defer responsePacket.Release()
 
 	// If the response message type doesn't match the expected type, return an error
 	if responsePacket.MessageType != responseMsgType {
@@ -215,7 +215,7 @@ func (c *Cluster) WriteStream(conn net.Conn, msgType MessageType, payload interf
 	if err != nil {
 		return err
 	}
-	defer packet.Close()
+	defer packet.Release()
 
 	// Write the packet to the connection
 	return c.transport.WritePacket(conn, packet)
@@ -230,7 +230,7 @@ func (c *Cluster) ReadStream(conn net.Conn, msgType MessageType, payload interfa
 	if err != nil {
 		return err
 	}
-	defer packet.Close()
+	defer packet.Release()
 
 	// If the response message type doesn't match the expected type, return an error
 	if packet.MessageType != msgType {
