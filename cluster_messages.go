@@ -207,7 +207,7 @@ func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interfa
 }
 
 func (c *Cluster) WriteStream(conn net.Conn, msgType MessageType, payload interface{}) error {
-	if msgType < UserMsg {
+	if msgType < dataBlockMsg {
 		return fmt.Errorf("invalid message type")
 	}
 
@@ -222,7 +222,7 @@ func (c *Cluster) WriteStream(conn net.Conn, msgType MessageType, payload interf
 }
 
 func (c *Cluster) ReadStream(conn net.Conn, msgType MessageType, payload interface{}) error {
-	if msgType < UserMsg {
+	if msgType < dataBlockMsg {
 		return fmt.Errorf("invalid message type")
 	}
 

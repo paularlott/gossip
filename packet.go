@@ -31,7 +31,8 @@ const (
 	leavingMsg                             // Sent to announce a node is leaving
 	metadataUpdateMsg                      // Update the metadata of a node
 	_                                      // skip to 128
-	UserMsg             MessageType = 128  // User messages start here
+	dataBlockMsg        MessageType = 128  // A message containing a data block
+	UserMsg                                // User messages start here
 )
 
 var (
