@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/paularlott/gossip/encryption"
+
 	"github.com/google/uuid"
 )
 
@@ -118,6 +120,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
+
+	if cluster.config.EncryptionKey != "" && cluster.config.Crypter == nil {
+		// Create a new AES encryptor
+		cluster.config.Crypter = encryption.NewAESEncryptor()
+	}
 
 	// Resolve the local node's address
 	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)

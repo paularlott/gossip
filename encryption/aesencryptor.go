@@ -1,4 +1,4 @@
-package gossip
+package encryption
 
 import (
 	"crypto/aes"
@@ -8,10 +8,16 @@ import (
 	"io"
 )
 
+type AESEncryptor struct{}
+
+func NewAESEncryptor() *AESEncryptor {
+	return &AESEncryptor{}
+}
+
 // Encrypt encrypts data using the provided key.
 // The key must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 // Returns the encrypted data with the nonce prepended.
-func encrypt(key, data []byte) ([]byte, error) {
+func (e *AESEncryptor) Encrypt(key, data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -36,7 +42,7 @@ func encrypt(key, data []byte) ([]byte, error) {
 
 // Decrypt decrypts data using the provided key.
 // The input data should be the encrypted data with the nonce prepended (output from Encrypt).
-func decrypt(key, encryptedData []byte) ([]byte, error) {
+func (e *AESEncryptor) Decrypt(key, encryptedData []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

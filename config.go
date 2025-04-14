@@ -5,6 +5,7 @@ import (
 
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
+	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/websocket"
 )
 
@@ -26,7 +27,8 @@ type Config struct {
 	CompressMinSize               int                     // The minimum size of a message before attempting to compress it
 	WebsocketProvider             websocket.Provider      // The provider to use for WebSocket connections
 	AllowInsecureWebsockets       bool                    // Whether to allow insecure WebSocket connections (ws://)
-	SocketTransportEnabled        bool                    // Whether to use the socket transport layer
+	SocketTransportEnabled        bool                    // Whether to use the socket transport layer (TCP/UDP)
+	Crypter                       encryption.Crypter      // The crypter to use for encrypting and decrypting messages
 	ApplicationVersionCheck       ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
 	GossipInterval                time.Duration           // How often to send gossip messages
 	GossipMaxInterval             time.Duration           // Maximum interval between gossip messages

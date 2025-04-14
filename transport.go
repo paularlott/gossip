@@ -305,7 +305,7 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 	// If encryption is enabled, encrypt just the payload portion
 	payloadBytes := payloadBuf.Bytes()
 	if isEncrypted {
-		payloadBytes, err = encrypt([]byte(t.config.EncryptionKey), payloadBytes)
+		payloadBytes, err = t.config.Crypter.Encrypt([]byte(t.config.EncryptionKey), payloadBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +347,7 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 			return nil, fmt.Errorf("received encrypted packet but no encryption key configured")
 		}
 
-		encryptedPortion, err = decrypt([]byte(t.config.EncryptionKey), encryptedPortion)
+		encryptedPortion, err = t.config.Crypter.Decrypt([]byte(t.config.EncryptionKey), encryptedPortion)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt packet: %w", err)
 		}
