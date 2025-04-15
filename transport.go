@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -122,7 +123,7 @@ func (t *transport) PacketChannel() chan *Packet {
 }
 
 func isNetClosedError(err error) bool {
-	return strings.Contains(err.Error(), "use of closed network connection")
+	return errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection")
 }
 
 func (t *transport) packetToQueue(conn net.Conn, ctx context.Context) {
@@ -268,12 +269,6 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 		}
 	}
 
-	// Determine if encryption is needed
-	isEncrypted := t.config.EncryptionKey != ""
-	if isEncrypted {
-		headerSize |= 0x4000 // Bit 14: Encryption flag
-	}
-
 	// Create a buffer to hold the packet data
 	var buf bytes.Buffer
 
@@ -304,8 +299,8 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 
 	// If encryption is enabled, encrypt just the payload portion
 	payloadBytes := payloadBuf.Bytes()
-	if isEncrypted {
-		payloadBytes, err = t.config.Crypter.Encrypt([]byte(t.config.EncryptionKey), payloadBytes)
+	if t.config.Cipher != nil {
+		payloadBytes, err = t.config.Cipher.Encrypt(t.config.EncryptionKey, payloadBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -333,27 +328,19 @@ func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool
 
 	// Extract flags
 	isCompressed := flags&0x8000 != 0
-	isEncrypted := flags&0x4000 != 0
 
 	// Get actual header size (mask out the flag bits)
-	headerSize := flags & 0x3FFF
+	headerSize := flags & 0x7FFF
 
 	// Extract the encrypted portion (header + payload)
 	encryptedPortion := data[2:]
 
 	// If encrypted, decrypt the data
-	if isEncrypted {
-		if t.config.EncryptionKey == "" {
-			return nil, fmt.Errorf("received encrypted packet but no encryption key configured")
-		}
-
-		encryptedPortion, err = t.config.Crypter.Decrypt([]byte(t.config.EncryptionKey), encryptedPortion)
+	if t.config.Cipher != nil {
+		encryptedPortion, err = t.config.Cipher.Decrypt(t.config.EncryptionKey, encryptedPortion)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt packet: %w", err)
 		}
-	} else if t.config.EncryptionKey != "" && !lowLevelTransportIsSecure {
-		// Log warning but continue processing, websockets will use TLS so we don't encrypt the packet even if encryption is used for TCP/UDP
-		t.config.Logger.Warnf("Received unencrypted packet but encryption is configured")
 	}
 
 	// Make sure we have enough data after decryption

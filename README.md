@@ -53,6 +53,7 @@ func main() {
   config.NodeID = "01960f9b-72ca-7a51-9efa-47c12f42a138"       // Optional: auto-generated if not specified
   config.BindAddr = "127.0.0.1:8000"                           // Listen on TCP and UDP
   config.EncryptionKey = "your-32-byte-key"                    // Optional: enables encryption
+	config.Cipher = encryption.NewAESEncryptor()                 // Encryption algorithm
   config.MsgCodec = codec.NewShamatonMsgpackCodec()            // Message serialization
   config.Compressor = compression.NewSnappyCompressor()        // Optional: enables compression
 
@@ -114,6 +115,7 @@ config.AdvertiseAddr = "192.168.1.1:3500"      // Address to advertise to peers 
 
 // Communication
 config.EncryptionKey = "your-32-byte-key"              // Optional: enables encryption
+config.Cipher = encryption.NewAESEncryptor()           // Encryption algorithm
 config.Compressor = compression.NewSnappyCompressor()  // Enable payload compression using the provided compressor
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
 

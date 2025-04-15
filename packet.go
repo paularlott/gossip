@@ -30,9 +30,9 @@ const (
 	suspicionMsg                           // Sent to announce a node is suspected to be dead
 	leavingMsg                             // Sent to announce a node is leaving
 	metadataUpdateMsg                      // Update the metadata of a node
+	streamOpenAckMsg                       // Acknowledgement of a stream open
 	_                                      // skip to 128
-	dataBlockMsg        MessageType = 128  // A message containing a data block
-	UserMsg                                // User messages start here
+	UserMsg             MessageType = 128  // User messages start here
 )
 
 var (

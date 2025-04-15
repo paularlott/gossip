@@ -1,9 +1,11 @@
 package gossip
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 )
 
 type Handler func(*Node, *Packet) error
@@ -27,6 +29,20 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 		// Start stream handlers in their own go routine as they could run for a while
 		go func() {
 			defer packet.Release()
+
+			// Ack the stream creation
+			err := packet.conn.SetWriteDeadline(time.Now().Add(c.config.TCPDeadline))
+			if err != nil {
+				return
+			}
+
+			err = binary.Write(packet.conn, binary.BigEndian, uint16(streamOpenAckMsg))
+			if err != nil {
+				return
+			}
+
+			// Upgrade the connection to a stream and call the stream handler
+			packet.conn, err = c.wrapStream(packet.conn)
 			mh.streamHandler(node, packet, packet.conn)
 		}()
 		return nil

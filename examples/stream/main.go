@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,10 +25,11 @@ import (
 
 const (
 	// Define a custom message type for user messages
-	GossipMsg gossip.MessageType = gossip.UserMsg + iota // User message
+	StartStreamMsg gossip.MessageType = gossip.UserMsg + iota // User message
+	StreamDataBlock
 )
 
-type GossipMessage struct {
+type StreamStartMessage struct {
 	Content string `msgpack:"content" json:"content"`
 }
 
@@ -65,6 +67,7 @@ func main() {
 	config.Logger = common.NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
+	config.Cipher = encryption.NewAESEncryptor()
 
 	if *port == 0 {
 		config.SocketTransportEnabled = false
@@ -87,14 +90,26 @@ func main() {
 	defer cluster.Shutdown()
 
 	// Register a handler for the gossip message
-	cluster.HandleFunc(GossipMsg, func(sender *gossip.Node, packet *gossip.Packet) error {
-		var msg GossipMessage
+	cluster.HandleStreamFunc(StartStreamMsg, func(sender *gossip.Node, packet *gossip.Packet, conn net.Conn) {
+		var msg StreamStartMessage
 		if err := packet.Unmarshal(&msg); err != nil {
-			return err
+			return
 		}
 
 		fmt.Printf("Received message from %s: %s\n", sender.ID, msg.Content)
-		return nil
+
+		var d string
+		err := cluster.ReadStreamMsg(conn, StreamDataBlock, &d)
+		if err != nil {
+			fmt.Println("Error reading from connection:", err)
+			return
+		}
+		fmt.Printf("Received message: %s\n", d)
+
+		msgStr := fmt.Sprintf("Pong: %s", d)
+		cluster.WriteStreamMsg(conn, StreamDataBlock, &msgStr)
+
+		// Note: conn is closed automatically when the function returns
 	})
 
 	// Join the cluster
@@ -105,16 +120,41 @@ func main() {
 
 	// Handle CLI input
 	common.Commands = append(common.Commands, common.Command{
-		Cmd:      "gossip",
-		HelpText: "gossip <message>         - Send a message to the cluster",
+		Cmd:      "stream",
+		HelpText: "stream <nodeid> <message>         - Send a message to the cluster",
 		Handler: func(c *gossip.Cluster, args []string) {
-			if len(args) < 2 {
-				fmt.Println("Usage: gossip <message>")
+			if len(args) < 3 {
+				fmt.Println("Usage: stream <nodeid> <message>")
 				return
 			}
 
-			msg := GossipMessage{Content: strings.Join(args[1:], " ")}
-			cluster.Send(GossipMsg, &msg)
+			dstNode := cluster.GetNodeByIDString(args[1])
+			if dstNode == nil {
+				fmt.Println("Error: Node not found")
+				return
+			}
+
+			msg := StreamStartMessage{Content: "Example Stream Start Message"}
+			conn, err := cluster.OpenStream(dstNode, StartStreamMsg, &msg)
+			if err != nil {
+				fmt.Println("Failed to open stream:", err)
+				return
+			}
+			defer conn.Close()
+
+			err = cluster.WriteStreamMsg(conn, StreamDataBlock, strings.Join(args[2:], " "))
+			if err != nil {
+				fmt.Println("Error writing to stream:", err)
+				return
+			}
+
+			var d string
+			err = cluster.ReadStreamMsg(conn, StreamDataBlock, &d)
+			if err != nil {
+				fmt.Println("Error reading from connection:", err)
+				return
+			}
+			fmt.Printf("Cmd Received message: %s\n", d)
 		},
 	})
 	go common.HandleCLIInput(cluster)

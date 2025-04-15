@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/paularlott/gossip/encryption"
-
 	"github.com/google/uuid"
 )
 
@@ -121,9 +119,8 @@ func NewCluster(config *Config) (*Cluster, error) {
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
 
-	if cluster.config.EncryptionKey != "" && cluster.config.Crypter == nil {
-		// Create a new AES encryptor
-		cluster.config.Crypter = encryption.NewAESEncryptor()
+	if len(cluster.config.EncryptionKey) == 0 && cluster.config.Cipher != nil {
+		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
 	}
 
 	// Resolve the local node's address
@@ -716,6 +713,14 @@ func (c *Cluster) GetAllNodes() []*Node {
 
 func (c *Cluster) GetNodeByID(id NodeID) *Node {
 	return c.nodes.get(id)
+}
+
+func (c *Cluster) GetNodeByIDString(id string) *Node {
+	nodeID, err := uuid.Parse(id)
+	if err != nil {
+		return nil
+	}
+	return c.nodes.get(NodeID(nodeID))
 }
 
 func (c *Cluster) NumNodes() int {

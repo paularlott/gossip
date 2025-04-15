@@ -8,63 +8,70 @@ import (
 	"io"
 )
 
+// AESEncryptor implements AES encryption/decryption
 type AESEncryptor struct{}
 
 func NewAESEncryptor() *AESEncryptor {
 	return &AESEncryptor{}
 }
 
-// Encrypt encrypts data using the provided key.
-// The key must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
-// Returns the encrypted data with the nonce prepended.
-func (e *AESEncryptor) Encrypt(key, data []byte) ([]byte, error) {
+// Encrypt encrypts data using AES-GCM with a random nonce
+func (e *AESEncryptor) Encrypt(key []byte, data []byte) ([]byte, error) {
+	// Create cipher block
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
 
-	// GCM mode provides authenticated encryption
-	aesGCM, err := cipher.NewGCM(block)
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create a nonce (Number used ONCE)
-	nonce := make([]byte, aesGCM.NonceSize())
+	// Create nonce
+	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
 	}
 
-	// Encrypt the data
-	ciphertext := aesGCM.Seal(nonce, nonce, data, nil)
-	return ciphertext, nil
+	// Seal will encrypt and authenticate the data
+	ciphertext := gcm.Seal(nil, nonce, data, nil)
+
+	// Prepend nonce to the ciphertext
+	result := make([]byte, len(nonce)+len(ciphertext))
+	copy(result, nonce)
+	copy(result[len(nonce):], ciphertext)
+
+	return result, nil
 }
 
-// Decrypt decrypts data using the provided key.
-// The input data should be the encrypted data with the nonce prepended (output from Encrypt).
-func (e *AESEncryptor) Decrypt(key, encryptedData []byte) ([]byte, error) {
+// Decrypt decrypts data using AES-GCM
+func (e *AESEncryptor) Decrypt(key []byte, data []byte) ([]byte, error) {
+	// Create cipher block
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
 
-	// GCM mode provides authenticated encryption
-	aesGCM, err := cipher.NewGCM(block)
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get the nonce size
-	nonceSize := aesGCM.NonceSize()
-
-	// Validate input length
-	if len(encryptedData) < nonceSize {
-		return nil, errors.New("encrypted data too short")
+	// Ensure data is long enough to contain nonce and ciphertext
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, errors.New("ciphertext too short")
 	}
 
 	// Extract nonce and ciphertext
-	nonce, ciphertext := encryptedData[:nonceSize], encryptedData[nonceSize:]
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 
-	// Decrypt the data
-	return aesGCM.Open(nil, nonce, ciphertext, nil)
+	// Decrypt and authenticate
+	return gcm.Open(nil, nonce, ciphertext, nil)
 }
+
+// Ensure AESEncryptor implements the Cipher interface
+var _ Cipher = (*AESEncryptor)(nil)

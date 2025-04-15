@@ -14,6 +14,7 @@ import (
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
+	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/examples/common"
 	"github.com/paularlott/gossip/websocket"
 
@@ -50,7 +51,8 @@ func main() {
 	config.NodeID = *nodeID
 	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	config.AdvertiseAddr = advertiseAddr
-	config.EncryptionKey = "1234567890123456"
+	config.EncryptionKey = []byte("1234567890123456")
+	config.Cipher = encryption.NewAESEncryptor()
 	config.Logger = common.NewZerologLogger(log.Logger)
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()

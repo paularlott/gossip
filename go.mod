@@ -11,6 +11,7 @@ require (
 	github.com/rs/zerolog v1.34.0
 	github.com/shamaton/msgpack/v2 v2.2.3
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	golang.org/x/crypto v0.37.0
 )
 
 require (
