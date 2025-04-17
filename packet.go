@@ -31,6 +31,7 @@ const (
 	leavingMsg                             // Sent to announce a node is leaving
 	metadataUpdateMsg                      // Update the metadata of a node
 	streamOpenAckMsg                       // Acknowledgement of a stream open
+	ReservedMsgsStart   MessageType = 64   // Reserved for future use
 	_                                      // skip to 128
 	UserMsg             MessageType = 128  // User messages start here
 )

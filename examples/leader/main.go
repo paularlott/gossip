@@ -30,7 +30,12 @@ func main() {
 	webPort := flag.Int("web-port", 0, "Web port")
 	peersArg := flag.String("peers", "", "Comma separated list of peers to connect to, e.g. 127.0.0.1:8001,127.0.0.1:8002")
 	nodeID := flag.String("node-id", "", "Node ID to use (optional, will be generated if not provided)")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
+
+	if *debug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
 
 	// Parse peers
 	var peers []string
@@ -65,37 +70,70 @@ func main() {
 		config.AllowInsecureWebsockets = true
 	}
 
-	config.ApplicationVersion = "0.0.1"
-	config.ApplicationVersionCheck = func(version string) bool {
-		fmt.Println("Checking application version:", version)
-		return true
-	}
-
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
 	cluster.Start()
-	defer cluster.Stop()
-
-	// Register event listeners
-	cluster.HandleNodeStateChangeFunc(func(node *gossip.Node, prevState gossip.NodeState) {
-		log.Info().Msgf("Node %s state changed from %s to %s", node.ID, prevState.String(), node.GetState().String())
-	})
-	cluster.HandleNodeMetadataChangeFunc(func(node *gossip.Node) {
-		log.Info().Msgf("Node %s metadata changed", node.ID)
-	})
+	//	defer cluster.Stop()
 
 	// Set some metadata for the local node
 	cluster.LocalMetadata().
-		SetString("dc", "development").
-		SetInt32("intValue", 42)
+		SetString("dc", "development")
 
 	// Join the cluster
 	err = cluster.Join(peers)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to join cluster")
 	}
+
+	// Initialize leader election
+	election := NewLeaderElection(cluster, DefaultConfig())
+
+	election.HandleEventFunc(BecameLeaderEvent, func(let LeaderEventType, ni gossip.NodeID) {
+		log.Warn().Str("nodeID", ni.String()).Msg("Event: Became leader")
+	})
+	election.HandleEventFunc(LeaderLostEvent, func(let LeaderEventType, ni gossip.NodeID) {
+		log.Warn().Str("nodeID", ni.String()).Msg("Event: Lost leader")
+	})
+	election.HandleEventFunc(LeaderElectedEvent, func(let LeaderEventType, ni gossip.NodeID) {
+		log.Warn().Str("nodeID", ni.String()).Msg("Event: Leader elected")
+	})
+	election.HandleEventFunc(SteppedDownEvent, func(let LeaderEventType, ni gossip.NodeID) {
+		log.Warn().Str("nodeID", ni.String()).Msg("Event: Stepped down from leader")
+	})
+
+	// Start leader election
+	election.Start()
+	defer election.Stop()
+
+	// Periodically output the leadership status
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Add leader info if we're the leader
+				if election.IsLeader() {
+					//meta.SetString("status", "leader")
+					log.Info().
+						Msg("I am the leader")
+				} else if election.HasLeader() {
+					leaderID := election.GetLeaderID()
+					if leaderNode := cluster.GetNode(leaderID); leaderNode != nil {
+						log.Info().
+							Str("leaderId", leaderID.String()).
+							Msg("Current leader")
+					}
+				}
+
+			case <-election.ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Handle CLI input
 	go common.HandleCLIInput(cluster)

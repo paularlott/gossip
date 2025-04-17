@@ -87,7 +87,8 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
-	defer cluster.Shutdown()
+	cluster.Start()
+	defer cluster.Stop()
 
 	// Register a handler for the gossip message
 	cluster.HandleStreamFunc(StartStreamMsg, func(sender *gossip.Node, packet *gossip.Packet, conn net.Conn) {

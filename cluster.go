@@ -168,36 +168,38 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cluster.config.Compressor = nil
 	}
 
-	// Start the send workers
-	for range config.NumSendWorkers {
-		cluster.shutdownWg.Add(1)
-		go cluster.broadcastWorker()
-	}
-
-	// Start the incoming workers
-	for range config.NumIncomingWorkers {
-		cluster.shutdownWg.Add(1)
-		go cluster.acceptPackets()
-	}
-
-	// Start the health monitor
-	cluster.healthMonitor = newHealthMonitor(cluster)
-
-	// Register the system message handlers
-	cluster.registerSystemHandlers()
-
-	// Start periodic state synchronization
-	cluster.periodicStateSync()
-
-	// Start the gossip notification manager
-	cluster.gossipManager()
-
-	cluster.config.Logger.Infof("Gossip cluster started, local node ID: %s", u.String())
-
 	return cluster, nil
 }
 
-func (c *Cluster) Shutdown() {
+func (c *Cluster) Start() {
+	// Start the send workers
+	for range c.config.NumSendWorkers {
+		c.shutdownWg.Add(1)
+		go c.broadcastWorker()
+	}
+
+	// Start the incoming workers
+	for range c.config.NumIncomingWorkers {
+		c.shutdownWg.Add(1)
+		go c.acceptPackets()
+	}
+
+	// Start the health monitor
+	c.healthMonitor = newHealthMonitor(c)
+
+	// Register the system message handlers
+	c.registerSystemHandlers()
+
+	// Start periodic state synchronization
+	c.periodicStateSync()
+
+	// Start the gossip notification manager
+	c.gossipManager()
+
+	c.config.Logger.Infof("Gossip cluster started, local node ID: %s", c.localNode.ID.String())
+}
+
+func (c *Cluster) Stop() {
 	if c.localNode.state != NodeLeaving {
 		c.Leave()
 	}
@@ -698,7 +700,7 @@ func (c *Cluster) periodicStateSync() {
 	}()
 }
 
-func (c *Cluster) GetLocalNode() *Node {
+func (c *Cluster) LocalNode() *Node {
 	return c.localNode
 }
 
@@ -707,11 +709,15 @@ func (c *Cluster) LocalMetadata() *Metadata {
 	return c.localNode.metadata
 }
 
-func (c *Cluster) GetAllNodes() []*Node {
+func (c *Cluster) Nodes() []*Node {
 	return c.nodes.getAll()
 }
 
-func (c *Cluster) GetNodeByID(id NodeID) *Node {
+func (c *Cluster) AliveNodes() []*Node {
+	return c.nodes.getAllInStates([]NodeState{NodeAlive})
+}
+
+func (c *Cluster) GetNode(id NodeID) *Node {
 	return c.nodes.get(id)
 }
 
@@ -749,7 +755,7 @@ func (c *Cluster) NumDeadNodes() int {
 
 // Registers a handler to accept a message and automatically forward it to other nodes
 func (c *Cluster) HandleFunc(msgType MessageType, handler Handler) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	c.handlers.registerHandler(msgType, true, handler)
@@ -758,7 +764,7 @@ func (c *Cluster) HandleFunc(msgType MessageType, handler Handler) error {
 
 // Registers a handler to accept a message without automatically forwarding it to other nodes
 func (c *Cluster) HandleFuncNoForward(msgType MessageType, handler Handler) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	c.handlers.registerHandler(msgType, false, handler)
@@ -767,7 +773,7 @@ func (c *Cluster) HandleFuncNoForward(msgType MessageType, handler Handler) erro
 
 // Registers a handler to accept a message and reply to the sender, always uses the reliable transport
 func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHandler) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	c.handlers.registerHandlerWithReply(msgType, replyHandler)
@@ -776,7 +782,7 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 
 // Registers a handler to accept a message and open a stream between sender and destination, always uses the reliable transport
 func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	c.handlers.registerStreamHandler(msgType, handler)
@@ -888,4 +894,8 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		c.gossipTicker.Reset(c.gossipInterval)
 		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("Gossip interval decreased")
 	}
+}
+
+func (c *Cluster) Logger() Logger {
+	return c.config.Logger
 }

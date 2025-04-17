@@ -21,7 +21,7 @@ type Command struct {
 var Commands = []Command{}
 
 func HandleCLIInput(c *gossip.Cluster) {
-	fmt.Printf("Cluster started local node ID %s\n\n", c.GetLocalNode().ID.String())
+	fmt.Printf("Cluster started local node ID %s\n\n", c.LocalNode().ID.String())
 	fmt.Println("Enter 'help' to show available commands. Press Ctrl+C to exit.")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -61,7 +61,7 @@ func HandleCLIInput(c *gossip.Cluster) {
 			handleShowmetaCommand(c, args)
 
 		case "whoami":
-			fmt.Printf("Local node ID: %s (%s)\n", c.GetLocalNode().ID.String(), c.GetLocalNode().GetAddress().String())
+			fmt.Printf("Local node ID: %s (%s)\n", c.LocalNode().ID.String(), c.LocalNode().GetAddress().String())
 
 		case "":
 			// Do nothing for empty input
@@ -118,7 +118,7 @@ func parseCommand(input string) []string {
 
 // handlePeersCommand displays all peers in the cluster
 func handlePeersCommand(c *gossip.Cluster) {
-	peers := c.GetAllNodes()
+	peers := c.Nodes()
 	if len(peers) == 0 {
 		fmt.Println("No peers in the cluster")
 		return
@@ -151,7 +151,7 @@ func handleSetmetaCommand(c *gossip.Cluster, args []string) {
 	c.LocalMetadata().SetString(key, value)
 	fmt.Printf("Metadata set: %s = %s\n", key, value)
 
-	c.SendMetadataUpdate()
+	c.UpdateMetadata()
 }
 
 func handleGetmetaCommand(c *gossip.Cluster, args []string) {
@@ -168,7 +168,7 @@ func handleGetmetaCommand(c *gossip.Cluster, args []string) {
 	nodeID := gossip.NodeID(u)
 	key := args[2]
 
-	node := c.GetNodeByID(nodeID)
+	node := c.GetNode(nodeID)
 	if node == nil {
 		fmt.Printf("Node %s not found\n", nodeID)
 		return
@@ -194,7 +194,7 @@ func handleShowmetaCommand(c *gossip.Cluster, args []string) {
 	}
 
 	nodeID := gossip.NodeID(u)
-	node := c.GetNodeByID(nodeID)
+	node := c.GetNode(nodeID)
 	if node == nil {
 		fmt.Printf("Node %s not found\n", nodeID)
 		return

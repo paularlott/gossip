@@ -88,14 +88,14 @@ func (c *Cluster) sendMessage(transportType TransportType, msgType MessageType, 
 }
 
 func (c *Cluster) Send(msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	return c.sendMessage(TransportBestEffort, msgType, data)
 }
 
 func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	return c.sendMessage(TransportReliable, msgType, data)
@@ -113,14 +113,14 @@ func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, ttl 
 }
 
 func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	return c.sendMessageTo(TransportBestEffort, dstNode, c.getMaxTTL(), msgType, data)
 }
 
 func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 	return c.sendMessageTo(TransportReliable, dstNode, c.getMaxTTL(), msgType, data)
@@ -170,7 +170,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 // Send a message to the peer then accept a response message.
 // Uses a TCP connection to send the packet and receive the response.
 func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
-	if msgType < UserMsg || responseMsgType < UserMsg {
+	if msgType < ReservedMsgsStart || responseMsgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 
@@ -178,7 +178,7 @@ func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload
 }
 
 // Send a metadata update to the cluster.
-func (c *Cluster) SendMetadataUpdate() error {
+func (c *Cluster) UpdateMetadata() error {
 	updateMsg := &metadataUpdateMessage{
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
@@ -195,7 +195,7 @@ func (c *Cluster) SendMetadataUpdate() error {
 }
 
 func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interface{}) (net.Conn, error) {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return nil, fmt.Errorf("invalid message type")
 	}
 
@@ -238,7 +238,7 @@ func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interfa
 // WriteStreamMsg writes a message directly to the stream with a simple framing protocol:
 // [2 bytes MessageType][4 bytes payload length][payload bytes]
 func (c *Cluster) WriteStreamMsg(conn net.Conn, msgType MessageType, payload interface{}) error {
-	if msgType < UserMsg {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type for stream message: %d", msgType)
 	}
 

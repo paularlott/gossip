@@ -62,7 +62,8 @@ func main() {
   if err != nil {
     panic(err)
   }
-  defer cluster.Shutdown()
+	cluster.Start()
+	defer cluster.Stop()
 
   // Join existing cluster (if any)
   err = cluster.Join([]string{"127.0.0.1:8001"})

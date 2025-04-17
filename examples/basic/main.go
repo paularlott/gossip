@@ -75,7 +75,8 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
-	defer cluster.Shutdown()
+	cluster.Start()
+	defer cluster.Stop()
 
 	// Join the cluster
 	err = cluster.Join(peers)
