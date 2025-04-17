@@ -199,6 +199,18 @@ func (le *LeaderElection) HasLeader() bool {
 		return false
 	}
 
+	// Check quorum based on currently alive nodes
+	requiredQuorum := le.calculateQuorum()
+	numAlive := le.cluster.NumAliveNodes()
+	if numAlive < requiredQuorum {
+		// Log loss of quorum if desired
+		le.cluster.Logger().
+			Field("aliveNodes", numAlive).
+			Field("requiredQuorum", requiredQuorum).
+			Warnf("Quorum lost")
+		return false // Not enough nodes for quorum
+	}
+
 	// If the last heartbeat is too old, the leader is not valid anymore
 	if time.Since(le.lastHeartbeat) > le.config.LeaderTimeout {
 		return false
@@ -213,15 +225,35 @@ func (le *LeaderElection) HasLeader() bool {
 	return true
 }
 
-// electLeader chooses a new leader from the alive nodes
+// electLeader chooses a new leader from the alive nodes if quorum is met
 func (le *LeaderElection) electLeader() {
-	// Get all alive nodes
+	// Check for quorum first
+	requiredQuorum := le.calculateQuorum()
 	aliveNodes := le.cluster.AliveNodes()
-	if len(aliveNodes) == 0 {
-		// No alive nodes, can't elect a leader
+	numAlive := len(aliveNodes)
+
+	if numAlive < requiredQuorum {
+		le.cluster.Logger().
+			Field("aliveNodes", numAlive).
+			Field("requiredQuorum", requiredQuorum).
+			Debugf("Quorum not met, cannot elect leader")
+
+		// Optional: If we previously had a leader but lost quorum, clear the leader state.
+		le.lock.Lock()
+		if le.hasLeader {
+			le.cluster.Logger().Warnf("Lost leader %s due to lack of quorum", le.leaderID)
+			if le.isLeader {
+				le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
+			}
+			le.eventHandlers.dispatch(LeaderLostEvent, le.leaderID)
+			le.hasLeader = false
+			le.isLeader = false
+		}
+		le.lock.Unlock()
 		return
 	}
 
+	// Quorum met, proceed with election
 	// Simple leader election strategy: use the node with the "lowest" ID
 	var candidateNode *gossip.Node
 	for _, node := range aliveNodes {
@@ -229,19 +261,24 @@ func (le *LeaderElection) electLeader() {
 			candidateNode = node
 		}
 	}
+	if candidateNode == nil {
+		le.cluster.Logger().Errorf("No candidate node found despite meeting quorum")
+		return
+	}
 
 	localNode := le.cluster.LocalNode()
 
 	le.lock.Lock()
 	wasLeader := le.isLeader
+	prevLeaderID := le.leaderID
+	hadLeader := le.hasLeader
 
-	if !le.hasLeader {
-		le.currentTerm++
-	}
+	le.currentTerm++
 
 	le.leaderID = candidateNode.ID
 	le.hasLeader = true
 	le.lastHeartbeat = time.Now()
+	le.leaderTime = le.lastHeartbeat
 	le.isLeader = (candidateNode.ID == localNode.ID)
 	le.lock.Unlock()
 
@@ -249,18 +286,26 @@ func (le *LeaderElection) electLeader() {
 		Field("leaderId", candidateNode.ID.String()).
 		Field("term", le.currentTerm).
 		Field("isLocal", le.isLeader).
-		Debugf("New leader elected")
+		Debugf("New leader elected (quorum: %d/%d)", numAlive, requiredQuorum)
 
-	if !wasLeader && le.isLeader {
-		le.eventHandlers.dispatch(BecameLeaderEvent, localNode.ID)
-	} else if wasLeader && !le.isLeader {
+	// Dispatch events based on state changes
+	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
+	becameLeader := !wasLeader && le.isLeader
+	steppedDown := wasLeader && !le.isLeader
+
+	if steppedDown {
 		le.eventHandlers.dispatch(SteppedDownEvent, localNode.ID)
-		le.eventHandlers.dispatch(LeaderElectedEvent, candidateNode.ID)
-	} else {
+	}
+	if becameLeader {
+		le.eventHandlers.dispatch(BecameLeaderEvent, localNode.ID)
+	}
+
+	// Dispatch LeaderElectedEvent if the leader actually changed or if we didn't have one before
+	if leaderChanged {
 		le.eventHandlers.dispatch(LeaderElectedEvent, candidateNode.ID)
 	}
 
-	// If we're the leader, announce ourselves
+	// If we're the leader, announce ourselves immediately
 	if le.isLeader {
 		le.sendLeaderHeartbeat()
 	}
@@ -301,6 +346,7 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	}
 
 	le.lock.Lock()
+	defer le.lock.Unlock() // Use defer for cleaner exit paths
 
 	// Priority order for deciding leadership:
 	// 1. Higher term always wins
@@ -308,38 +354,82 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	//    a. If we have no leader, accept this one
 	//    b. If timestamp is newer, accept this one
 	//    c. If timestamps are equal, use lexicographical node ID as tiebreaker
-	if msg.Term > le.currentTerm ||
-		(msg.Term == le.currentTerm && (!le.hasLeader ||
-			msg.LeaderTime.After(le.leaderTime) ||
-			(msg.LeaderTime.Equal(le.leaderTime) && sender.ID.String() < le.leaderID.String()))) {
+	acceptHeartbeat := false
+	if msg.Term > le.currentTerm {
+		acceptHeartbeat = true
+		le.cluster.Logger().
+			Field("senderId", sender.ID.String()).
+			Field("senderTerm", msg.Term).
+			Field("currentTerm", le.currentTerm).
+			Debugf("Accepting heartbeat due to higher term")
+	} else if msg.Term == le.currentTerm {
+		if !le.hasLeader {
+			acceptHeartbeat = true
+			le.cluster.Logger().
+				Field("senderId", sender.ID.String()).
+				Field("term", msg.Term).
+				Debugf("Accepting heartbeat as we have no current leader")
+		} else if msg.LeaderTime.After(le.leaderTime) {
+			acceptHeartbeat = true
+		} else if msg.LeaderTime.Equal(le.leaderTime) && sender.ID.String() < le.leaderID.String() {
+			acceptHeartbeat = true
+			le.cluster.Logger().
+				Field("senderId", sender.ID.String()).
+				Field("leaderId", le.leaderID.String()).
+				Field("term", msg.Term).
+				Debugf("Accepting heartbeat due to tie-breaker (lower ID)")
+		}
+	}
 
+	if acceptHeartbeat {
 		wasLeader := le.isLeader
 		prevLeaderID := le.leaderID
+		hadLeader := le.hasLeader
+
 		le.leaderID = sender.ID
 		le.hasLeader = true
 		le.leaderTime = msg.LeaderTime
-		le.lastHeartbeat = time.Now()
+		le.lastHeartbeat = time.Now() // Update last heartbeat time based on receipt time
 		le.currentTerm = msg.Term
 		le.isLeader = (sender.ID == le.cluster.LocalNode().ID)
 
-		if wasLeader && !le.isLeader {
-			le.cluster.Logger().Debugf("Stepping down as leader")
+		leaderChanged := !hadLeader || prevLeaderID != sender.ID
+		becameLeader := !wasLeader && le.isLeader
+		steppedDown := wasLeader && !le.isLeader
+
+		// Log state changes and dispatch events
+		if steppedDown {
+			le.cluster.Logger().Debugf("Stepping down as leader due to heartbeat from %s", sender.ID)
 			le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
-			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
-		} else if !wasLeader && le.isLeader {
-			le.cluster.Logger().Debugf("Taking leadership")
+		}
+		if becameLeader {
+			le.cluster.Logger().Warnf("Became leader unexpectedly via heartbeat from self?")
 			le.eventHandlers.dispatch(BecameLeaderEvent, le.cluster.LocalNode().ID)
-		} else if prevLeaderID != sender.ID {
+		}
+
+		if leaderChanged {
 			le.cluster.Logger().
 				Field("leaderId", sender.ID.String()).
 				Field("term", le.currentTerm).
-				Debugf("Leader detected")
+				Debugf("Leader updated via heartbeat")
 			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
+		} else if le.leaderID == sender.ID {
+			le.cluster.Logger().
+				Field("senderId", sender.ID.String()).
+				Debugf("Heartbeat refresh from leader")
 		}
 
+	} else {
+		// Log why the heartbeat was ignored
+		le.cluster.Logger().
+			Field("senderId", sender.ID.String()).
+			Field("senderTerm", msg.Term).
+			Field("currentTerm", le.currentTerm).
+			Field("senderTime", msg.LeaderTime).
+			Field("leaderTime", le.leaderTime).
+			Field("leaderId", le.leaderID).
+			Debugf("Ignoring stale or lower priority heartbeat")
 	}
-
-	le.lock.Unlock()
 
 	return nil
 }
@@ -354,22 +444,43 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 
 	le.lock.RLock()
 	isCurrentLeader := le.hasLeader && (node.ID == le.leaderID)
-	leaderID := le.leaderID
+	currentLeaderID := le.leaderID
 	le.lock.RUnlock()
 
-	// If the current leader has failed, trigger a new election
+	// If the current leader has failed...
 	if isCurrentLeader && node.GetState() != gossip.NodeAlive {
 		le.cluster.Logger().
 			Field("leaderId", node.ID.String()).
 			Field("currentTerm", le.currentTerm).
-			Debugf("Leader node is down, will elect new leader")
+			Warnf("Leader node is down, clearing leader state")
 
-		le.eventHandlers.dispatch(LeaderLostEvent, leaderID)
+		le.eventHandlers.dispatch(LeaderLostEvent, currentLeaderID)
 
 		le.lock.Lock()
-		le.hasLeader = false // Clear the leader flag to trigger a new election
+		if le.hasLeader && le.leaderID == node.ID {
+			le.hasLeader = false
+			le.isLeader = false
+		}
 		le.lock.Unlock()
-
-		le.electLeader()
 	}
+}
+
+// calculateQuorum calculates the minimum number of nodes required for quorum.
+func (le *LeaderElection) calculateQuorum() int {
+	// Use NumNodes() which likely represents the total number of known nodes (alive or not).
+	numNodes := le.cluster.NumNodes()
+	if numNodes == 0 {
+		return 0 // Cannot have quorum with zero nodes
+	}
+
+	// Calculate quorum: (total_nodes * percentage + 99) / 100 for ceiling division.
+	requiredQuorum := (numNodes*le.config.QuorumPercentage + 99) / 100
+
+	// Ensure minimum quorum of 1 if percentage is low but nodes exist,
+	// unless percentage is explicitly 0 (which might imply no quorum needed).
+	if requiredQuorum == 0 && le.config.QuorumPercentage > 0 {
+		requiredQuorum = 1
+	}
+
+	return requiredQuorum
 }
