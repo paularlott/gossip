@@ -402,7 +402,7 @@ func (c *Cluster) Join(peers []string) error {
 
 	// Join the cluster by attempting to connect to as many peers as possible
 	for _, peerAddr := range peers {
-		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
+		// c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
 		// Resolve the address
 		addresses, err := c.ResolveAddress(peerAddr)
@@ -426,7 +426,7 @@ func (c *Cluster) Join(peers []string) error {
 			node := newNode(c.localNode.ID, addr)
 			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinReply)
 			if err != nil {
-				c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
+				//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
 				continue
 			}
 

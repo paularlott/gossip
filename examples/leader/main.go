@@ -16,6 +16,7 @@ import (
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/examples/common"
+	"github.com/paularlott/gossip/leader"
 	"github.com/paularlott/gossip/websocket"
 
 	"github.com/rs/zerolog"
@@ -88,18 +89,18 @@ func main() {
 	}
 
 	// Initialize leader election
-	election := NewLeaderElection(cluster, DefaultConfig())
+	election := leader.NewLeaderElection(cluster, leader.DefaultConfig())
 
-	election.HandleEventFunc(BecameLeaderEvent, func(let LeaderEventType, ni gossip.NodeID) {
+	election.HandleEventFunc(leader.BecameLeaderEvent, func(let leader.EventType, ni gossip.NodeID) {
 		log.Warn().Str("nodeID", ni.String()).Msg("Event: Became leader")
 	})
-	election.HandleEventFunc(LeaderLostEvent, func(let LeaderEventType, ni gossip.NodeID) {
+	election.HandleEventFunc(leader.LeaderLostEvent, func(let leader.EventType, ni gossip.NodeID) {
 		log.Warn().Str("nodeID", ni.String()).Msg("Event: Lost leader")
 	})
-	election.HandleEventFunc(LeaderElectedEvent, func(let LeaderEventType, ni gossip.NodeID) {
+	election.HandleEventFunc(leader.LeaderElectedEvent, func(let leader.EventType, ni gossip.NodeID) {
 		log.Warn().Str("nodeID", ni.String()).Msg("Event: Leader elected")
 	})
-	election.HandleEventFunc(SteppedDownEvent, func(let LeaderEventType, ni gossip.NodeID) {
+	election.HandleEventFunc(leader.SteppedDownEvent, func(let leader.EventType, ni gossip.NodeID) {
 		log.Warn().Str("nodeID", ni.String()).Msg("Event: Stepped down from leader")
 	})
 
@@ -128,9 +129,6 @@ func main() {
 							Msg("Current leader")
 					}
 				}
-
-			case <-election.ctx.Done():
-				return
 			}
 		}
 	}()

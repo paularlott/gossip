@@ -1,96 +1,12 @@
-package main
+package leader
 
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/paularlott/gossip"
 )
-
-type Config struct {
-	LeaderCheckInterval  time.Duration      // How often to check if we need to elect a leader
-	LeaderTimeout        time.Duration      // How long a leader is considered valid without updates
-	HeartbeatMessageType gossip.MessageType // Message type for heartbeat messages
-	QuorumPercentage     int                // Percentage of nodes required for quorum (1-100)
-}
-
-func DefaultConfig() *Config {
-	return &Config{
-		LeaderCheckInterval:  1 * time.Second,
-		LeaderTimeout:        3 * time.Second,
-		HeartbeatMessageType: gossip.ReservedMsgsStart + 1,
-		QuorumPercentage:     51,
-	}
-}
-
-type LeaderEventType int
-
-const (
-	LeaderElectedEvent LeaderEventType = iota
-	LeaderLostEvent
-	BecameLeaderEvent
-	SteppedDownEvent
-)
-
-func (le LeaderEventType) String() string {
-	switch le {
-	case LeaderElectedEvent:
-		return "Leader Elected"
-	case LeaderLostEvent:
-		return "Leader Lost"
-	case BecameLeaderEvent:
-		return "Became Leader"
-	case SteppedDownEvent:
-		return "Stepped Down"
-	default:
-		return "Unknown"
-	}
-}
-
-type LeaderEventHandler func(LeaderEventType, gossip.NodeID)
-
-type leaderEventHandlers struct {
-	handlers atomic.Value
-}
-
-func newLeaderEventHandlers() *leaderEventHandlers {
-	handlers := &leaderEventHandlers{}
-	handlers.handlers.Store(make(map[LeaderEventType][]LeaderEventHandler))
-	return handlers
-}
-
-func (h *leaderEventHandlers) add(eventType LeaderEventType, handler LeaderEventHandler) {
-	currentHandlers := h.handlers.Load().(map[LeaderEventType][]LeaderEventHandler)
-
-	// Create a copy of the handlers map
-	newHandlers := make(map[LeaderEventType][]LeaderEventHandler)
-	for t, handlers := range currentHandlers {
-		newHandlers[t] = append([]LeaderEventHandler{}, handlers...)
-	}
-
-	// Add the new handler to the appropriate event type
-	newHandlers[eventType] = append(newHandlers[eventType], handler)
-
-	// Store the updated map
-	h.handlers.Store(newHandlers)
-}
-
-func (h *leaderEventHandlers) dispatch(eventType LeaderEventType, leaderID gossip.NodeID) {
-	handlers := h.handlers.Load().(map[LeaderEventType][]LeaderEventHandler)
-
-	// Get handlers for this event type
-	eventHandlers, ok := handlers[eventType]
-	if !ok || len(eventHandlers) == 0 {
-		return
-	}
-
-	// Call each handler
-	for _, handler := range eventHandlers {
-		go handler(eventType, leaderID)
-	}
-}
 
 type heartbeatMessage struct {
 	LeaderTime time.Time `msgpack:"ts" json:"ts"`
@@ -134,7 +50,7 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	return election
 }
 
-func (le *LeaderElection) HandleEventFunc(eventType LeaderEventType, handler LeaderEventHandler) {
+func (le *LeaderElection) HandleEventFunc(eventType EventType, handler LeaderEventHandler) {
 	le.eventHandlers.add(eventType, handler)
 }
 
@@ -413,13 +329,12 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 				Field("term", le.currentTerm).
 				Debugf("Leader updated via heartbeat")
 			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
-		} else if le.leaderID == sender.ID {
+		} /*else if le.leaderID == sender.ID {
 			le.cluster.Logger().
 				Field("senderId", sender.ID.String()).
 				Debugf("Heartbeat refresh from leader")
-		}
-
-	} else {
+		}*/
+	} /*else {
 		// Log why the heartbeat was ignored
 		le.cluster.Logger().
 			Field("senderId", sender.ID.String()).
@@ -429,7 +344,7 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 			Field("leaderTime", le.leaderTime).
 			Field("leaderId", le.leaderID).
 			Debugf("Ignoring stale or lower priority heartbeat")
-	}
+	}*/
 
 	return nil
 }
