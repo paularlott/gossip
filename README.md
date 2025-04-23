@@ -172,3 +172,4 @@ The `examples` directory contains various examples demonstrating the library's c
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
 - **[kv](examples/kv)**: Example Key Value store.
 - **[Stream](examples/stream)**: Example using the stream functions to pass data between nodes.
+- **[leader](examples/leader)**: Example demonstrating leader election.

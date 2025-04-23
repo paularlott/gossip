@@ -97,7 +97,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	// Check the protocol version and application version, reject if not compatible
 	accepted := true
-	if joinMsg.ProtocolVersion != c.localNode.ProtocolVersion || (c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
+	if joinMsg.ID == c.localNode.ID || joinMsg.ProtocolVersion != c.localNode.ProtocolVersion || (c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
 		accepted = false
 	} else {
 		// Check add the peer to our list of known peers unless it already exists
@@ -137,7 +137,7 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 	}
 
 	// Check the protocol version and application version, reject if not compatible
-	if joinMsg.ProtocolVersion == c.localNode.ProtocolVersion && (c.config.ApplicationVersionCheck == nil || c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
+	if joinMsg.ID == c.localNode.ID || joinMsg.ProtocolVersion == c.localNode.ProtocolVersion && (c.config.ApplicationVersionCheck == nil || c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
 		node := newNode(joinMsg.ID, joinMsg.Address)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
