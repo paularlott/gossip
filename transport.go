@@ -256,7 +256,7 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 	// If we have a compressor then compress the packet
 	var compressedData []byte
 	isCompressed := false
-	if t.config.Compressor != nil && len(packet.payload) >= t.config.CompressMinSize {
+	if !packet.disableCompression && t.config.Compressor != nil && len(packet.payload) >= t.config.CompressMinSize {
 		compressedData, err = t.config.Compressor.Compress(packet.payload)
 		if err != nil {
 			return nil, err

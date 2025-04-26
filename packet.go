@@ -46,19 +46,21 @@ var (
 
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
-	MessageType MessageType `msgpack:"mt" json:"mt"`
-	SenderID    NodeID      `msgpack:"si" json:"si"`
-	MessageID   MessageID   `msgpack:"mi" json:"mi"`
-	TTL         uint8       `msgpack:"ttl" json:"ttl"`
-	payload     []byte
-	codec       codec.Serializer
-	conn        net.Conn
-	refCount    atomic.Int32
+	MessageType        MessageType `msgpack:"mt" json:"mt"`
+	SenderID           NodeID      `msgpack:"si" json:"si"`
+	MessageID          MessageID   `msgpack:"mi" json:"mi"`
+	TTL                uint8       `msgpack:"ttl" json:"ttl"`
+	payload            []byte
+	codec              codec.Serializer
+	conn               net.Conn
+	refCount           atomic.Int32
+	disableCompression bool
 }
 
 func NewPacket() *Packet {
 	p := packetPool.Get().(*Packet)
 	p.refCount.Add(1)
+	p.disableCompression = false
 	return p
 }
 
@@ -86,6 +88,10 @@ func (p *Packet) Unmarshal(v interface{}) error {
 
 func (p *Packet) Codec() codec.Serializer {
 	return p.codec
+}
+
+func (p *Packet) DisableCompression() {
+	p.disableCompression = true
 }
 
 type joinMessage struct {
