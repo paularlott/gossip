@@ -39,6 +39,8 @@ type Stream struct {
 	// Connection state
 	closed    atomic.Bool // Atomic flag to check closed state without locks
 	closeOnce sync.Once
+
+	disableCompression bool // Flag to disable compression
 }
 
 // NewStream creates a new stream wrapping the given connection
@@ -51,10 +53,11 @@ func NewStream(conn net.Conn, config *Config) net.Conn {
 
 	// Compression or encryption enabled so we're going to need to wrap the connection
 	return &Stream{
-		conn:    conn,
-		config:  config,
-		readBuf: nil,
-		readPos: 0,
+		conn:               conn,
+		config:             config,
+		readBuf:            nil,
+		readPos:            0,
+		disableCompression: false,
 	}
 }
 
@@ -172,7 +175,7 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	var isCompressed bool
 
 	// Try compression if enabled and data meets minimum size threshold
-	if s.config.Compressor != nil && len(b) >= s.config.CompressMinSize {
+	if !s.disableCompression && s.config.Compressor != nil && len(b) >= s.config.CompressMinSize {
 		compressed, err := s.config.Compressor.Compress(b)
 		if err != nil {
 			return 0, fmt.Errorf("failed to compress data: %w", err)
@@ -269,6 +272,16 @@ func (s *Stream) SetReadDeadline(t time.Time) error {
 // SetWriteDeadline sets the write deadline.
 func (s *Stream) SetWriteDeadline(t time.Time) error {
 	return s.conn.SetWriteDeadline(t)
+}
+
+func (s *Stream) EnableCompression() *Stream {
+	s.disableCompression = false
+	return s
+}
+
+func (s *Stream) DisableCompression() *Stream {
+	s.disableCompression = true
+	return s
 }
 
 // Make sure Stream implements net.Conn

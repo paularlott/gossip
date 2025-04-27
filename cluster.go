@@ -899,3 +899,21 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 func (c *Cluster) Logger() Logger {
 	return c.config.Logger
 }
+
+// Checks the connections is of Stream type and enables compression if supported
+// This is a no-op if the connection is not a Stream
+func (c *Cluster) EnableStreamCompression(s net.Conn) *Cluster {
+	if stream, ok := s.(*Stream); ok {
+		stream.EnableCompression()
+	}
+	return c
+}
+
+// Checks the connections is of Stream type and disables compression if supported
+// This is a no-op if the connection is not a Stream
+func (c *Cluster) DisableStreamCompression(s net.Conn) *Cluster {
+	if stream, ok := s.(*Stream); ok {
+		stream.DisableCompression()
+	}
+	return c
+}
