@@ -898,7 +898,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		return
 	}
 
-	hm.config.Logger.Field("state_count", len(remoteStates)).Debugf("Combining remote node states")
+	hm.config.Logger.Field("state_count", len(remoteStates)).Debugf("gossip: Combining remote node states")
 
 	// Process each remote node state
 	for _, remoteState := range remoteStates {
@@ -959,7 +959,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			Field("node", remoteState.ID.String()).
 			Field("local_state", localNode.state.String()).
 			Field("remote_state", remoteState.State.String()).
-			Debugf("Comparing local and remote node state")
+			Debugf("gossip: Comparing local and remote node state")
 
 		// Handle each combination of local/remote states
 		switch {
@@ -973,7 +973,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
-						Debugf("Remote reports node as dead, marking as suspect after ping failure")
+						Debugf("gossip: Remote reports node as dead, marking as suspect after ping failure")
 					hm.cluster.nodes.updateState(localNode.ID, NodeSuspect)
 
 					// Create suspicion tracking and record this confirmation
@@ -995,14 +995,14 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					// Our node is alive, refute the suspicion
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
-						Debugf("Remote reports node as dead, but node is reachable - keeping alive")
+						Debugf("gossip: Remote reports node as dead, but node is reachable - keeping alive")
 					hm.broadcastAlive(localNode)
 				}
 			} else if localNode.state == NodeSuspect {
 				// If we already think it's suspect, record the remote confirmation
 				hm.config.Logger.
 					Field("node", localNode.ID.String()).
-					Debugf("Remote confirms our suspicion of node")
+					Debugf("gossip: Remote confirms our suspicion of node")
 
 				evidenceObj, _ := hm.suspicionMap.LoadOrStore(
 					localNode.ID,
@@ -1034,13 +1034,13 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				if !alive {
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
-						Debugf("Remote reports node as suspect, marking as suspect after ping failure")
+						Debugf("gossip: Remote reports node as suspect, marking as suspect after ping failure")
 					hm.cluster.nodes.updateState(localNode.ID, NodeSuspect)
 				} else {
 					// Node is alive, refute the suspicion
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
-						Debugf("Remote reports node as suspect, but node is reachable - keeping alive")
+						Debugf("gossip: Remote reports node as suspect, but node is reachable - keeping alive")
 					hm.broadcastAlive(localNode)
 				}
 			}
@@ -1057,7 +1057,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					hm.config.Logger.
 						Field("node", localNode.ID.String()).
 						Field("local_state", localNode.state.String()).
-						Debugf("Remote reports node as alive, restored to alive state after ping success")
+						Debugf("gossip: Remote reports node as alive, restored to alive state after ping success")
 					hm.cluster.nodes.updateState(localNode.ID, NodeAlive)
 
 					// Clean up any failure tracking and suspicion evidence
@@ -1067,7 +1067,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					if localNode.state == NodeSuspect {
 						hm.config.Logger.
 							Field("node", localNode.ID.String()).
-							Debugf("Remote reports node as alive but ping failed, recording refutation")
+							Debugf("gossip: Remote reports node as alive but ping failed, recording refutation")
 
 						evidenceObj, _ := hm.suspicionMap.LoadOrStore(
 							localNode.ID,
@@ -1095,7 +1095,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			if localNode.state != NodeLeaving {
 				hm.config.Logger.
 					Field("node", localNode.ID.String()).
-					Debugf("Remote reports node as leaving, updating state")
+					Debugf("gossip: Remote reports node as leaving, updating state")
 				hm.cluster.nodes.updateState(localNode.ID, NodeLeaving)
 
 				// Clean up any failure tracking and suspicion evidence

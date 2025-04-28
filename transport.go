@@ -58,7 +58,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 	}
 
 	if bindAddress.Port == 0 {
-		config.Logger.Infof("Using WebSockets for communication")
+		config.Logger.Infof("gossip: Using WebSockets for communication")
 	} else {
 		config.Logger.
 			Field("bind_addr", bindAddress.IP.String()).
@@ -98,7 +98,7 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		transport.shutdown(wg)
 	}()
 
-	config.Logger.Debugf("Transport started")
+	config.Logger.Debugf("gossip: Transport started")
 
 	return transport, nil
 }
@@ -115,7 +115,7 @@ func (t *transport) shutdown(wg *sync.WaitGroup) {
 
 	close(t.packetChannel)
 
-	t.config.Logger.Debugf("Transport stopped")
+	t.config.Logger.Debugf("gossip: Transport stopped")
 }
 
 func (t *transport) PacketChannel() chan *Packet {
@@ -168,7 +168,7 @@ func (t *transport) WebsocketHandler(ctx context.Context, w http.ResponseWriter,
 
 	wsConn, err := t.wsProvider.Upgrade(w, r)
 	if err != nil {
-		t.config.Logger.Err(err).Errorf("Failed to upgrade to WebSocket")
+		t.config.Logger.Err(err).Errorf("gossip: Failed to upgrade to WebSocket")
 		http.Error(w, "Failed to upgrade to WebSocket", http.StatusInternalServerError)
 		return
 	}

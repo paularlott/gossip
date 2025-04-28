@@ -196,7 +196,7 @@ func (c *Cluster) Start() {
 	// Start the gossip notification manager
 	c.gossipManager()
 
-	c.config.Logger.Infof("Gossip cluster started, local node ID: %s", c.localNode.ID.String())
+	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
 
 func (c *Cluster) Stop() {
@@ -431,7 +431,7 @@ func (c *Cluster) Join(peers []string) error {
 			}
 
 			if !joinReply.Accepted {
-				c.config.Logger.Warnf("Peer %s rejected our join request", peerAddr)
+				c.config.Logger.Warnf("gossip: Peer %s rejected our join request", peerAddr)
 				continue
 			}
 
@@ -444,11 +444,11 @@ func (c *Cluster) Join(peers []string) error {
 			if c.nodes.addIfNotExists(node) {
 				err = c.exchangeState(node, []NodeID{c.localNode.ID})
 				if err != nil {
-					c.config.Logger.Err(err).Warnf("Failed to exchange state with peer %s", peerAddr)
+					c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
 				}
 			}
 
-			c.config.Logger.Debugf("Joined peer: %s (%s)", peerAddr, addr.String())
+			c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
 		}
 	}
 
@@ -462,7 +462,7 @@ func (c *Cluster) Join(peers []string) error {
 
 // MMarks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
-	c.config.Logger.Debugf("Local node is leaving the cluster")
+	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
 	if c.healthMonitor != nil {
 		c.healthMonitor.MarkNodeLeaving(c.localNode)
 	}
@@ -514,11 +514,11 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 
 		err := h.dispatch(c, senderNode, packet)
 		if err != nil {
-			c.config.Logger.Err(err).Warnf("Error dispatching packet: %d", packet.MessageType)
+			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
 		packet.Release()
-		c.config.Logger.Warnf("No handler registered for message type: %d", packet.MessageType)
+		c.config.Logger.Warnf("gossip: No handler registered for message type: %d", packet.MessageType)
 	}
 }
 
@@ -631,7 +631,7 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 		// Successfully queued
 	default:
 		// Queue full, log and skip this message
-		c.config.Logger.Warnf("Broadcast queue is full, skipping message")
+		c.config.Logger.Warnf("gossip: Broadcast queue is full, skipping message")
 	}
 }
 
@@ -645,7 +645,7 @@ func (c *Cluster) broadcastWorker() {
 			// Get the peer subset to send the packet to
 			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getLiveCount()), item.excludePeers)
 			if err := c.transport.SendPacket(item.transportType, peerSubset, item.packet); err != nil {
-				c.config.Logger.Err(err).Debugf("Failed to send packet to peers")
+				c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
 			}
 
 			// Release the broadcast item back to the pool
@@ -686,9 +686,9 @@ func (c *Cluster) periodicStateSync() {
 					go func(p *Node) {
 						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
 						if err != nil {
-							c.config.Logger.Err(err).Field("peer", p.ID.String()).Debugf("Periodic state exchange failed")
+							c.config.Logger.Err(err).Field("peer", p.ID.String()).Debugf("gossip: Periodic state exchange failed")
 						} else {
-							c.config.Logger.Field("peer", p.ID.String()).Debugf("Completed periodic state exchange")
+							c.config.Logger.Field("peer", p.ID.String()).Debugf("gossip: Completed periodic state exchange")
 						}
 					}(peer)
 				}
@@ -879,7 +879,7 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		c.gossipInterval = newInterval
 		c.gossipTicker.Reset(c.gossipInterval)
 
-		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("Gossip interval increased")
+		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("gossip: interval increased")
 	} else if c.gossipInterval > c.config.GossipInterval && duration < time.Duration(float64(c.gossipInterval)*0.8) {
 		// If handlers are fast and we're above original interval, gradually return to base
 
@@ -892,7 +892,7 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		}
 
 		c.gossipTicker.Reset(c.gossipInterval)
-		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("Gossip interval decreased")
+		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("gossip: interval decreased")
 	}
 }
 
