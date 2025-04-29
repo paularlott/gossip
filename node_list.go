@@ -102,7 +102,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		nl.updateCountersForStateChange(oldState, node.state)
 
 		// If old state was leaving or dead, trigger event listener
-		if oldState == NodeLeaving || oldState == NodeDead {
+		if oldState == NodeLeaving || oldState == NodeDead ||
+			(oldState == NodeSuspect && node.state == NodeAlive) {
 			nl.cluster.notifyNodeStateChanged(node, oldState)
 		}
 	} else {

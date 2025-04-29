@@ -595,7 +595,9 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 			Debugf("Received alive message for unknown node, adding to cluster")
 
 		newNode := newNode(msg.NodeID, msg.Address)
-		hm.cluster.nodes.addIfNotExists(newNode)
+		if hm.cluster.nodes.addIfNotExists(newNode) {
+			hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
+		}
 
 		return nil
 	}
@@ -942,8 +944,9 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				newNode.state = remoteState.State
 				newNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true)
 
-				// Add the node to our list
+				// Add the node to our list & notify the state change
 				hm.cluster.nodes.addIfNotExists(newNode)
+				hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
 			}
 
 			// No further processing needed for new nodes
