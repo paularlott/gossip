@@ -218,6 +218,8 @@ func (c *Cluster) Stop() {
 
 	// Wait for all goroutines to finish
 	c.shutdownWg.Wait()
+
+	c.config.Logger.Infof("gossip: Cluster stopped")
 }
 
 // Handler for incoming WebSocket connections when gossiping over web sockets
