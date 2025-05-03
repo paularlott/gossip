@@ -26,6 +26,7 @@ type Config struct {
 	Compressor                    compression.Codec       // The codec to use for compressing and decompressing messages, if not given messages will not be compressed
 	CompressMinSize               int                     // The minimum size of a message before attempting to compress it
 	WebsocketProvider             websocket.Provider      // The provider to use for WebSocket connections
+	BearerToken                   string                  // Bearer token to use for authentication, if not given no authentication will be used
 	AllowInsecureWebsockets       bool                    // Whether to allow insecure WebSocket connections (ws://)
 	SocketTransportEnabled        bool                    // Whether to use the socket transport layer (TCP/UDP)
 	Cipher                        encryption.Cipher       // The cipher to use for encrypting and decrypting messages
@@ -102,5 +103,6 @@ func DefaultConfig() *Config {
 		StateExchangeMultiplier:       0.8,
 		IndirectPingMultiplier:        0.7,
 		TTLMultiplier:                 1.0,
+		BearerToken:                   "",
 	}
 }

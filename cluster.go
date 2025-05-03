@@ -224,6 +224,18 @@ func (c *Cluster) Stop() {
 
 // Handler for incoming WebSocket connections when gossiping over web sockets
 func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
+	if c.config.BearerToken != "" {
+		// Get the auth token
+		var bearer string
+		fmt.Sscanf(r.Header.Get("Authorization"), "Bearer %s", &bearer)
+		if bearer != c.config.BearerToken {
+			c.config.Logger.Debugf("gossip: Invalid bearer token")
+
+			http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	c.transport.WebsocketHandler(c.shutdownContext, w, r)
 }
 
