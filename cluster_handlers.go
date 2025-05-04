@@ -92,7 +92,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	err := packet.Unmarshal(&joinMsg)
 	if err != nil {
-		return nilMsg, nil, err
+		return NilMsg, nil, err
 	}
 
 	// Check the protocol version and application version, reject if not compatible
@@ -151,13 +151,13 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 
 func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType, interface{}, error) {
 	if sender == nil {
-		return nilMsg, nil, fmt.Errorf("unknown sender")
+		return NilMsg, nil, fmt.Errorf("unknown sender")
 	}
 
 	var peerStates []exchangeNodeState
 	err := packet.Unmarshal(&peerStates)
 	if err != nil {
-		return nilMsg, nil, err
+		return NilMsg, nil, err
 	}
 
 	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getTotalCount()), []NodeID{})

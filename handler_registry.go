@@ -57,7 +57,7 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			return err
 		}
 
-		if replyType != nilMsg && c != nil {
+		if replyType != NilMsg && c != nil {
 			replyPacket, err := c.createPacket(c.localNode.ID, replyType, 1, replyData)
 			if err != nil {
 				return err

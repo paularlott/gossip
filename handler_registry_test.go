@@ -127,7 +127,7 @@ func TestRegisterConnHandler(t *testing.T) {
 	handlerCalled := false
 	handler := func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		handlerCalled = true
-		return nilMsg, nil, nil
+		return NilMsg, nil, nil
 	}
 
 	// Register the handler
@@ -178,7 +178,7 @@ func TestDispatchWithNilConnection(t *testing.T) {
 		},
 		replyHandler: func(n *Node, p *Packet) (MessageType, interface{}, error) {
 			connCalled = true
-			return nilMsg, nil, nil
+			return NilMsg, nil, nil
 		},
 	})
 
@@ -218,7 +218,7 @@ func TestDispatchWithConnection(t *testing.T) {
 		},
 		replyHandler: func(n *Node, p *Packet) (MessageType, interface{}, error) {
 			connCalled = true
-			return nilMsg, nil, nil
+			return NilMsg, nil, nil
 		},
 	})
 
@@ -303,7 +303,7 @@ func TestDispatchNoMatchingHandler(t *testing.T) {
 	connCalled := false
 	registry.registerHandlerWithReply(msgType, func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		connCalled = true
-		return nilMsg, nil, nil
+		return NilMsg, nil, nil
 	})
 
 	// Get the handler
@@ -380,7 +380,7 @@ func TestConnectionOnlyHandlerWithNoConn(t *testing.T) {
 	// Register only a connection handler
 	registry.registerHandlerWithReply(msgType, func(n *Node, p *Packet) (MessageType, interface{}, error) {
 		handlerCalled = true
-		return nilMsg, nil, nil
+		return NilMsg, nil, nil
 	})
 
 	// Get the handler
