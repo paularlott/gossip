@@ -159,9 +159,11 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	}
 
 	// Unmarshal the response payload
-	err = responsePacket.Unmarshal(responsePayload)
-	if err != nil {
-		return err
+	if responsePayload != nil {
+		err = responsePacket.Unmarshal(responsePayload)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
