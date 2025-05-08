@@ -418,6 +418,12 @@ func (c *Cluster) Join(peers []string) error {
 	for _, peerAddr := range peers {
 		// c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
+		// If address matches our advertise address then skip it
+		if peerAddr == c.config.AdvertiseAddr {
+			c.config.Logger.Debugf("gossip: Skipping join to self: %s", peerAddr)
+			continue
+		}
+
 		// Resolve the address
 		addresses, err := c.ResolveAddress(peerAddr)
 		if err != nil {
@@ -455,14 +461,13 @@ func (c *Cluster) Join(peers []string) error {
 			node.ProtocolVersion = joinReply.ProtocolVersion
 			node.ApplicationVersion = joinReply.ApplicationVersion
 			node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-			if c.nodes.addIfNotExists(node) {
+			if c.nodes.addOrUpdate(node) {
+				c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
 				err = c.exchangeState(node, []NodeID{c.localNode.ID})
 				if err != nil {
 					c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
 				}
 			}
-
-			c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
 		}
 	}
 
@@ -856,7 +861,7 @@ func (c *Cluster) notifyDoGossip() {
 
 func (c *Cluster) gossipManager() {
 	// Add jitter to prevent all nodes syncing at the same time
-	jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 4)))
+	jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 2)))
 	time.Sleep(jitter)
 
 	c.gossipInterval = c.config.GossipInterval

@@ -189,7 +189,11 @@ func (hm *healthMonitor) checkRandomNodes() {
 		copy(peers, hm.joinPeers)
 		hm.joinPeersMutex.Unlock()
 
-		hm.cluster.Join(peers)
+		if len(peers) > 0 {
+			hm.config.Logger.Field("peer_count", len(peers)).Debugf("No live peers, trying to rejoin cluster")
+			hm.cluster.Join(peers)
+		}
+		return
 	}
 
 	// Get a random selection of nodes to check
