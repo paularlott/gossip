@@ -575,7 +575,7 @@ func (c *Cluster) getPeerSubsetSizeIndirectPing(totalNodes int) int {
 }
 
 func (c *Cluster) getMaxTTL() uint8 {
-	totalNodes := c.nodes.getLiveCount()
+	totalNodes := c.nodes.getAliveCount()
 	if totalNodes <= 0 {
 		return 0
 	}
@@ -589,7 +589,7 @@ func (c *Cluster) getMaxTTL() uint8 {
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	// Determine how many nodes to include in the exchange
-	sampleSize := c.getPeerSubsetSizeStateExchange(c.nodes.getTotalCount())
+	sampleSize := c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount())
 
 	// Get a random selection of nodes, excluding specified nodes
 	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
@@ -662,7 +662,7 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getLiveCount()), item.excludePeers)
+			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), item.excludePeers)
 			if err := c.transport.SendPacket(item.transportType, peerSubset, item.packet); err != nil {
 				c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
 			}
@@ -692,7 +692,7 @@ func (c *Cluster) periodicStateSync() {
 			select {
 			case <-ticker.C:
 				// Calculate appropriate number of peers based on cluster size
-				peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount())
+				peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
 				if peerCount == 0 {
 					continue
 				}
@@ -749,12 +749,7 @@ func (c *Cluster) GetNodeByIDString(id string) *Node {
 }
 
 func (c *Cluster) NumNodes() int {
-	return c.nodes.getTotalCount()
-}
-
-// Get the number of nodes that are currently alive or suspect
-func (c *Cluster) NumLiveNodes() int {
-	return c.nodes.getLiveCount()
+	return c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount()
 }
 
 // Get the number of nodes that are currently alive
@@ -836,7 +831,7 @@ func (c *Cluster) NodeIsLocal(node *Node) bool {
 
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
 func (c *Cluster) GetCandidates() []*Node {
-	return c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getLiveCount()), []NodeID{c.localNode.ID})
+	return c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), []NodeID{c.localNode.ID})
 }
 
 // Get the amount of data to send in a gossip message

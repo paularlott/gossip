@@ -23,12 +23,10 @@ type nodeList struct {
 	randSource *rand.Rand // For thread-safe random selection
 
 	// Atomic counters for quick access without traversing the map
-	totalCount   atomic.Int64
 	aliveCount   atomic.Int64
 	suspectCount atomic.Int64
 	leavingCount atomic.Int64
 	deadCount    atomic.Int64
-	liveCount    atomic.Int64 // Alive or Suspect nodes
 }
 
 // NewNodeList creates a new node list
@@ -114,7 +112,6 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		shard.byState[node.state][node.ID] = node
 
 		// Update counters
-		nl.totalCount.Add(1)
 		switch node.state {
 		case NodeAlive:
 			nl.aliveCount.Add(1)
@@ -124,9 +121,6 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 			nl.leavingCount.Add(1)
 		case NodeDead:
 			nl.deadCount.Add(1)
-		}
-		if node.state == NodeAlive || node.state == NodeSuspect {
-			nl.liveCount.Add(1)
 		}
 
 		// Trigger event listener
@@ -162,7 +156,6 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 			if node.state == state {
 
 				// Update counters
-				nl.totalCount.Add(-1)
 				switch node.state {
 				case NodeAlive:
 					nl.aliveCount.Add(-1)
@@ -172,9 +165,6 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 					nl.leavingCount.Add(-1)
 				case NodeDead:
 					nl.deadCount.Add(-1)
-				}
-				if node.state == NodeAlive || node.state == NodeSuspect {
-					nl.liveCount.Add(-1)
 				}
 
 				// Remove from state map
@@ -261,15 +251,6 @@ func (nl *nodeList) updateCountersForStateChange(oldState, newState NodeState) {
 	case NodeDead:
 		nl.deadCount.Add(1)
 	}
-
-	// Update live count (nodes in Alive or Suspect state)
-	oldLive := oldState == NodeAlive || oldState == NodeSuspect
-	newLive := newState == NodeAlive || newState == NodeSuspect
-	if oldLive && !newLive {
-		nl.liveCount.Add(-1)
-	} else if !oldLive && newLive {
-		nl.liveCount.Add(1)
-	}
 }
 
 // GetRandomNodesInStates returns up to k random nodes in the specified states, excluding specified IDs
@@ -340,11 +321,6 @@ func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID) []*Node {
 	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead}, excludeIDs)
 }
 
-// GetTotalCount returns the total number of nodes in the cluster
-func (nl *nodeList) getTotalCount() int {
-	return int(nl.totalCount.Load())
-}
-
 // GetAliveCount returns the number of nodes with state NodeAlive
 func (nl *nodeList) getAliveCount() int {
 	return int(nl.aliveCount.Load())
@@ -363,11 +339,6 @@ func (nl *nodeList) getLeavingCount() int {
 // GetDeadCount returns the number of nodes with state nodeDead
 func (nl *nodeList) getDeadCount() int {
 	return int(nl.deadCount.Load())
-}
-
-// GetLiveCount returns the number of live nodes (Alive or Suspect)
-func (nl *nodeList) getLiveCount() int {
-	return int(nl.liveCount.Load())
 }
 
 // forAllInState executes a function for all nodes in the specified states
@@ -410,7 +381,7 @@ func (nl *nodeList) getAllInStates(states []NodeState) []*Node {
 
 // getAll returns all nodes in the cluster
 func (nl *nodeList) getAll() []*Node {
-	allNodes := make([]*Node, 0, nl.getTotalCount())
+	allNodes := make([]*Node, 0, nl.getAliveCount()+nl.getSuspectCount()+nl.getLeavingCount()+nl.getDeadCount())
 
 	// Iterate through all shards
 	for _, shard := range nl.shards {
@@ -429,13 +400,12 @@ func (nl *nodeList) getAll() []*Node {
 
 // RecalculateCounters rebuilds all counters
 func (nl *nodeList) recalculateCounters() {
-	var total, alive, suspect, leaving, dead, live int64
+	var alive, suspect, leaving, dead int64
 
 	// Iterate through all shards
 	for _, shard := range nl.shards {
 		shard.mutex.RLock()
 
-		total += int64(len(shard.nodes))
 		alive += int64(len(shard.byState[NodeAlive]))
 		suspect += int64(len(shard.byState[NodeSuspect]))
 		leaving += int64(len(shard.byState[NodeLeaving]))
@@ -444,13 +414,8 @@ func (nl *nodeList) recalculateCounters() {
 		shard.mutex.RUnlock()
 	}
 
-	// Live nodes are those in Alive or Suspect state
-	live = alive + suspect
-
-	nl.totalCount.Store(total)
 	nl.aliveCount.Store(alive)
 	nl.suspectCount.Store(suspect)
 	nl.leavingCount.Store(leaving)
 	nl.deadCount.Store(dead)
-	nl.liveCount.Store(live)
 }

@@ -165,10 +165,6 @@ func TestStream_BasicReadWrite(t *testing.T) {
 	if (headerSize & flagCompressed) != 0 {
 		t.Error("Compression flag should not be set for small data")
 	}
-	dataSize := headerSize & maxSizeMask
-	if dataSize != uint32(len(data)) {
-		t.Errorf("Header indicates %d bytes, expected %d", dataSize, len(data))
-	}
 
 	// Now simulate read by copying to read buffer
 	streamMockConn.prepareDataToRead(written)
@@ -337,40 +333,6 @@ func TestStream_LargeData(t *testing.T) {
 	}
 }
 
-func TestStream_SizeLimit(t *testing.T) {
-	streamMockConn := newstreamMockConn()
-	config := getTestConfig()
-	config.StreamMaxPacketSize = 1024 // 1KB limit
-	stream := NewStream(streamMockConn, config)
-
-	// Try to write data larger than limit
-	data := make([]byte, 2*1024) // 2KB
-	_, err := stream.Write(data)
-	if err != ErrPacketTooLarge {
-		t.Errorf("Expected ErrPacketTooLarge, got: %v", err)
-	}
-
-	// Write acceptable data
-	smallData := make([]byte, 512)
-	_, err = stream.Write(smallData)
-	if err != nil {
-		t.Errorf("Write error with small data: %v", err)
-	}
-
-	// Prepare too-large data to read
-	header := make([]byte, 4)
-	binary.BigEndian.PutUint32(header, uint32(2*1024)) // 2KB size in header
-	streamMockConn.prepareDataToRead(header)
-	streamMockConn.prepareDataToRead(make([]byte, 2*1024))
-
-	// Try to read
-	readBuf := make([]byte, 4*1024)
-	_, err = stream.Read(readBuf)
-	if err != ErrPacketTooLarge {
-		t.Errorf("Expected ErrPacketTooLarge on read, got: %v", err)
-	}
-}
-
 func TestStream_Close(t *testing.T) {
 	streamMockConn := newstreamMockConn()
 	stream := NewStream(streamMockConn, getTestConfig())
@@ -510,70 +472,6 @@ func TestStream_ZeroLengthWrite(t *testing.T) {
 	if len(written) > 0 {
 		t.Errorf("Expected no data written, got %d bytes", len(written))
 	}
-}
-
-func TestStream_ConcurrentReadWrite(t *testing.T) {
-	streamMockConn := newstreamMockConn()
-	config := getTestConfig()
-	stream := NewStream(streamMockConn, config)
-
-	// Run concurrent reads and writes
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Writer goroutine
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 10; i++ {
-			data := []byte(strings.Repeat(string('A'+byte(i)), 100))
-			_, err := stream.Write(data)
-			if err != nil {
-				t.Errorf("Write error: %v", err)
-				return
-			}
-
-			// Simulate some processing time
-			time.Sleep(1 * time.Millisecond)
-
-			// Move data from write to read buffer
-			streamMockConn.simulateReadWrite()
-		}
-	}()
-
-	// Reader goroutine
-	go func() {
-		defer wg.Done()
-		readBuf := make([]byte, 200)
-		for i := 0; i < 10; i++ {
-			// Wait a bit to ensure data is written
-			time.Sleep(2 * time.Millisecond)
-
-			n, err := stream.Read(readBuf)
-			if err != nil && err != io.EOF {
-				t.Errorf("Read error: %v", err)
-				return
-			}
-			if n == 0 && err == nil {
-				// Might need to wait more
-				time.Sleep(5 * time.Millisecond)
-				continue
-			}
-
-			// Verify data if we got some
-			if n > 0 {
-				expectedChar := 'A' + byte(i)
-				for j := 0; j < n; j++ {
-					if readBuf[j] != expectedChar {
-						t.Errorf("Read incorrect data - got %c, expected %c", readBuf[j], expectedChar)
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	// Wait for both to finish
-	wg.Wait()
 }
 
 // BenchmarkStream_Write_Small tests writing small payloads

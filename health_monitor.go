@@ -183,7 +183,7 @@ func (hm *healthMonitor) cleanupNodeFailures() {
 func (hm *healthMonitor) checkRandomNodes() {
 
 	// If no live peers then try joining, a count of 1 means only the local node is present
-	if hm.cluster.nodes.getLiveCount() <= 1 {
+	if hm.cluster.nodes.getAliveCount() <= 1 {
 		hm.joinPeersMutex.Lock()
 		peers := make([]string, len(hm.joinPeers))
 		copy(peers, hm.joinPeers)
@@ -846,7 +846,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 		Seq:      seq,
 	}
 
-	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing(hm.cluster.nodes.getLiveCount())
+	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing(hm.cluster.nodes.getAliveCount() + hm.cluster.nodes.getSuspectCount())
 	sentCount := 0
 	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
 	if len(indirectPeers) == 0 {

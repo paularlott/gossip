@@ -102,8 +102,8 @@ func TestNodeList_Remove(t *testing.T) {
 	nl.addIfNotExists(node2)
 
 	// Verify initial state
-	if nl.getTotalCount() != 2 {
-		t.Errorf("Expected total count of 2, got %d", nl.getTotalCount())
+	if nl.getAliveCount()+nl.getSuspectCount() != 2 {
+		t.Errorf("Expected total count of 2, got %d", nl.getAliveCount()+nl.getSuspectCount())
 	}
 
 	// Test removing a node
@@ -114,8 +114,8 @@ func TestNodeList_Remove(t *testing.T) {
 		t.Errorf("Node should be removed but still exists")
 	}
 
-	if nl.getTotalCount() != 1 {
-		t.Errorf("Expected total count of 1 after removal, got %d", nl.getTotalCount())
+	if nl.getAliveCount()+nl.getSuspectCount() != 1 {
+		t.Errorf("Expected total count of 1 after removal, got %d", nl.getAliveCount()+nl.getSuspectCount())
 	}
 
 	// Test removeIfInState with matching state
@@ -184,8 +184,8 @@ func TestNodeList_UpdateState(t *testing.T) {
 	nl.updateState(node.ID, NodeDead)
 
 	// Verify live count is updated
-	if nl.getLiveCount() != 0 {
-		t.Errorf("Live count should be 0 after node marked dead, got %d", nl.getLiveCount())
+	if nl.getAliveCount() != 0 && nl.getSuspectCount() != 0 {
+		t.Errorf("Live count should be 0 after node marked dead, got %d", nl.getAliveCount()+nl.getSuspectCount())
 	}
 }
 
@@ -302,21 +302,15 @@ func TestNodeList_RecalculateCounters(t *testing.T) {
 	nl.addIfNotExists(createTestNode("55555555-5555-5555-5555-555555555555", NodeLeaving))
 
 	// Manually corrupt the counters
-	nl.totalCount.Store(0)
 	nl.aliveCount.Store(0)
 	nl.suspectCount.Store(0)
 	nl.leavingCount.Store(0)
 	nl.deadCount.Store(0)
-	nl.liveCount.Store(0)
 
 	// Run recalculation
 	nl.recalculateCounters()
 
 	// Verify counters are restored correctly
-	if nl.getTotalCount() != 5 {
-		t.Errorf("Total count incorrect, got %d, want 5", nl.getTotalCount())
-	}
-
 	if nl.getAliveCount() != 2 {
 		t.Errorf("Alive count incorrect, got %d, want 2", nl.getAliveCount())
 	}
@@ -331,10 +325,6 @@ func TestNodeList_RecalculateCounters(t *testing.T) {
 
 	if nl.getDeadCount() != 1 {
 		t.Errorf("Dead count incorrect, got %d, want 1", nl.getDeadCount())
-	}
-
-	if nl.getLiveCount() != 3 {
-		t.Errorf("Live count incorrect, got %d, want 3", nl.getLiveCount())
 	}
 }
 

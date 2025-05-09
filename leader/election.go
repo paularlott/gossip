@@ -382,8 +382,7 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 
 // calculateQuorum calculates the minimum number of nodes required for quorum.
 func (le *LeaderElection) calculateQuorum() int {
-	// Use NumNodes() which likely represents the total number of known nodes (alive or not).
-	numNodes := le.cluster.NumNodes()
+	numNodes := le.cluster.NumAliveNodes() + le.cluster.NumSuspectNodes()
 	if numNodes == 0 {
 		return 0 // Cannot have quorum with zero nodes
 	}

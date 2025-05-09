@@ -160,7 +160,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType
 		return NilMsg, nil, err
 	}
 
-	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getTotalCount()), []NodeID{})
+	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSizeStateExchange(c.NumNodes()), []NodeID{})
 
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
