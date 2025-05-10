@@ -441,6 +441,11 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 
 	now := time.Now()
 	for _, node := range deadNodes {
+		// Skip the local node
+		if hm.cluster.localNode.ID == node.ID {
+			continue
+		}
+
 		// Calculate how long the node has been dead
 		deadDuration := now.Sub(node.stateChangeTime)
 

@@ -140,7 +140,9 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
-	nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
+	if nodeID != nl.cluster.localNode.ID {
+		nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
+	}
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
