@@ -140,12 +140,14 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
-	if nodeID != nl.cluster.localNode.ID {
-		nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
-	}
+	nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
+	if nodeID == nl.cluster.localNode.ID {
+		return false
+	}
+
 	shard := nl.getShard(nodeID)
 
 	shard.mutex.Lock()
@@ -195,6 +197,17 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 
 // UpdateState updates the state of a node
 func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
+	// Never allow the local node to be marked as Suspect or Dead
+	if nodeID == nl.cluster.localNode.ID {
+		// Only allow Alive or Leaving for local node
+		if state != NodeAlive && state != NodeLeaving {
+			nl.cluster.config.Logger.
+				Field("rejected_state", state.String()).
+				Debugf("Attempted to set invalid state for local node, ignoring")
+			return false
+		}
+	}
+
 	shard := nl.getShard(nodeID)
 
 	shard.mutex.Lock()

@@ -542,6 +542,19 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 		return nil
 	}
 
+	// If the node is us refute the suspicion
+	if suspectNode.ID == hm.cluster.localNode.ID {
+		hm.config.Logger.
+			Field("node", suspectNode.ID.String()).
+			Field("from", sender.ID.String()).
+			Debugf("Received suspicion for self, ignoring")
+
+		// Refute the suspicion by reporting node is alive
+		hm.broadcastAlive(hm.cluster.localNode)
+
+		return nil
+	}
+
 	// If we've seen this node alive recently, refute the suspicion
 	if suspectNode.state == NodeAlive {
 		// Try to ping to confirm it's still alive
