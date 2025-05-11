@@ -1,3 +1,5 @@
+//go:build !skip_codec_shamaton_msgpack
+
 package codec
 
 import shamaton "github.com/shamaton/msgpack/v2"

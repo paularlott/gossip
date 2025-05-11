@@ -1,3 +1,5 @@
+//go:build !skip_codec_json
+
 package codec
 
 import "encoding/json"

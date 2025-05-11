@@ -1,3 +1,5 @@
+//go:build !skip_encryption_aed
+
 package encryption
 
 import (

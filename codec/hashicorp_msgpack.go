@@ -1,3 +1,5 @@
+//go:build !skip_codec_hashicorp_msgpack
+
 package codec
 
 import msgpack "github.com/hashicorp/go-msgpack/v2/codec"

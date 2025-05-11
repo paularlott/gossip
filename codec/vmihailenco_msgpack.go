@@ -1,3 +1,5 @@
+//go:build !skip_codec_vmihailenco_msgpack
+
 package codec
 
 import vmihailenco "github.com/vmihailenco/msgpack/v5"

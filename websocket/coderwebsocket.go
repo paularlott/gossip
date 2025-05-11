@@ -1,4 +1,5 @@
-// websocket/coder.go
+//go:build !skip_websocket_coder
+
 package websocket
 
 import (

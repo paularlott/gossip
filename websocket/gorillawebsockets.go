@@ -1,3 +1,5 @@
+//go:build !skip_websocket_gorilla
+
 package websocket
 
 import (

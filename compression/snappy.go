@@ -1,3 +1,5 @@
+//go:build !skip_compression_snappy
+
 package compression
 
 import (

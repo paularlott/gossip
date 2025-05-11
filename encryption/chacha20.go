@@ -1,3 +1,5 @@
+//go:build !skip_encryption_chacha20
+
 package encryption
 
 import (
