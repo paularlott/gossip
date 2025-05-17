@@ -420,7 +420,6 @@ func (c *Cluster) Join(peers []string) error {
 
 		// If address matches our advertise address then skip it
 		if peerAddr == c.config.AdvertiseAddr {
-			c.config.Logger.Debugf("gossip: Skipping join to self: %s", peerAddr)
 			continue
 		}
 
