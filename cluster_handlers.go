@@ -97,8 +97,16 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 
 	// Check the protocol version and application version, reject if not compatible
 	accepted := true
-	if joinMsg.ID == c.localNode.ID || joinMsg.ProtocolVersion != c.localNode.ProtocolVersion || (c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
+	rejectReason := ""
+	if joinMsg.ID == c.localNode.ID {
 		accepted = false
+		rejectReason = "unable to join self"
+	} else if joinMsg.ProtocolVersion != c.localNode.ProtocolVersion {
+		accepted = false
+		rejectReason = fmt.Sprintf("incompatible protocol version: %d != %d", joinMsg.ProtocolVersion, c.localNode.ProtocolVersion)
+	} else if c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion) {
+		accepted = false
+		rejectReason = fmt.Sprintf("incompatible application version: %s", joinMsg.ApplicationVersion)
 	} else {
 		// Check add the peer to our list of known peers unless it already exists
 		node := newNode(joinMsg.ID, joinMsg.Address)
@@ -117,6 +125,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 	// Respond to the sender with our information
 	selfJoinMsg := joinReplyMessage{
 		Accepted:           accepted,
+		RejectReason:       rejectReason,
 		ID:                 c.localNode.ID,
 		Address:            c.localNode.address,
 		MetadataTimestamp:  c.localNode.Metadata.GetTimestamp(),

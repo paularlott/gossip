@@ -99,6 +99,7 @@ type joinMessage struct {
 
 type joinReplyMessage struct {
 	Accepted           bool                   `msgpack:"acc" json:"acc"`
+	RejectReason       string                 `msgpack:"rr" json:"rr"`
 	ID                 NodeID                 `msgpack:"id" json:"id"`
 	Address            Address                `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`

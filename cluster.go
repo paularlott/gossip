@@ -450,7 +450,7 @@ func (c *Cluster) Join(peers []string) error {
 			}
 
 			if !joinReply.Accepted {
-				c.config.Logger.Warnf("gossip: Peer %s rejected our join request", peerAddr)
+				c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer %s rejected our join request", peerAddr)
 				continue
 			}
 
