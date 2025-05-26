@@ -74,9 +74,9 @@ func DefaultConfig() *Config {
 		AllowInsecureWebsockets:       false,
 		GossipInterval:                20 * time.Second,
 		GossipMaxInterval:             60 * time.Second,
-		TCPDialTimeout:                5 * time.Second,
-		TCPDeadline:                   5 * time.Second,
-		UDPDeadline:                   5 * time.Second,
+		TCPDialTimeout:                2 * time.Second,
+		TCPDeadline:                   2 * time.Second,
+		UDPDeadline:                   2 * time.Second,
 		UDPMaxPacketSize:              1400,
 		TCPMaxPacketSize:              4194304, // 4MB
 		StreamMaxPacketSize:           8388608, // 8MB
