@@ -416,7 +416,7 @@ func (c *Cluster) Join(peers []string) error {
 
 	// Join the cluster by attempting to connect to as many peers as possible
 	for _, peerAddr := range peers {
-		// c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
+		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
 		// If address matches our advertise address then skip it
 		if peerAddr == c.config.AdvertiseAddr {
@@ -466,6 +466,7 @@ func (c *Cluster) Join(peers []string) error {
 				if err != nil {
 					c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
 				}
+				break
 			}
 		}
 	}
