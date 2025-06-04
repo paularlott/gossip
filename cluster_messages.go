@@ -249,6 +249,11 @@ func (c *Cluster) WriteStreamMsg(conn net.Conn, msgType MessageType, payload int
 		return err
 	}
 
+	// If the payload size +6 would exceed the maximum packet size, return an error
+	if len(payloadBytes) > c.config.TCPMaxPacketSize-6 {
+		return fmt.Errorf("payload size exceeds maximum packet size: %d bytes", len(payloadBytes)+6)
+	}
+
 	err = conn.SetWriteDeadline(time.Now().Add(c.config.TCPDeadline))
 	if err != nil {
 		return err
