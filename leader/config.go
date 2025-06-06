@@ -11,6 +11,7 @@ type Config struct {
 	LeaderTimeout        time.Duration      // How long a leader is considered valid without updates
 	HeartbeatMessageType gossip.MessageType // Message type for heartbeat messages
 	QuorumPercentage     int                // Percentage of nodes required for quorum (1-100)
+	MetadataFilterKey    string             // Optional: metadata key to filter election candidates
 }
 
 func DefaultConfig() *Config {
@@ -19,5 +20,6 @@ func DefaultConfig() *Config {
 		LeaderTimeout:        3 * time.Second,
 		HeartbeatMessageType: gossip.ReservedMsgsStart + 1,
 		QuorumPercentage:     51,
+		MetadataFilterKey:    "", // No specific metadata key by default
 	}
 }

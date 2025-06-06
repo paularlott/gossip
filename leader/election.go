@@ -76,6 +76,42 @@ func (le *LeaderElection) Stop() {
 	le.cancel()
 }
 
+// getEligibleNodes returns nodes that are eligible for leader election
+// If metadata filtering is enabled, only nodes with matching metadata are considered
+func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
+	allAliveNodes := le.cluster.AliveNodes()
+
+	// If no metadata filtering is configured, return all alive nodes
+	if le.config.MetadataFilterKey == "" {
+		return allAliveNodes
+	}
+
+	// Filter nodes based on metadata
+	var eligibleNodes []*gossip.Node
+	localNode := le.cluster.LocalNode()
+
+	// Get the local node's metadata value for the election key
+	localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
+
+	for _, node := range allAliveNodes {
+		nodeValue := node.Metadata.GetString(le.config.MetadataFilterKey)
+
+		// Include nodes that have the same metadata value as the local node
+		if nodeValue == localValue {
+			eligibleNodes = append(eligibleNodes, node)
+		}
+	}
+
+	le.cluster.Logger().
+		Field("metadataKey", le.config.MetadataFilterKey).
+		Field("metadataValue", localValue).
+		Field("totalAlive", len(allAliveNodes)).
+		Field("eligible", len(eligibleNodes)).
+		Debugf("Filtered nodes for leader election")
+
+	return eligibleNodes
+}
+
 // checkAndElectLeader checks if we need to elect a new leader and does so if necessary
 func (le *LeaderElection) checkAndElectLeader() {
 	// First, check if there's already a valid leader
@@ -116,14 +152,16 @@ func (le *LeaderElection) HasLeader() bool {
 	}
 
 	// Check quorum based on currently alive nodes
-	requiredQuorum := le.calculateQuorum()
-	numAlive := le.cluster.NumAliveNodes()
-	if numAlive < requiredQuorum {
+	eligibleNodes := le.getEligibleNodes()
+	requiredQuorum := le.calculateQuorumForNodes(len(eligibleNodes))
+	numEligible := len(eligibleNodes)
+
+	if numEligible < requiredQuorum {
 		// Log loss of quorum if desired
 		le.cluster.Logger().
-			Field("aliveNodes", numAlive).
+			Field("eligibleNodes", numEligible).
 			Field("requiredQuorum", requiredQuorum).
-			Warnf("Quorum lost")
+			Warnf("Quorum lost among eligible nodes")
 		return false // Not enough nodes for quorum
 	}
 
@@ -132,10 +170,27 @@ func (le *LeaderElection) HasLeader() bool {
 		return false
 	}
 
-	// Check if the leader node still exists in the cluster
+	// Check if the leader node still exists and is eligible
 	leader := le.cluster.GetNode(le.leaderID)
 	if leader == nil || leader.GetState() != gossip.NodeAlive {
 		return false
+	}
+
+	// If metadata filtering is enabled, check if current leader is still eligible
+	if le.config.MetadataFilterKey != "" {
+		localNode := le.cluster.LocalNode()
+		localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
+		leaderValue := leader.Metadata.GetString(le.config.MetadataFilterKey)
+
+		if leaderValue != localValue {
+			le.cluster.Logger().
+				Field("leaderId", le.leaderID).
+				Field("metadataKey", le.config.MetadataFilterKey).
+				Field("localValue", localValue).
+				Field("leaderValue", leaderValue).
+				Debugf("Current leader no longer eligible due to metadata mismatch")
+			return false
+		}
 	}
 
 	return true
@@ -143,15 +198,18 @@ func (le *LeaderElection) HasLeader() bool {
 
 // electLeader chooses a new leader from the alive nodes if quorum is met
 func (le *LeaderElection) electLeader() {
-	// Check for quorum first
-	requiredQuorum := le.calculateQuorum()
-	aliveNodes := le.cluster.AliveNodes()
-	numAlive := len(aliveNodes)
+	// Get eligible nodes based on metadata filtering
+	eligibleNodes := le.getEligibleNodes()
+	numEligible := len(eligibleNodes)
 
-	if numAlive < requiredQuorum {
+	// Check for quorum among eligible nodes
+	requiredQuorum := le.calculateQuorumForNodes(numEligible)
+
+	if numEligible < requiredQuorum {
 		le.cluster.Logger().
-			Field("aliveNodes", numAlive).
+			Field("eligibleNodes", numEligible).
 			Field("requiredQuorum", requiredQuorum).
+			Field("metadataFilter", le.config.MetadataFilterKey).
 			Debugf("Quorum not met, cannot elect leader")
 
 		// Optional: If we previously had a leader but lost quorum, clear the leader state.
@@ -172,7 +230,7 @@ func (le *LeaderElection) electLeader() {
 	// Quorum met, proceed with election
 	// Simple leader election strategy: use the node with the "lowest" ID
 	var candidateNode *gossip.Node
-	for _, node := range aliveNodes {
+	for _, node := range eligibleNodes {
 		if candidateNode == nil || node.ID.String() < candidateNode.ID.String() {
 			candidateNode = node
 		}
@@ -202,7 +260,7 @@ func (le *LeaderElection) electLeader() {
 		Field("leaderId", candidateNode.ID.String()).
 		Field("term", le.currentTerm).
 		Field("isLocal", le.isLeader).
-		Debugf("New leader elected (quorum: %d/%d)", numAlive, requiredQuorum)
+		Debugf("New leader elected (quorum: %d/%d)", numEligible, requiredQuorum)
 
 	// Dispatch events based on state changes
 	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
@@ -252,6 +310,23 @@ func (le *LeaderElection) sendLeaderHeartbeat() {
 func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gossip.Packet) error {
 	if sender == nil {
 		return nil
+	}
+
+	// If metadata filtering is enabled, only accept heartbeats from eligible nodes
+	if le.config.MetadataFilterKey != "" {
+		localNode := le.cluster.LocalNode()
+		localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
+		senderValue := sender.Metadata.GetString(le.config.MetadataFilterKey)
+
+		if senderValue != localValue {
+			le.cluster.Logger().
+				Field("senderId", sender.ID.String()).
+				Field("metadataKey", le.config.MetadataFilterKey).
+				Field("localValue", localValue).
+				Field("senderValue", senderValue).
+				Debugf("Ignoring heartbeat from ineligible node")
+			return nil
+		}
 	}
 
 	// Handle the heartbeat message
@@ -380,9 +455,9 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	}
 }
 
-// calculateQuorum calculates the minimum number of nodes required for quorum.
-func (le *LeaderElection) calculateQuorum() int {
-	numNodes := le.cluster.NumAliveNodes() + le.cluster.NumSuspectNodes()
+// calculateQuorumForNodes calculates the minimum number of nodes required for quorum
+// from a specific set of nodes
+func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 	if numNodes == 0 {
 		return 0 // Cannot have quorum with zero nodes
 	}
