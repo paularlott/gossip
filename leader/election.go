@@ -141,6 +141,16 @@ func (le *LeaderElection) GetLeaderID() gossip.NodeID {
 	return le.leaderID
 }
 
+func (le *LeaderElection) GetLeader() *gossip.Node {
+	if !le.HasLeader() {
+		return nil // No leader currently
+	}
+
+	le.lock.RLock()
+	defer le.lock.RUnlock()
+	return le.cluster.GetNode(le.leaderID)
+}
+
 // hasValidLeader checks if there's already a leader that has sent a heartbeat recently
 func (le *LeaderElection) HasLeader() bool {
 	le.lock.RLock()
