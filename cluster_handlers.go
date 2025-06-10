@@ -87,12 +87,12 @@ func (c *Cluster) handleIndirectPingAck(sender *Node, packet *Packet) error {
 	return nil
 }
 
-func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interface{}, error) {
+func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
 	var joinMsg joinMessage
 
 	err := packet.Unmarshal(&joinMsg)
 	if err != nil {
-		return NilMsg, nil, err
+		return nil, err
 	}
 
 	// Check the protocol version and application version, reject if not compatible
@@ -134,7 +134,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (MessageType, interfa
 		ApplicationVersion: c.localNode.ApplicationVersion,
 	}
 
-	return nodeJoinAckMsg, &selfJoinMsg, nil
+	return &selfJoinMsg, nil
 }
 
 func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
@@ -158,15 +158,15 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 	return nil
 }
 
-func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType, interface{}, error) {
+func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
 	if sender == nil {
-		return NilMsg, nil, fmt.Errorf("unknown sender")
+		return nil, fmt.Errorf("unknown sender")
 	}
 
 	var peerStates []exchangeNodeState
 	err := packet.Unmarshal(&peerStates)
 	if err != nil {
-		return NilMsg, nil, err
+		return nil, err
 	}
 
 	nodes := c.nodes.getRandomNodes(c.getPeerSubsetSizeStateExchange(c.NumNodes()), []NodeID{})
@@ -185,7 +185,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (MessageType
 
 	go c.healthMonitor.combineRemoteNodeState(sender, peerStates)
 
-	return pushPullStateAckMsg, &localStates, nil
+	return &localStates, nil
 }
 
 func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {

@@ -443,7 +443,7 @@ func (c *Cluster) Join(peers []string) error {
 			joinReply := &joinReplyMessage{}
 
 			node := newNode(c.localNode.ID, addr)
-			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, nodeJoinAckMsg, &joinReply)
+			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 			if err != nil {
 				//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
 				continue
@@ -617,7 +617,6 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 		node,
 		pushPullStateMsg,
 		&peerStates,
-		pushPullStateAckMsg,
 		&peerStates)
 	if err != nil {
 		return err

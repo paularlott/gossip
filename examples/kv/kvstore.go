@@ -238,7 +238,7 @@ func (kv *KVStore) RequestFullSync() {
 	// Try each node in order until we get a successful response
 	for _, node := range nodes {
 		var syncPayload SyncPayload
-		err := kv.cluster.SendToWithResponse(node, KVFullSyncMsg, nil, KVFullSyncMsg, &syncPayload)
+		err := kv.cluster.SendToWithResponse(node, KVFullSyncMsg, nil, &syncPayload)
 		if err != nil {
 			// Log error and try next node
 			fmt.Printf("Failed to get sync from %s: %v\n", node.ID, err)
@@ -254,7 +254,7 @@ func (kv *KVStore) RequestFullSync() {
 }
 
 // handleFullSync handles a request for full synchronization and returns the full dataset
-func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) (gossip.MessageType, interface{}, error) {
+func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) (interface{}, error) {
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
 
@@ -268,7 +268,7 @@ func (kv *KVStore) handleFullSync(sender *gossip.Node, packet *gossip.Packet) (g
 	}
 
 	// Return the full dataset directly as response
-	return KVFullSyncMsg, &payload, nil
+	return &payload, nil
 }
 
 // handleSync processes incoming sync messages

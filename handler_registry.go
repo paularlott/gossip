@@ -9,7 +9,7 @@ import (
 )
 
 type Handler func(*Node, *Packet) error
-type ReplyHandler func(*Node, *Packet) (MessageType, interface{}, error)
+type ReplyHandler func(*Node, *Packet) (interface{}, error)
 type StreamHandler func(*Node, *Packet, net.Conn)
 
 type msgHandler struct {
@@ -52,13 +52,13 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 	defer packet.Release()
 
 	if packet.conn != nil && mh.replyHandler != nil {
-		replyType, replyData, err := mh.replyHandler(node, packet)
+		replyData, err := mh.replyHandler(node, packet)
 		if err != nil {
 			return err
 		}
 
-		if replyType != NilMsg && c != nil {
-			replyPacket, err := c.createPacket(c.localNode.ID, replyType, 1, replyData)
+		if replyData != nil && c != nil {
+			replyPacket, err := c.createPacket(c.localNode.ID, replyMsg, 1, replyData)
 			if err != nil {
 				return err
 			}

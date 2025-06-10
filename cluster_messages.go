@@ -128,7 +128,7 @@ func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interf
 
 // Send a message to the peer then accept a response message.
 // Uses a TCP connection to send the packet and receive the response.
-func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
+func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
 	packet, err := c.createPacket(c.localNode.ID, msgType, 1, payload)
 	if err != nil {
 		return err
@@ -153,11 +153,6 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	}
 	defer responsePacket.Release()
 
-	// If the response message type doesn't match the expected type, return an error
-	if responsePacket.MessageType != responseMsgType {
-		return fmt.Errorf("unexpected response message type: got %d, want %d", responsePacket.MessageType, responseMsgType)
-	}
-
 	// Unmarshal the response payload
 	if responsePayload != nil {
 		err = responsePacket.Unmarshal(responsePayload)
@@ -171,12 +166,12 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 
 // Send a message to the peer then accept a response message.
 // Uses a TCP connection to send the packet and receive the response.
-func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responseMsgType MessageType, responsePayload interface{}) error {
-	if msgType < ReservedMsgsStart || responseMsgType < ReservedMsgsStart {
+func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
+	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
 
-	return c.sendToWithResponse(dstNode, msgType, payload, responseMsgType, responsePayload)
+	return c.sendToWithResponse(dstNode, msgType, payload, responsePayload)
 }
 
 // Send a metadata update to the cluster.
