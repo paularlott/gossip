@@ -415,62 +415,71 @@ func (c *Cluster) Join(peers []string) error {
 		peers[i], peers[j] = peers[j], peers[i]
 	})
 
+	wg := sync.WaitGroup{}
+	wg.Add(len(peers))
+
 	// Join the cluster by attempting to connect to as many peers as possible
 	for _, peerAddr := range peers {
-		c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
+		go func(peerAddr string) {
+			defer wg.Done()
 
-		// If address matches our advertise address then skip it
-		if peerAddr == c.config.AdvertiseAddr {
-			continue
-		}
+			c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
 
-		// Resolve the address
-		addresses, err := c.ResolveAddress(peerAddr)
-		if err != nil {
-			c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
-			continue
-		}
+			// If address matches our advertise address then skip it
+			if peerAddr == c.config.AdvertiseAddr {
+				return
+			}
 
-		joinMsg := &joinMessage{
-			ID:                 c.localNode.ID,
-			Address:            c.localNode.address,
-			MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
-			Metadata:           c.localNode.metadata.GetAll(),
-			ProtocolVersion:    PROTOCOL_VERSION,
-			ApplicationVersion: c.config.ApplicationVersion,
-		}
-
-		for _, addr := range addresses {
-			joinReply := &joinReplyMessage{}
-
-			node := newNode(c.localNode.ID, addr)
-			err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
+			// Resolve the address
+			addresses, err := c.ResolveAddress(peerAddr)
 			if err != nil {
-				//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
-				continue
+				c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
+				return
 			}
 
-			if !joinReply.Accepted {
-				c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer %s rejected our join request", peerAddr)
-				continue
+			joinMsg := &joinMessage{
+				ID:                 c.localNode.ID,
+				Address:            c.localNode.address,
+				MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
+				Metadata:           c.localNode.metadata.GetAll(),
+				ProtocolVersion:    PROTOCOL_VERSION,
+				ApplicationVersion: c.config.ApplicationVersion,
 			}
 
-			// Update the node with the peer's advertised address and ID then save it
-			node.ID = joinReply.ID
-			node.address = joinReply.Address
-			node.ProtocolVersion = joinReply.ProtocolVersion
-			node.ApplicationVersion = joinReply.ApplicationVersion
-			node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-			if c.nodes.addOrUpdate(node) {
-				c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
-				err = c.exchangeState(node, []NodeID{c.localNode.ID})
+			for _, addr := range addresses {
+				joinReply := &joinReplyMessage{}
+
+				node := newNode(c.localNode.ID, addr)
+				err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 				if err != nil {
-					c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
+					//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
+					continue
 				}
-				break
+
+				if !joinReply.Accepted {
+					c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer %s rejected our join request", peerAddr)
+					continue
+				}
+
+				// Update the node with the peer's advertised address and ID then save it
+				node.ID = joinReply.ID
+				node.address = joinReply.Address
+				node.ProtocolVersion = joinReply.ProtocolVersion
+				node.ApplicationVersion = joinReply.ApplicationVersion
+				node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
+				if c.nodes.addOrUpdate(node) {
+					c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
+					err = c.exchangeState(node, []NodeID{c.localNode.ID})
+					if err != nil {
+						c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
+					}
+					break
+				}
 			}
-		}
+		}(peerAddr)
 	}
+
+	wg.Wait()
 
 	// Add the list of peers to the health monitor so they can be used for recovery
 	for _, peerAddr := range peers {
