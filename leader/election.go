@@ -442,3 +442,8 @@ func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 
 	return requiredQuorum
 }
+
+// GetNodeGroup returns the node group used for leader election, if any
+func (le *LeaderElection) GetNodeGroup() *gossip.NodeGroup {
+	return le.nodeGroup
+}
