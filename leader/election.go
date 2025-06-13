@@ -27,6 +27,7 @@ type LeaderElection struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	eventHandlers *leaderEventHandlers
+	nodeGroup     *gossip.NodeGroup
 }
 
 // NewLeaderElection creates a new leader election manager
@@ -46,6 +47,10 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	// Register event listeners
 	cluster.HandleNodeStateChangeFunc(election.handleNodeStateChange)
 	cluster.HandleFunc(config.HeartbeatMessageType, election.handleLeaderHeartbeat)
+
+	if len(config.MetadataCriteria) > 0 {
+		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria)
+	}
 
 	return election
 }
@@ -79,44 +84,18 @@ func (le *LeaderElection) Stop() {
 // getEligibleNodes returns nodes that are eligible for leader election
 // If metadata filtering is enabled, only nodes with matching metadata are considered
 func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
-	allAliveNodes := le.cluster.AliveNodes()
-
-	// If no metadata filtering is configured, return all alive nodes
-	if le.config.MetadataFilterKey == "" {
-		return allAliveNodes
+	if le.nodeGroup != nil {
+		return le.nodeGroup.GetNodes(nil)
 	}
 
-	// Filter nodes based on metadata
-	var eligibleNodes []*gossip.Node
-	localNode := le.cluster.LocalNode()
-
-	// Get the local node's metadata value for the election key
-	localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
-
-	for _, node := range allAliveNodes {
-		nodeValue := node.Metadata.GetString(le.config.MetadataFilterKey)
-
-		// Include nodes that have the same metadata value as the local node
-		if nodeValue == localValue {
-			eligibleNodes = append(eligibleNodes, node)
-		}
-	}
-
-	le.cluster.Logger().
-		Field("metadataKey", le.config.MetadataFilterKey).
-		Field("metadataValue", localValue).
-		Field("totalAlive", len(allAliveNodes)).
-		Field("eligible", len(eligibleNodes)).
-		Debugf("Filtered nodes for leader election")
-
-	return eligibleNodes
+	return le.cluster.AliveNodes()
 }
 
 // checkAndElectLeader checks if we need to elect a new leader and does so if necessary
 func (le *LeaderElection) checkAndElectLeader() {
 	// First, check if there's already a valid leader
 	if le.HasLeader() {
-		// We have a valid leader, but if it's us we should send a heartbeat
+		// If we are the leader then send a heartbeat
 		if le.isLeader {
 			le.sendLeaderHeartbeat()
 		}
@@ -187,17 +166,10 @@ func (le *LeaderElection) HasLeader() bool {
 	}
 
 	// If metadata filtering is enabled, check if current leader is still eligible
-	if le.config.MetadataFilterKey != "" {
-		localNode := le.cluster.LocalNode()
-		localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
-		leaderValue := leader.Metadata.GetString(le.config.MetadataFilterKey)
-
-		if leaderValue != localValue {
+	if le.nodeGroup != nil {
+		if !le.nodeGroup.Contains(leader.ID) || !le.nodeGroup.Contains(le.cluster.LocalNode().ID) {
 			le.cluster.Logger().
 				Field("leaderId", le.leaderID).
-				Field("metadataKey", le.config.MetadataFilterKey).
-				Field("localValue", localValue).
-				Field("leaderValue", leaderValue).
 				Debugf("Current leader no longer eligible due to metadata mismatch")
 			return false
 		}
@@ -219,7 +191,6 @@ func (le *LeaderElection) electLeader() {
 		le.cluster.Logger().
 			Field("eligibleNodes", numEligible).
 			Field("requiredQuorum", requiredQuorum).
-			Field("metadataFilter", le.config.MetadataFilterKey).
 			Debugf("Quorum not met, cannot elect leader")
 
 		// Optional: If we previously had a leader but lost quorum, clear the leader state.
@@ -323,20 +294,8 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	}
 
 	// If metadata filtering is enabled, only accept heartbeats from eligible nodes
-	if le.config.MetadataFilterKey != "" {
-		localNode := le.cluster.LocalNode()
-		localValue := localNode.Metadata.GetString(le.config.MetadataFilterKey)
-		senderValue := sender.Metadata.GetString(le.config.MetadataFilterKey)
-
-		if senderValue != localValue {
-			le.cluster.Logger().
-				Field("senderId", sender.ID.String()).
-				Field("metadataKey", le.config.MetadataFilterKey).
-				Field("localValue", localValue).
-				Field("senderValue", senderValue).
-				Debugf("Ignoring heartbeat from ineligible node")
-			return nil
-		}
+	if le.nodeGroup != nil && !le.nodeGroup.Contains(sender.ID) {
+		return nil
 	}
 
 	// Handle the heartbeat message

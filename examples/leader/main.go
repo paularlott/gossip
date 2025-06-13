@@ -89,7 +89,11 @@ func main() {
 	}
 
 	// Initialize leader election
-	election := leader.NewLeaderElection(cluster, leader.DefaultConfig())
+	electionConfig := leader.DefaultConfig()
+	electionConfig.MetadataCriteria = map[string]string{
+		"dc": "development", // Only nodes in the 'development' data center can be leaders
+	}
+	election := leader.NewLeaderElection(cluster, electionConfig)
 
 	election.HandleEventFunc(leader.BecameLeaderEvent, func(let leader.EventType, ni gossip.NodeID) {
 		log.Warn().Str("nodeID", ni.String()).Msg("Event: Became leader")

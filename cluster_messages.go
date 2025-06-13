@@ -76,14 +76,14 @@ func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, pa
 	return packet, nil
 }
 
-func (c *Cluster) sendMessage(transportType TransportType, msgType MessageType, data interface{}) error {
+func (c *Cluster) sendMessage(peers []*Node, transportType TransportType, msgType MessageType, data interface{}) error {
 	packet, err := c.createPacket(c.localNode.ID, msgType, c.getMaxTTL(), data)
 	if err != nil {
 		return err
 	}
 
 	// broadcast will release the packet once it is sent
-	c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID})
+	c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID}, peers)
 	return nil
 }
 
@@ -91,14 +91,14 @@ func (c *Cluster) Send(msgType MessageType, data interface{}) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessage(TransportBestEffort, msgType, data)
+	return c.sendMessage(nil, TransportBestEffort, msgType, data)
 }
 
 func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessage(TransportReliable, msgType, data)
+	return c.sendMessage(nil, TransportReliable, msgType, data)
 }
 
 // Internal function to send a message to a specific node.
@@ -116,14 +116,28 @@ func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) e
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessageTo(TransportBestEffort, dstNode, c.getMaxTTL(), msgType, data)
+	return c.sendMessage([]*Node{dstNode}, TransportBestEffort, msgType, data)
 }
 
 func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessageTo(TransportReliable, dstNode, c.getMaxTTL(), msgType, data)
+	return c.sendMessage([]*Node{dstNode}, TransportReliable, msgType, data)
+}
+
+func (c *Cluster) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessage(dstNodes, TransportBestEffort, msgType, data)
+}
+
+func (c *Cluster) SendToPeersReliable(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessage(dstNodes, TransportReliable, msgType, data)
 }
 
 // Send a message to the peer then accept a response message.
@@ -187,7 +201,7 @@ func (c *Cluster) UpdateMetadata() error {
 	}
 
 	// broadcast will release the packet once it is sent
-	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID})
+	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID}, nil)
 	return nil
 }
 

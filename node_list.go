@@ -276,7 +276,8 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 
 	// Build exclusion set
 	var excludeSet map[NodeID]struct{}
-	if len(excludeIDs) > 0 {
+	excludeSetSize := len(excludeIDs)
+	if excludeSetSize > 0 {
 		excludeSet = make(map[NodeID]struct{}, len(excludeIDs))
 		for _, id := range excludeIDs {
 			excludeSet[id] = struct{}{}
@@ -296,7 +297,7 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 			if nodesInState, exists := shard.byState[state]; exists {
 				for nodeID, node := range nodesInState {
 					// Skip excluded nodes
-					if excludeSet != nil {
+					if excludeSetSize > 0 {
 						if _, excluded := excludeSet[nodeID]; excluded {
 							continue
 						}

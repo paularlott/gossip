@@ -50,6 +50,7 @@ type broadcastQItem struct {
 	packet        *Packet
 	transportType TransportType
 	excludePeers  []NodeID
+	peers         []*Node
 }
 
 func NewCluster(config *Config) (*Cluster, error) {
@@ -523,7 +524,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			} else {
 				transportType = TransportBestEffort
 			}
-			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID})
+			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
 		}
 
 		senderNode := c.nodes.get(packet.SenderID)
@@ -629,7 +630,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 
 // Enqueue a packet for broadcasting to peers.
 // If useReliable is true, the packet will be sent reliably, if false it will be sent over UDP if it's small enough or TCP otherwise.
-func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType TransportType, excludePeers []NodeID) {
+func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType TransportType, excludePeers []NodeID, peers []*Node) {
 
 	// Once the packets TTL is 0 we don't forward it stops it bouncing around the cluster
 	if packet.TTL == 0 {
@@ -642,6 +643,7 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 	item.packet = packet
 	item.transportType = transportType
 	item.excludePeers = excludePeers
+	item.peers = peers
 
 	// Use non-blocking send to avoid getting stuck if queue is full
 	select {
@@ -661,8 +663,11 @@ func (c *Cluster) broadcastWorker() {
 		case item := <-c.broadcastQueue:
 
 			// Get the peer subset to send the packet to
-			peerSubset := c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), item.excludePeers)
-			if err := c.transport.SendPacket(item.transportType, peerSubset, item.packet); err != nil {
+			if item.peers == nil {
+				item.peers = c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), item.excludePeers)
+			}
+
+			if err := c.transport.SendPacket(item.transportType, item.peers, item.packet); err != nil {
 				c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
 			}
 

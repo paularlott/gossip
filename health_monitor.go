@@ -721,7 +721,7 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 		Address: aliveNode.address,
 	}
 
-	hm.cluster.sendMessage(TransportBestEffort, aliveMsg, &msg)
+	hm.cluster.sendMessage(nil, TransportBestEffort, aliveMsg, &msg)
 }
 
 // Broadcast suspicion about a node to the cluster
@@ -732,7 +732,7 @@ func (hm *healthMonitor) broadcastSuspicion(suspectNode *Node) {
 		NodeID: suspectNode.ID,
 	}
 
-	hm.cluster.sendMessage(TransportBestEffort, suspicionMsg, &msg)
+	hm.cluster.sendMessage(nil, TransportBestEffort, suspicionMsg, &msg)
 }
 
 // Broadcast leaving status about a node to the cluster
@@ -741,7 +741,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 		NodeID: leavingNode.ID,
 	}
 
-	hm.cluster.sendMessage(TransportBestEffort, leavingMsg, &msg)
+	hm.cluster.sendMessage(nil, TransportBestEffort, leavingMsg, &msg)
 }
 
 // pingNode sends a ping message direct to the specified node and waits for an acknowledgment.
