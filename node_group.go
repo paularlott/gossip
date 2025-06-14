@@ -15,6 +15,8 @@ type NodeGroup struct {
 	shards           []*nodeGroupShard
 	stateHandlerId   HandlerID
 	metaHandlerId    HandlerID
+	onNodeAdded      func(*Node)
+	onNodeRemoved    func(*Node)
 }
 
 // nodeGroupShard represents a single shard of the node group
@@ -24,8 +26,13 @@ type nodeGroupShard struct {
 	nodes map[NodeID]*Node
 }
 
+type NodeGroupOptions struct {
+	OnNodeAdded   func(*Node)
+	OnNodeRemoved func(*Node)
+}
+
 // NewNodeGroup creates a new node group that tracks nodes with matching metadata
-func NewNodeGroup(cluster *Cluster, criteria map[string]string) *NodeGroup {
+func NewNodeGroup(cluster *Cluster, criteria map[string]string, opts *NodeGroupOptions) *NodeGroup {
 	// Use same shard count as cluster's nodeList for consistency
 	shardCount := cluster.config.NodeShardCount
 
@@ -35,6 +42,11 @@ func NewNodeGroup(cluster *Cluster, criteria map[string]string) *NodeGroup {
 		shardCount:       shardCount,
 		shardMask:        uint32(shardCount - 1),
 		shards:           make([]*nodeGroupShard, shardCount),
+	}
+
+	if opts != nil {
+		ng.onNodeAdded = opts.OnNodeAdded
+		ng.onNodeRemoved = opts.OnNodeRemoved
 	}
 
 	// Initialize shards
@@ -97,7 +109,7 @@ func (ng *NodeGroup) handleNodeStateChange(node *Node, prevState NodeState) {
 		}
 	} else if prevState == NodeAlive {
 		// Node is no longer alive, remove it
-		ng.removeNode(node.ID)
+		ng.removeNode(node)
 	}
 }
 
@@ -119,7 +131,7 @@ func (ng *NodeGroup) handleNodeMetadataChange(node *Node) {
 	if matches && !exists {
 		ng.addNode(node)
 	} else if !matches && exists {
-		ng.removeNode(node.ID)
+		ng.removeNode(node)
 	}
 }
 
@@ -130,15 +142,23 @@ func (ng *NodeGroup) addNode(node *Node) {
 	defer shard.mutex.Unlock()
 
 	shard.nodes[node.ID] = node
+
+	if ng.onNodeAdded != nil {
+		ng.onNodeAdded(node)
+	}
 }
 
 // removeNode removes a node from the appropriate shard
-func (ng *NodeGroup) removeNode(nodeID NodeID) {
-	shard := ng.getShard(nodeID)
+func (ng *NodeGroup) removeNode(node *Node) {
+	shard := ng.getShard(node.ID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()
 
-	delete(shard.nodes, nodeID)
+	delete(shard.nodes, node.ID)
+
+	if ng.onNodeRemoved != nil {
+		ng.onNodeRemoved(node)
+	}
 }
 
 // GetNodes returns all nodes in this group, excluding specified node IDs

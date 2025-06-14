@@ -49,7 +49,7 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	cluster.HandleFunc(config.HeartbeatMessageType, election.handleLeaderHeartbeat)
 
 	if len(config.MetadataCriteria) > 0 {
-		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria)
+		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria, nil)
 	}
 
 	return election
