@@ -200,8 +200,10 @@ func (c *Cluster) UpdateMetadata() error {
 		return err
 	}
 
-	// broadcast will release the packet once it is sent
 	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID}, nil)
+
+	// Trigger a metadata update event
+	c.notifyMetadataChanged(c.localNode)
 	return nil
 }
 
