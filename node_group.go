@@ -4,6 +4,8 @@ import (
 	"sync"
 )
 
+const MetadataAnyValue = "*"
+
 // NodeGroup represents a group of nodes that match specific metadata criteria
 type NodeGroup struct {
 	cluster          *Cluster
@@ -78,7 +80,7 @@ func (ng *NodeGroup) initializeWithExistingNodes() {
 // nodeMatchesCriteria checks if a node matches all the metadata criteria
 func (ng *NodeGroup) nodeMatchesCriteria(node *Node) bool {
 	for key, expectedValue := range ng.metadataCriteria {
-		if !node.Metadata.Exists(key) || node.Metadata.GetString(key) != expectedValue {
+		if !node.Metadata.Exists(key) || (expectedValue != MetadataAnyValue && node.Metadata.GetString(key) != expectedValue) {
 			return false
 		}
 	}
