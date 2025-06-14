@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -76,6 +77,7 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 
 type handlerRegistry struct {
 	handlers atomic.Value
+	mu       sync.Mutex
 }
 
 func newHandlerRegistry() *handlerRegistry {
@@ -85,6 +87,9 @@ func newHandlerRegistry() *handlerRegistry {
 }
 
 func (hr *handlerRegistry) register(t MessageType, h msgHandler) {
+	hr.mu.Lock()
+	defer hr.mu.Unlock()
+
 	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
 
 	newHandlers := make(map[MessageType]msgHandler, len(currentHandlers))
@@ -98,6 +103,27 @@ func (hr *handlerRegistry) register(t MessageType, h msgHandler) {
 
 	newHandlers[t] = h
 	hr.handlers.Store(newHandlers)
+}
+
+func (hr *handlerRegistry) unregister(msgType MessageType) bool {
+	hr.mu.Lock()
+	defer hr.mu.Unlock()
+
+	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
+
+	if _, ok := currentHandlers[msgType]; !ok {
+		return false // No handler registered for this message type
+	}
+
+	newHandlers := make(map[MessageType]msgHandler, len(currentHandlers)-1)
+	for k, v := range currentHandlers {
+		if k != msgType {
+			newHandlers[k] = v
+		}
+	}
+
+	hr.handlers.Store(newHandlers)
+	return true
 }
 
 func (hr *handlerRegistry) registerHandler(msgType MessageType, forward bool, handler Handler) {

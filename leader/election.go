@@ -79,6 +79,9 @@ func (le *LeaderElection) Start() {
 // Stop terminates the leader election process
 func (le *LeaderElection) Stop() {
 	le.cancel()
+	if le.nodeGroup != nil {
+		le.nodeGroup.Close()
+	}
 }
 
 // getEligibleNodes returns nodes that are eligible for leader election

@@ -816,23 +816,38 @@ func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) e
 	return nil
 }
 
-func (c *Cluster) HandleNodeStateChangeFunc(handler NodeStateChangeHandler) {
-	c.stateEventHandlers.Add(handler)
+func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
+	if msgType < ReservedMsgsStart {
+		return false
+	}
+	return c.handlers.unregister(msgType)
 }
 
-func (c *Cluster) HandleNodeMetadataChangeFunc(handler NodeMetadataChangeHandler) {
-	c.metadataChangeEventHandlers.Add(handler)
+func (c *Cluster) HandleNodeStateChangeFunc(handler NodeStateChangeHandler) HandlerID {
+	return c.stateEventHandlers.Add(handler)
+}
+
+func (c *Cluster) RemoveNodeStateChangeHandler(id HandlerID) bool {
+	return c.stateEventHandlers.Remove(id)
+}
+
+func (c *Cluster) HandleNodeMetadataChangeFunc(handler NodeMetadataChangeHandler) HandlerID {
+	return c.metadataChangeEventHandlers.Add(handler)
+}
+
+func (c *Cluster) RemoveNodeMetadataChangeHandler(id HandlerID) bool {
+	return c.metadataChangeEventHandlers.Remove(id)
 }
 
 func (c *Cluster) notifyNodeStateChanged(node *Node, prevState NodeState) {
-	currentHandlers := c.stateEventHandlers.handlers.Load().([]NodeStateChangeHandler)
+	currentHandlers := c.stateEventHandlers.GetHandlers()
 	for _, handler := range currentHandlers {
 		go handler(node, prevState)
 	}
 }
 
 func (c *Cluster) notifyMetadataChanged(node *Node) {
-	currentHandlers := c.metadataChangeEventHandlers.handlers.Load().([]NodeMetadataChangeHandler)
+	currentHandlers := c.metadataChangeEventHandlers.GetHandlers()
 	for _, handler := range currentHandlers {
 		go handler(node)
 	}
@@ -856,12 +871,16 @@ func (c *Cluster) GetBatchSize(size int) int {
 	return batchSize
 }
 
-func (c *Cluster) HandleGossipFunc(handler GossipHandler) {
-	c.gossipEventHandlers.Add(handler)
+func (c *Cluster) HandleGossipFunc(handler GossipHandler) HandlerID {
+	return c.gossipEventHandlers.Add(handler)
+}
+
+func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
+	return c.gossipEventHandlers.Remove(id)
 }
 
 func (c *Cluster) notifyDoGossip() {
-	currentHandlers := c.gossipEventHandlers.handlers.Load().([]GossipHandler)
+	currentHandlers := c.gossipEventHandlers.GetHandlers()
 	for _, handler := range currentHandlers {
 		handler()
 	}

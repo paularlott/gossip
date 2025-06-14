@@ -75,18 +75,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create cluster")
 	}
-	cluster.Start()
-	//	defer cluster.Stop()
 
 	// Set some metadata for the local node
 	cluster.LocalMetadata().
 		SetString("dc", "development")
-
-	// Join the cluster
-	err = cluster.Join(peers)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to join cluster")
-	}
 
 	// Initialize leader election
 	electionConfig := leader.DefaultConfig()
@@ -111,6 +103,15 @@ func main() {
 	// Start leader election
 	election.Start()
 	defer election.Stop()
+
+	cluster.Start()
+	//	defer cluster.Stop()
+
+	// Join the cluster
+	err = cluster.Join(peers)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to join cluster")
+	}
 
 	// Periodically output the leadership status
 	go func() {

@@ -190,7 +190,7 @@ func (hm *healthMonitor) checkRandomNodes() {
 		hm.joinPeersMutex.Unlock()
 
 		if len(peers) > 0 {
-			hm.config.Logger.Field("peer_count", len(peers)).Debugf("No live peers, trying to rejoin cluster")
+			hm.config.Logger.Field("known_peer_count", len(peers)).Debugf("No peers connected, trying to rejoin cluster")
 			hm.cluster.Join(peers)
 		}
 		return

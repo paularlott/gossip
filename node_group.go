@@ -11,6 +11,8 @@ type NodeGroup struct {
 	shardCount       int
 	shardMask        uint32
 	shards           []*nodeGroupShard
+	stateHandlerId   HandlerID
+	metaHandlerId    HandlerID
 }
 
 // nodeGroupShard represents a single shard of the node group
@@ -41,8 +43,8 @@ func NewNodeGroup(cluster *Cluster, criteria map[string]string) *NodeGroup {
 	}
 
 	// Register handlers for node state and metadata changes
-	cluster.HandleNodeStateChangeFunc(ng.handleNodeStateChange)
-	cluster.HandleNodeMetadataChangeFunc(ng.handleNodeMetadataChange)
+	ng.stateHandlerId = cluster.HandleNodeStateChangeFunc(ng.handleNodeStateChange)
+	ng.metaHandlerId = cluster.HandleNodeMetadataChangeFunc(ng.handleNodeMetadataChange)
 
 	// Populate group with existing nodes
 	ng.initializeWithExistingNodes()
@@ -50,11 +52,24 @@ func NewNodeGroup(cluster *Cluster, criteria map[string]string) *NodeGroup {
 	return ng
 }
 
+func (ng *NodeGroup) Close() {
+	// Unregister event handlers
+	ng.cluster.RemoveNodeStateChangeHandler(ng.stateHandlerId)
+	ng.cluster.RemoveNodeMetadataChangeHandler(ng.metaHandlerId)
+
+	// Clear all shards
+	for _, shard := range ng.shards {
+		shard.mutex.Lock()
+		shard.nodes = make(map[NodeID]*Node) // Clear nodes
+		shard.mutex.Unlock()
+	}
+}
+
 // initializeWithExistingNodes adds all existing matching nodes to the group
 func (ng *NodeGroup) initializeWithExistingNodes() {
 	nodes := ng.cluster.AliveNodes()
 	for _, node := range nodes {
-		if node.Alive() && ng.nodeMatchesCriteria(node) {
+		if ng.nodeMatchesCriteria(node) {
 			ng.addNode(node)
 		}
 	}
