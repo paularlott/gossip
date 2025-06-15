@@ -139,9 +139,8 @@ func (ng *NodeGroup) handleNodeMetadataChange(node *Node) {
 func (ng *NodeGroup) addNode(node *Node) {
 	shard := ng.getShard(node.ID)
 	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
-
 	shard.nodes[node.ID] = node
+	shard.mutex.Unlock()
 
 	if ng.onNodeAdded != nil {
 		ng.onNodeAdded(node)
@@ -152,9 +151,8 @@ func (ng *NodeGroup) addNode(node *Node) {
 func (ng *NodeGroup) removeNode(node *Node) {
 	shard := ng.getShard(node.ID)
 	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
-
 	delete(shard.nodes, node.ID)
+	shard.mutex.Unlock()
 
 	if ng.onNodeRemoved != nil {
 		ng.onNodeRemoved(node)
