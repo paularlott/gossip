@@ -15,6 +15,9 @@ func NewZerologLogger(zl zerolog.Logger) *ZerologLogger {
 	return &ZerologLogger{zl: zl}
 }
 
+func (l *ZerologLogger) Tracef(format string, args ...interface{}) {
+	l.zl.Trace().Msgf(format, args...)
+}
 func (l *ZerologLogger) Debugf(format string, args ...interface{}) {
 	l.zl.Debug().Msgf(format, args...)
 }

@@ -2,6 +2,7 @@ package gossip
 
 // Logger is a generic logger interface similar to BadgerDB's logger
 type Logger interface {
+	Tracef(format string, args ...interface{})
 	Debugf(format string, args ...interface{})
 	Infof(format string, args ...interface{})
 	Warnf(format string, args ...interface{})
@@ -17,6 +18,7 @@ func NewNullLogger() *NullLogger {
 	return &NullLogger{}
 }
 
+func (l *NullLogger) Tracef(format string, args ...interface{})  {}
 func (l *NullLogger) Debugf(format string, args ...interface{})  {}
 func (l *NullLogger) Infof(format string, args ...interface{})   {}
 func (l *NullLogger) Warnf(format string, args ...interface{})   {}

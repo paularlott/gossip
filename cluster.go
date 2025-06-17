@@ -423,7 +423,7 @@ func (c *Cluster) Join(peers []string) error {
 		go func(peerAddr string) {
 			defer wg.Done()
 
-			c.config.Logger.Debugf("Attempting to join peer: %s", peerAddr)
+			c.config.Logger.Tracef("Attempting to join peer: %s", peerAddr)
 
 			// If address matches our advertise address then skip it
 			if peerAddr == c.config.AdvertiseAddr {
