@@ -86,6 +86,10 @@ func (md *Metadata) GetString(key string) string {
 		return strconv.FormatBool(v)
 	case int:
 		return strconv.Itoa(v)
+	case int8:
+		return strconv.Itoa(int(v))
+	case int16:
+		return strconv.Itoa(int(v))
 	case int32:
 		return strconv.FormatInt(int64(v), 10)
 	case int64:
@@ -123,7 +127,7 @@ func (md *Metadata) GetBool(key string) bool {
 		if err == nil {
 			return b
 		}
-	case int, int32, int64, uint, uint32, uint64:
+	case int, int8, int16, int32, int64, uint, uint32, uint64:
 		return md.GetInt64(key) != 0
 	case float32, float64:
 		return md.GetFloat64(key) != 0
@@ -142,6 +146,10 @@ func (md *Metadata) GetInt64(key string) int64 {
 	// Handle direct cases
 	switch v := val.(type) {
 	case int:
+		return int64(v)
+	case int8:
+		return int64(v)
+	case int16:
 		return int64(v)
 	case int32:
 		return int64(v)
@@ -196,6 +204,10 @@ func (md *Metadata) GetUint64(key string) uint64 {
 	// Handle direct cases
 	switch v := val.(type) {
 	case uint:
+		return uint64(v)
+	case uint8:
+		return uint64(v)
+	case uint16:
 		return uint64(v)
 	case uint32:
 		return uint64(v)
@@ -265,11 +277,19 @@ func (md *Metadata) GetFloat64(key string) float64 {
 		return v
 	case int:
 		return float64(v)
+	case int8:
+		return float64(v)
+	case int16:
+		return float64(v)
 	case int32:
 		return float64(v)
 	case int64:
 		return float64(v)
 	case uint:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	case uint16:
 		return float64(v)
 	case uint32:
 		return float64(v)
