@@ -718,9 +718,9 @@ func (c *Cluster) periodicStateSync() {
 					go func(p *Node) {
 						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
 						if err != nil {
-							c.config.Logger.Err(err).Field("peer", p.ID.String()).Debugf("gossip: Periodic state exchange failed")
+							c.config.Logger.Err(err).Field("peer", p.ID.String()).Tracef("gossip: Periodic state exchange failed")
 						} else {
-							c.config.Logger.Field("peer", p.ID.String()).Debugf("gossip: Completed periodic state exchange")
+							c.config.Logger.Field("peer", p.ID.String()).Tracef("gossip: Completed periodic state exchange")
 						}
 					}(peer)
 				}
