@@ -127,7 +127,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Resolve the local node's address
 	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve advertise address: %v", err)
+		return nil, fmt.Errorf("failed to resolve advertise address (%s): %v", config.AdvertiseAddr, err)
 	}
 	cluster.localNode.address = addresses[0]
 
