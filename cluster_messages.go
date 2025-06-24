@@ -101,6 +101,43 @@ func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
 	return c.sendMessage(nil, TransportReliable, msgType, data)
 }
 
+func (c *Cluster) sendMessageExclude(peers []*Node, transportType TransportType, msgType MessageType, data interface{}, excludeNodes []NodeID) error {
+	packet, err := c.createPacket(c.localNode.ID, msgType, c.getMaxTTL(), data)
+	if err != nil {
+		return err
+	}
+
+	// Ensure the local node is in the exclude list
+	found := false
+	for _, id := range excludeNodes {
+		if id == c.localNode.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		excludeNodes = append(excludeNodes, c.localNode.ID)
+	}
+
+	// broadcast will release the packet once it is sent
+	c.enqueuePacketForBroadcast(packet, transportType, excludeNodes, peers)
+	return nil
+}
+
+func (c *Cluster) SendExcluding(msgType MessageType, data interface{}, excludeNodes []NodeID) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageExclude(nil, TransportBestEffort, msgType, data, excludeNodes)
+}
+
+func (c *Cluster) SendReliableExcluding(msgType MessageType, data interface{}, excludeNodes []NodeID) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageExclude(nil, TransportReliable, msgType, data, excludeNodes)
+}
+
 // Internal function to send a message to a specific node.
 func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, ttl uint8, msgType MessageType, data interface{}) error {
 	packet, err := c.createPacket(c.localNode.ID, msgType, ttl, data)
