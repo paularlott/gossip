@@ -1,10 +1,14 @@
 package gossip
 
 import (
+	"strings"
 	"sync"
 )
 
-const MetadataAnyValue = "*"
+const (
+	MetadataAnyValue       = "*"
+	MetadataContainsPrefix = "~"
+)
 
 // NodeGroup represents a group of nodes that match specific metadata criteria
 type NodeGroup struct {
@@ -92,7 +96,15 @@ func (ng *NodeGroup) initializeWithExistingNodes() {
 // nodeMatchesCriteria checks if a node matches all the metadata criteria
 func (ng *NodeGroup) nodeMatchesCriteria(node *Node) bool {
 	for key, expectedValue := range ng.metadataCriteria {
-		if !node.Metadata.Exists(key) || (expectedValue != MetadataAnyValue && node.Metadata.GetString(key) != expectedValue) {
+		if !node.Metadata.Exists(key) {
+			return false
+		}
+
+		if expectedValue[0] == MetadataContainsPrefix[0] {
+			if !strings.Contains(node.Metadata.GetString(key), expectedValue[1:]) {
+				return false
+			}
+		} else if expectedValue != MetadataAnyValue && expectedValue != node.Metadata.GetString(key) {
 			return false
 		}
 	}

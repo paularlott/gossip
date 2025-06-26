@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"strings"
 	"sync"
 )
 
@@ -106,7 +107,15 @@ func (dng *DataNodeGroup[T]) initializeWithExistingNodes() {
 // nodeMatchesCriteria checks if a node matches all the metadata criteria
 func (dng *DataNodeGroup[T]) nodeMatchesCriteria(node *Node) bool {
 	for key, expectedValue := range dng.metadataCriteria {
-		if !node.Metadata.Exists(key) || (expectedValue != MetadataAnyValue && node.Metadata.GetString(key) != expectedValue) {
+		if !node.Metadata.Exists(key) {
+			return false
+		}
+
+		if expectedValue[0] == MetadataContainsPrefix[0] {
+			if !strings.Contains(node.Metadata.GetString(key), expectedValue[1:]) {
+				return false
+			}
+		} else if expectedValue != MetadataAnyValue && expectedValue != node.Metadata.GetString(key) {
 			return false
 		}
 	}
