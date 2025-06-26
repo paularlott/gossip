@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"math/rand"
 	"strings"
 	"sync"
 )
@@ -223,17 +224,31 @@ func (dng *DataNodeGroup[T]) removeNode(node *Node) {
 }
 
 // GetNodes returns all alive nodes in this group, excluding specified node IDs
-func (dng *DataNodeGroup[T]) GetNodes(exclude map[NodeID]struct{}) []*Node {
+func (dng *DataNodeGroup[T]) GetNodes(excludeIDs []NodeID) []*Node {
 	var result []*Node
+
+	// Build exclusion set
+	var excludeSet map[NodeID]struct{}
+	excludeSetSize := len(excludeIDs)
+	if excludeSetSize > 0 {
+		excludeSet = make(map[NodeID]struct{}, len(excludeIDs))
+		for _, id := range excludeIDs {
+			excludeSet[id] = struct{}{}
+		}
+	}
 
 	for _, shard := range dng.shards {
 		shard.mutex.RLock()
 
 		for nodeID, nodeData := range shard.nodes {
-			// Skip excluded nodes and ensure node is still alive
-			if _, excluded := exclude[nodeID]; !excluded && nodeData.Node.Alive() {
-				result = append(result, nodeData.Node)
+			// Skip excluded nodes
+			if excludeSetSize > 0 {
+				if _, excluded := excludeSet[nodeID]; excluded {
+					continue
+				}
 			}
+
+			result = append(result, nodeData.Node)
 		}
 
 		shard.mutex.RUnlock()
@@ -324,4 +339,54 @@ func (dng *DataNodeGroup[T]) getShard(nodeID NodeID) *dataNodeGroupShard[T] {
 	}
 
 	return dng.shards[hash&dng.shardMask]
+}
+
+// SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
+func (dng *DataNodeGroup[T]) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	zoneNodes := dng.GetNodes([]NodeID{dng.cluster.localNode.ID})
+
+	rand.Shuffle(len(zoneNodes), func(i, j int) {
+		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
+	})
+
+	err := dng.cluster.SendToPeers(zoneNodes, msgType, data)
+	if err != nil {
+		return err
+	}
+
+	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+		usedList := make([]NodeID, len(zoneNodes))
+		for i, node := range zoneNodes {
+			usedList[i] = node.ID
+		}
+
+		dng.cluster.SendExcluding(msgType, data, usedList)
+	}
+
+	return nil
+}
+
+// SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
+func (dng *DataNodeGroup[T]) SendToPeersReliable(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	zoneNodes := dng.GetNodes([]NodeID{dng.cluster.localNode.ID})
+
+	rand.Shuffle(len(zoneNodes), func(i, j int) {
+		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
+	})
+
+	err := dng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
+	if err != nil {
+		return err
+	}
+
+	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+		usedList := make([]NodeID, len(zoneNodes))
+		for i, node := range zoneNodes {
+			usedList[i] = node.ID
+		}
+
+		dng.cluster.SendReliableExcluding(msgType, data, usedList)
+	}
+
+	return nil
 }

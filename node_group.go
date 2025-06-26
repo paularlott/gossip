@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"math/rand"
 	"strings"
 	"sync"
 )
@@ -241,4 +242,54 @@ func (ng *NodeGroup) getShard(nodeID NodeID) *nodeGroupShard {
 	}
 
 	return ng.shards[hash&ng.shardMask]
+}
+
+// SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
+func (ng *NodeGroup) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	zoneNodes := ng.GetNodes([]NodeID{ng.cluster.localNode.ID})
+
+	rand.Shuffle(len(zoneNodes), func(i, j int) {
+		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
+	})
+
+	err := ng.cluster.SendToPeers(zoneNodes, msgType, data)
+	if err != nil {
+		return err
+	}
+
+	if ng.cluster.getPeerSubsetSizeBroadcast(ng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+		usedList := make([]NodeID, len(zoneNodes))
+		for i, node := range zoneNodes {
+			usedList[i] = node.ID
+		}
+
+		ng.cluster.SendExcluding(msgType, data, usedList)
+	}
+
+	return nil
+}
+
+// SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
+func (ng *NodeGroup) SendToPeersReliable(dstNodes []*Node, msgType MessageType, data interface{}) error {
+	zoneNodes := ng.GetNodes([]NodeID{ng.cluster.localNode.ID})
+
+	rand.Shuffle(len(zoneNodes), func(i, j int) {
+		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
+	})
+
+	err := ng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
+	if err != nil {
+		return err
+	}
+
+	if ng.cluster.getPeerSubsetSizeBroadcast(ng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+		usedList := make([]NodeID, len(zoneNodes))
+		for i, node := range zoneNodes {
+			usedList[i] = node.ID
+		}
+
+		ng.cluster.SendReliableExcluding(msgType, data, usedList)
+	}
+
+	return nil
 }

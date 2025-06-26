@@ -556,6 +556,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	}
 }
 
+// getPeerSubsetSizeBroadcast calculates the number of peers to gossip a message to at any one time.
 func (c *Cluster) getPeerSubsetSizeBroadcast(totalNodes int) int {
 	if totalNodes <= 0 {
 		return 0
@@ -567,6 +568,7 @@ func (c *Cluster) getPeerSubsetSizeBroadcast(totalNodes int) int {
 	return int(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
+// getPeerSubsetSizeStateExchange calculates the number of peers to use for state exchanges.
 func (c *Cluster) getPeerSubsetSizeStateExchange(totalNodes int) int {
 	if totalNodes <= 0 {
 		return 0
@@ -578,6 +580,7 @@ func (c *Cluster) getPeerSubsetSizeStateExchange(totalNodes int) int {
 	return int(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
+// getPeerSubsetSizeIndirectPing The number of peers to use for indirect pings.
 func (c *Cluster) getPeerSubsetSizeIndirectPing(totalNodes int) int {
 	if totalNodes <= 0 {
 		return 0
