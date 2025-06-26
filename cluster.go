@@ -546,8 +546,13 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
 		}
 	} else {
-		packet.Release()
-		c.config.Logger.Warnf("gossip: No handler registered for message type: %d", packet.MessageType)
+		var transportType TransportType
+		if packet.conn != nil {
+			transportType = TransportReliable
+		} else {
+			transportType = TransportBestEffort
+		}
+		c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
 	}
 }
 
