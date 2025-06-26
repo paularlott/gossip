@@ -342,7 +342,7 @@ func (dng *DataNodeGroup[T]) getShard(nodeID NodeID) *dataNodeGroupShard[T] {
 }
 
 // SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
-func (dng *DataNodeGroup[T]) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
+func (dng *DataNodeGroup[T]) SendToPeers(msgType MessageType, data interface{}) error {
 	zoneNodes := dng.GetNodes([]NodeID{dng.cluster.localNode.ID})
 
 	rand.Shuffle(len(zoneNodes), func(i, j int) {
@@ -367,7 +367,7 @@ func (dng *DataNodeGroup[T]) SendToPeers(dstNodes []*Node, msgType MessageType, 
 }
 
 // SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
-func (dng *DataNodeGroup[T]) SendToPeersReliable(dstNodes []*Node, msgType MessageType, data interface{}) error {
+func (dng *DataNodeGroup[T]) SendToPeersReliable(msgType MessageType, data interface{}) error {
 	zoneNodes := dng.GetNodes([]NodeID{dng.cluster.localNode.ID})
 
 	rand.Shuffle(len(zoneNodes), func(i, j int) {

@@ -245,7 +245,7 @@ func (ng *NodeGroup) getShard(nodeID NodeID) *nodeGroupShard {
 }
 
 // SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
-func (ng *NodeGroup) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
+func (ng *NodeGroup) SendToPeers(msgType MessageType, data interface{}) error {
 	zoneNodes := ng.GetNodes([]NodeID{ng.cluster.localNode.ID})
 
 	rand.Shuffle(len(zoneNodes), func(i, j int) {
@@ -270,7 +270,7 @@ func (ng *NodeGroup) SendToPeers(dstNodes []*Node, msgType MessageType, data int
 }
 
 // SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
-func (ng *NodeGroup) SendToPeersReliable(dstNodes []*Node, msgType MessageType, data interface{}) error {
+func (ng *NodeGroup) SendToPeersReliable(msgType MessageType, data interface{}) error {
 	zoneNodes := ng.GetNodes([]NodeID{ng.cluster.localNode.ID})
 
 	rand.Shuffle(len(zoneNodes), func(i, j int) {
