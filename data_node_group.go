@@ -355,12 +355,8 @@ func (dng *DataNodeGroup[T]) SendToPeers(msgType MessageType, data interface{}) 
 	}
 
 	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
-		usedList := make([]NodeID, len(zoneNodes))
-		for i, node := range zoneNodes {
-			usedList[i] = node.ID
-		}
-
-		dng.cluster.SendExcluding(msgType, data, usedList)
+		zoneNodes = append(zoneNodes, dng.cluster.localNode)
+		return dng.cluster.SendExcluding(msgType, data, dng.cluster.NodesToIDs(zoneNodes))
 	}
 
 	return nil
@@ -380,12 +376,8 @@ func (dng *DataNodeGroup[T]) SendToPeersReliable(msgType MessageType, data inter
 	}
 
 	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
-		usedList := make([]NodeID, len(zoneNodes))
-		for i, node := range zoneNodes {
-			usedList[i] = node.ID
-		}
-
-		dng.cluster.SendReliableExcluding(msgType, data, usedList)
+		zoneNodes = append(zoneNodes, dng.cluster.localNode)
+		return dng.cluster.SendReliableExcluding(msgType, data, dng.cluster.NodesToIDs(zoneNodes))
 	}
 
 	return nil

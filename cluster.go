@@ -971,3 +971,11 @@ func (c *Cluster) DisableStreamCompression(s net.Conn) *Cluster {
 	}
 	return c
 }
+
+func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
+	ids := make([]NodeID, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, node.ID)
+	}
+	return ids
+}
