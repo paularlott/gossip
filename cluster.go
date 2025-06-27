@@ -556,40 +556,49 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	}
 }
 
-// getPeerSubsetSizeBroadcast calculates the number of peers to gossip a message to at any one time.
-func (c *Cluster) getPeerSubsetSizeBroadcast(totalNodes int) int {
+// CalcFanOut determines how many peers should receive a message
+// when broadcasting information throughout the cluster. It implements a
+// logarithmic scaling approach to balance network traffic and propagation speed.
+func (c *Cluster) CalcFanOut() int {
+	totalNodes := float64(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
 	if totalNodes <= 0 {
 		return 0
 	}
 
-	basePeerCount := math.Ceil(math.Log2(float64(totalNodes)) * c.config.BroadcastMultiplier)
+	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.FanOutMultiplier)
 	cap := 10.0
 
-	return int(math.Max(1, math.Min(basePeerCount, cap)))
+	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
 }
 
-// getPeerSubsetSizeStateExchange calculates the number of peers to use for state exchanges.
-func (c *Cluster) getPeerSubsetSizeStateExchange(totalNodes int) int {
-	if totalNodes <= 0 {
+// CalcPayloadSize determines how many items should be included
+// in a gossip payload. This is used when exchanging state information to limit
+// the size of individual gossip messages.
+//
+// This is meant for controlling the volume of data, not the number of nodes
+// to contact.
+func (c *Cluster) CalcPayloadSize(totalItems int) int {
+	if totalItems <= 0 {
 		return 0
 	}
 
-	basePeerCount := math.Ceil(math.Log2(float64(totalNodes))*c.config.StateExchangeMultiplier) + 2
+	basePeerCount := math.Ceil(math.Log2(float64(totalItems))*c.config.StateExchangeMultiplier) + 2
 	cap := 16.0
 
-	return int(math.Max(1, math.Min(basePeerCount, cap)))
+	return int(math.Min(float64(totalItems), math.Max(1, math.Min(basePeerCount, cap))))
 }
 
 // getPeerSubsetSizeIndirectPing The number of peers to use for indirect pings.
-func (c *Cluster) getPeerSubsetSizeIndirectPing(totalNodes int) int {
+func (c *Cluster) getPeerSubsetSizeIndirectPing() int {
+	totalNodes := float64(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
 	if totalNodes <= 0 {
 		return 0
 	}
 
-	basePeerCount := math.Ceil(math.Log2(float64(totalNodes)) * c.config.IndirectPingMultiplier)
+	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.IndirectPingMultiplier)
 	cap := 6.0
 
-	return int(math.Max(1, math.Min(basePeerCount, cap)))
+	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
 }
 
 func (c *Cluster) getMaxTTL() uint8 {
@@ -607,7 +616,7 @@ func (c *Cluster) getMaxTTL() uint8 {
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	// Determine how many nodes to include in the exchange
-	sampleSize := c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount())
+	sampleSize := c.CalcPayloadSize(c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount())
 
 	// Get a random selection of nodes, excluding specified nodes
 	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
@@ -681,7 +690,7 @@ func (c *Cluster) broadcastWorker() {
 
 			// Get the peer subset to send the packet to
 			if item.peers == nil {
-				item.peers = c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeBroadcast(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), item.excludePeers)
+				item.peers = c.nodes.getRandomLiveNodes(c.CalcFanOut(), item.excludePeers)
 			}
 
 			if err := c.transport.SendPacket(item.transportType, item.peers, item.packet); err != nil {
@@ -713,7 +722,7 @@ func (c *Cluster) periodicStateSync() {
 			select {
 			case <-ticker.C:
 				// Calculate appropriate number of peers based on cluster size
-				peerCount := c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
+				peerCount := c.CalcFanOut()
 				if peerCount == 0 {
 					continue
 				}
@@ -867,16 +876,7 @@ func (c *Cluster) NodeIsLocal(node *Node) bool {
 
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
 func (c *Cluster) GetCandidates() []*Node {
-	return c.nodes.getRandomLiveNodes(c.getPeerSubsetSizeStateExchange(c.nodes.getAliveCount()+c.nodes.getSuspectCount()), []NodeID{c.localNode.ID})
-}
-
-// Get the amount of data to send in a gossip message
-func (c *Cluster) GetBatchSize(size int) int {
-	batchSize := c.getPeerSubsetSizeStateExchange(size)
-	if batchSize > size {
-		batchSize = size
-	}
-	return batchSize
+	return c.nodes.getRandomLiveNodes(c.CalcFanOut(), []NodeID{c.localNode.ID})
 }
 
 func (c *Cluster) HandleGossipFunc(handler GossipHandler) HandlerID {

@@ -864,7 +864,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 		Seq:      seq,
 	}
 
-	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing(hm.cluster.nodes.getAliveCount() + hm.cluster.nodes.getSuspectCount())
+	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing()
 	sentCount := 0
 	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
 	if len(indirectPeers) == 0 {

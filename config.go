@@ -58,7 +58,7 @@ type Config struct {
 	PingTimeout                   time.Duration           // Timeout for ping operations, should be less than HealthCheckInterval
 	MaxParallelSuspectEvaluations int                     // Max number of parallel evaluations for suspect nodes
 	StateSyncInterval             time.Duration           // How often to perform state synchronization with peers
-	BroadcastMultiplier           float64                 // Scale of peer sampling for broadcast messages
+	FanOutMultiplier              float64                 // Scale of peer count for broadcast messages
 	StateExchangeMultiplier       float64                 // Scale of peer sampling for state exchange messages
 	IndirectPingMultiplier        float64                 // Scale of peer sampling for indirect ping messages
 	TTLMultiplier                 float64                 // Multiplier for TTL, used to determine how many hops a message can take
@@ -99,7 +99,7 @@ func DefaultConfig() *Config {
 		PingTimeout:                   500 * time.Millisecond,
 		MaxParallelSuspectEvaluations: 4,
 		StateSyncInterval:             30 * time.Second,
-		BroadcastMultiplier:           1,
+		FanOutMultiplier:              1,
 		StateExchangeMultiplier:       0.8,
 		IndirectPingMultiplier:        0.7,
 		TTLMultiplier:                 1.0,

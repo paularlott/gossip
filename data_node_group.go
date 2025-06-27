@@ -354,7 +354,7 @@ func (dng *DataNodeGroup[T]) SendToPeers(msgType MessageType, data interface{}) 
 		return err
 	}
 
-	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+	if dng.cluster.CalcFanOut() > len(zoneNodes)+1 {
 		zoneNodes = append(zoneNodes, dng.cluster.localNode)
 		return dng.cluster.SendExcluding(msgType, data, dng.cluster.NodesToIDs(zoneNodes))
 	}
@@ -375,7 +375,7 @@ func (dng *DataNodeGroup[T]) SendToPeersReliable(msgType MessageType, data inter
 		return err
 	}
 
-	if dng.cluster.getPeerSubsetSizeBroadcast(dng.cluster.NumAliveNodes()) > len(zoneNodes)+1 {
+	if dng.cluster.CalcFanOut() > len(zoneNodes)+1 {
 		zoneNodes = append(zoneNodes, dng.cluster.localNode)
 		return dng.cluster.SendReliableExcluding(msgType, data, dng.cluster.NodesToIDs(zoneNodes))
 	}

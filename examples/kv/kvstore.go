@@ -179,7 +179,7 @@ func (kv *KVStore) syncRandomSubset() {
 		return // No data to sync
 	}
 
-	batchSize := kv.cluster.GetBatchSize(totalKeys)
+	batchSize := kv.cluster.CalcPayloadSize(totalKeys)
 	if batchSize == 0 {
 		return // No keys to send in this batch
 	}
