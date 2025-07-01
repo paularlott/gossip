@@ -62,6 +62,10 @@ func (le *LeaderElection) HandleEventFunc(eventType EventType, handler LeaderEve
 // Start the election check process
 func (le *LeaderElection) Start() {
 	go func() {
+		// Kick off election
+		le.checkAndElectLeader()
+
+		// Start periodic checks and elections
 		ticker := time.NewTicker(le.config.LeaderCheckInterval)
 		defer ticker.Stop()
 
@@ -96,6 +100,18 @@ func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
 
 // checkAndElectLeader checks if we need to elect a new leader and does so if necessary
 func (le *LeaderElection) checkAndElectLeader() {
+	// If metadata filtering is enabled and local node is not eligible, don't participate
+	if le.nodeGroup != nil && !le.nodeGroup.Contains(le.cluster.LocalNode().ID) {
+		// Clear any leader state since we're not eligible to participate,
+		// however maintain the leader information
+		le.lock.Lock()
+		if le.isLeader {
+			le.isLeader = false
+		}
+		le.lock.Unlock()
+		return
+	}
+
 	// First, check if there's already a valid leader
 	if le.HasLeader() {
 		// If we are the leader then send a heartbeat
@@ -133,7 +149,7 @@ func (le *LeaderElection) GetLeader() *gossip.Node {
 	return le.cluster.GetNode(le.leaderID)
 }
 
-// hasValidLeader checks if there's already a leader that has sent a heartbeat recently
+// hasLeader checks if there's already a leader that has sent a heartbeat recently
 func (le *LeaderElection) HasLeader() bool {
 	le.lock.RLock()
 	defer le.lock.RUnlock()
@@ -143,8 +159,25 @@ func (le *LeaderElection) HasLeader() bool {
 		return false
 	}
 
-	// Check quorum based on currently alive nodes
-	eligibleNodes := le.getEligibleNodes()
+	// For non-participating nodes, use all alive nodes for quorum calculation
+	// For participating nodes, use eligible nodes
+	var eligibleNodes []*gossip.Node
+	var isParticipating bool
+
+	if le.nodeGroup != nil {
+		isParticipating = le.nodeGroup.Contains(le.cluster.LocalNode().ID)
+		if isParticipating {
+			eligibleNodes = le.getEligibleNodes()
+		} else {
+			// Non-participating nodes should use the eligible nodes for quorum calculation
+			// but they don't participate in the election themselves
+			eligibleNodes = le.nodeGroup.GetNodes(nil)
+		}
+	} else {
+		eligibleNodes = le.cluster.AliveNodes()
+		isParticipating = true
+	}
+
 	requiredQuorum := le.calculateQuorumForNodes(len(eligibleNodes))
 	numEligible := len(eligibleNodes)
 
@@ -153,6 +186,7 @@ func (le *LeaderElection) HasLeader() bool {
 		le.cluster.Logger().
 			Field("eligibleNodes", numEligible).
 			Field("requiredQuorum", requiredQuorum).
+			Field("participating", isParticipating).
 			Warnf("Quorum lost among eligible nodes")
 		return false // Not enough nodes for quorum
 	}
@@ -169,8 +203,9 @@ func (le *LeaderElection) HasLeader() bool {
 	}
 
 	// If metadata filtering is enabled, check if current leader is still eligible
+	// This applies to both participating and non-participating nodes
 	if le.nodeGroup != nil {
-		if !le.nodeGroup.Contains(leader.ID) || !le.nodeGroup.Contains(le.cluster.LocalNode().ID) {
+		if !le.nodeGroup.Contains(leader.ID) {
 			le.cluster.Logger().
 				Field("leaderId", le.leaderID).
 				Debugf("Current leader no longer eligible due to metadata mismatch")
@@ -449,4 +484,18 @@ func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 // GetNodeGroup returns the node group used for leader election, if any
 func (le *LeaderElection) GetNodeGroup() *gossip.NodeGroup {
 	return le.nodeGroup
+}
+
+func (le *LeaderElection) SendToPeers(msgType gossip.MessageType, data interface{}) error {
+	if le.nodeGroup != nil {
+		return le.nodeGroup.SendToPeers(msgType, data)
+	}
+	return le.cluster.Send(msgType, data)
+}
+
+func (le *LeaderElection) SendToPeersReliable(msgType gossip.MessageType, data interface{}) error {
+	if le.nodeGroup != nil {
+		return le.nodeGroup.SendToPeersReliable(msgType, data)
+	}
+	return le.cluster.SendReliable(msgType, data)
 }
