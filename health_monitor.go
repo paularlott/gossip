@@ -922,7 +922,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		return
 	}
 
-	hm.config.Logger.Field("state_count", len(remoteStates)).Debugf("gossip: Combining remote node states")
+	hm.config.Logger.Field("state_count", len(remoteStates)).Tracef("gossip: Combining remote node states")
 
 	// Process each remote node state
 	for _, remoteState := range remoteStates {
@@ -984,7 +984,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			Field("node", remoteState.ID.String()).
 			Field("local_state", localNode.state.String()).
 			Field("remote_state", remoteState.State.String()).
-			Debugf("gossip: Comparing local and remote node state")
+			Tracef("gossip: Comparing local and remote node state")
 
 		// Handle each combination of local/remote states
 		switch {

@@ -22,7 +22,7 @@ func (c *Cluster) registerSystemHandlers() {
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 	if sender == nil {
-		return fmt.Errorf("unknown sender")
+		return nil // Silently ignore as this can happen during cluster boot
 	}
 
 	ping := pingMessage{}
