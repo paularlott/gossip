@@ -285,15 +285,15 @@ func (dng *DataNodeGroup[T]) UpdateNodeData(nodeID NodeID, updateFn func(*Node, 
 	return nil
 }
 
-// GetAllNodesWithData returns all alive nodes with their custom data
-func (dng *DataNodeGroup[T]) GetAllNodesWithData() []*NodeWithData[T] {
-	var result []*NodeWithData[T]
+// GetDataNodes returns all alive nodes custom data
+func (dng *DataNodeGroup[T]) GetDataNodes() []*T {
+	var result []*T
 
 	for _, shard := range dng.shards {
 		shard.mutex.RLock()
 
 		for _, nodeData := range shard.nodes {
-			result = append(result, nodeData)
+			result = append(result, nodeData.Data)
 		}
 
 		shard.mutex.RUnlock()
