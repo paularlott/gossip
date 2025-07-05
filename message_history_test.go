@@ -3,6 +3,8 @@ package gossip
 import (
 	"testing"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 // MockNodeID creates a NodeID for testing
@@ -28,8 +30,8 @@ func TestMessageHistoryBasic(t *testing.T) {
 	node1 := mockNodeID(1)
 	node2 := mockNodeID(2)
 
-	msg1 := MessageID{Timestamp: 100, Seq: 1}
-	msg2 := MessageID{Timestamp: 200, Seq: 2}
+	msg1 := MessageID(1)
+	msg2 := MessageID(2)
 
 	// Should not contain messages initially
 	if mh.contains(node1, msg1) {
@@ -68,7 +70,7 @@ func TestMessageHistoryPruning(t *testing.T) {
 	defer mh.stop()
 
 	node1 := mockNodeID(1)
-	msg1 := MessageID{Timestamp: 100, Seq: 1}
+	msg1 := MessageID(hlc.Now())
 
 	// Record message
 	mh.recordMessage(node1, msg1)
@@ -106,7 +108,7 @@ func TestMessageHistorySharding(t *testing.T) {
 	// Add 100 messages per node
 	for _, node := range nodes {
 		for i := 0; i < 100; i++ {
-			msg := MessageID{Timestamp: int64(i), Seq: 0}
+			msg := MessageID(i)
 			mh.recordMessage(node, msg)
 		}
 	}
@@ -114,7 +116,7 @@ func TestMessageHistorySharding(t *testing.T) {
 	// Verify all messages are found
 	for _, node := range nodes {
 		for i := 0; i < 100; i++ {
-			msg := MessageID{Timestamp: int64(i), Seq: 0}
+			msg := MessageID(i)
 			if !mh.contains(node, msg) {
 				t.Errorf("Message should be found for node %v, msg %d", node, msg)
 			}

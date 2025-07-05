@@ -10,10 +10,7 @@ import (
 )
 
 type MessageType uint16
-type MessageID struct {
-	Timestamp int64
-	Seq       uint16
-}
+type MessageID hlc.Timestamp
 
 const (
 	// Message types

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,7 +36,6 @@ type Cluster struct {
 	handlers                    *handlerRegistry
 	broadcastQueue              chan *broadcastQItem
 	healthMonitor               *healthMonitor
-	messageIdGen                atomic.Pointer[MessageID]
 	stateEventHandlers          *eventHandlers[NodeStateChangeHandler]
 	metadataChangeEventHandlers *eventHandlers[NodeMetadataChangeHandler]
 	gossipEventHandlers         *eventHandlers[GossipHandler]
@@ -130,12 +128,6 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("failed to resolve advertise address (%s): %v", config.AdvertiseAddr, err)
 	}
 	cluster.localNode.address = addresses[0]
-
-	initialMessageID := MessageID{
-		Timestamp: time.Now().UnixNano(),
-		Seq:       0,
-	}
-	cluster.messageIdGen.Store(&initialMessageID)
 
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)

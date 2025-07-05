@@ -71,8 +71,8 @@ func (mh *messageHistory) getShard(nodeID NodeID, messageID MessageID) *historyS
 
 	// Incorporate messageID for better distribution - without truncation
 	// Use XOR of high and low 32 bits to preserve entire int64 value
-	messageIDLow := uint32(messageID.Timestamp & 0xFFFFFFFF)
-	messageIDHigh := uint32(messageID.Timestamp >> 32)
+	messageIDLow := uint32(uint64(messageID) & 0xFFFFFFFF)
+	messageIDHigh := uint32(uint64(messageID) >> 32)
 	hash ^= messageIDLow ^ messageIDHigh
 
 	return mh.shards[hash&mh.shardMask]

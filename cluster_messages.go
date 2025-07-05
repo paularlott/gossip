@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 // Helper function to create a Stream from a connection.
@@ -13,55 +15,11 @@ func (c *Cluster) wrapStream(conn net.Conn) (net.Conn, error) {
 	return NewStream(conn, c.config), nil
 }
 
-func (c *Cluster) nextMessageID() MessageID {
-	// Get the current time once before entering the loop
-	now := time.Now().UnixNano()
-
-	for {
-		current := c.messageIdGen.Load()
-
-		// Create the next message ID (avoid allocating until needed)
-		var nextSeq uint16
-		var nextTimestamp int64
-
-		// If timestamp is the same, increment sequence
-		if current.Timestamp == now {
-			nextTimestamp = now
-			nextSeq = current.Seq + 1
-			// Handle overflow
-			if nextSeq == 0 {
-				// In case of overflow, move to next nanosecond
-				nextTimestamp = now + 1
-			}
-		} else if current.Timestamp < now {
-			// If our timestamp is newer, start with sequence 0
-			nextTimestamp = now
-			nextSeq = 0
-		} else {
-			// Current timestamp is in the future (clock went backward)
-			// Continue using the current timestamp but increment sequence
-			nextTimestamp = current.Timestamp
-			nextSeq = current.Seq + 1
-		}
-
-		// Create the next ID value (only allocate once we know the values)
-		next := &MessageID{
-			Timestamp: nextTimestamp,
-			Seq:       nextSeq,
-		}
-
-		// Try to update atomically
-		if c.messageIdGen.CompareAndSwap(current, next) {
-			return *next
-		}
-	}
-}
-
 func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
 	packet := NewPacket()
 	packet.MessageType = msgType
 	packet.SenderID = sender
-	packet.MessageID = c.nextMessageID()
+	packet.MessageID = MessageID(hlc.Now())
 	packet.TTL = ttl
 	packet.codec = c.config.MsgCodec
 
