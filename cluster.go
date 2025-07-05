@@ -628,7 +628,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 			ID:                n.ID,
 			Address:           n.address,
 			State:             n.state,
-			StateChangeTime:   n.stateChangeTime.UnixNano(),
+			StateChangeTime:   n.stateChangeTime,
 			MetadataTimestamp: n.metadata.GetTimestamp(),
 			Metadata:          n.metadata.GetAll(),
 		})

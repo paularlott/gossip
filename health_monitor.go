@@ -447,7 +447,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 		}
 
 		// Calculate how long the node has been dead
-		deadDuration := now.Sub(node.stateChangeTime)
+		deadDuration := now.Sub(node.stateChangeTime.Time())
 
 		// After a certain timeout, permanently remove the node
 		if deadDuration > hm.config.DeadNodeTimeout {

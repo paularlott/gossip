@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/hlc"
 	"github.com/paularlott/gossip/websocket"
 
 	"github.com/google/uuid"
@@ -41,7 +42,7 @@ func createTestNode(id string, state NodeState) *Node {
 	return &Node{
 		ID:              nodeID,
 		state:           state,
-		stateChangeTime: time.Now(),
+		stateChangeTime: hlc.Now(),
 	}
 }
 

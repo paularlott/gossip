@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 // NodeListShard represents a single shard of the node list
@@ -226,7 +228,7 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 
 		// Update node state
 		node.state = state
-		node.stateChangeTime = time.Now()
+		node.stateChangeTime = hlc.Now()
 
 		// Add to new state map
 		shard.byState[state][nodeID] = node

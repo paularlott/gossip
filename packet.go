@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/hlc"
 )
 
 type MessageType uint16
@@ -91,7 +92,7 @@ type joinMessage struct {
 	Address            Address                `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
-	MetadataTimestamp  int64                  `msgpack:"mdts" json:"mdts"`
+	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
@@ -102,7 +103,7 @@ type joinReplyMessage struct {
 	Address            Address                `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
-	MetadataTimestamp  int64                  `msgpack:"mdts" json:"mdts"`
+	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
@@ -110,8 +111,8 @@ type exchangeNodeState struct {
 	ID                NodeID                 `msgpack:"id" json:"id"`
 	Address           Address                `msgpack:"addr" json:"addr"`
 	State             NodeState              `msgpack:"s" json:"s"`
-	StateChangeTime   int64                  `msgpack:"sct" json:"sct"`
-	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
+	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
+	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }
 
@@ -141,6 +142,6 @@ type leavingMessage struct {
 }
 
 type metadataUpdateMessage struct {
-	MetadataTimestamp int64                  `msgpack:"mdts" json:"mdts"`
+	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }

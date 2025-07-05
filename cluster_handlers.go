@@ -177,7 +177,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 			ID:                n.ID,
 			Address:           n.address,
 			State:             n.state,
-			StateChangeTime:   n.stateChangeTime.UnixNano(),
+			StateChangeTime:   n.stateChangeTime,
 			MetadataTimestamp: n.metadata.GetTimestamp(),
 			Metadata:          n.metadata.GetAll(),
 		})

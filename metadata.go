@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 // MetadataReader provides read-only access to metadata
@@ -20,8 +22,7 @@ type MetadataReader interface {
 	GetFloat32(key string) float32
 	GetFloat64(key string) float64
 	GetTime(key string) time.Time
-	GetTimestamp() int64
-	GetLastModified() time.Time
+	GetTimestamp() hlc.Timestamp
 	GetAll() map[string]interface{}
 	GetAllKeys() []string
 	GetAllAsString() map[string]string
@@ -33,15 +34,16 @@ var _ MetadataReader = (*Metadata)(nil)
 
 // Metadata holds node metadata with type-safe accessors
 type Metadata struct {
-	data    atomic.Value // Holds map[string]interface{}
-	lastMod atomic.Int64 // Last modification timestamp in nanoseconds
+	data         atomic.Value  // Holds map[string]interface{}
+	lastModified atomic.Uint64 // Last modification timestamp in nanoseconds
 }
 
 // NewMetadata creates a new metadata container
 func NewMetadata() *Metadata {
 	md := &Metadata{}
 	md.data.Store(make(map[string]interface{}))
-	md.lastMod.Store(0)
+	ts := hlc.Now()
+	md.lastModified.Store(uint64(ts))
 	return md
 }
 
@@ -62,8 +64,9 @@ func (md *Metadata) set(key string, value interface{}) *Metadata {
 	}
 	newData[key] = value
 
+	ts := hlc.Now()
 	md.data.Store(newData)
-	md.lastMod.Store(time.Now().UnixNano())
+	md.lastModified.Store(uint64(ts))
 
 	return md
 }
@@ -425,8 +428,9 @@ func (md *Metadata) Delete(key string) {
 		}
 	}
 
+	ts := hlc.Now()
 	md.data.Store(newData)
-	md.lastMod.Store(time.Now().UnixNano())
+	md.lastModified.Store(uint64(ts))
 }
 
 // Exists returns true if the key exists in the metadata
@@ -437,14 +441,15 @@ func (md *Metadata) Exists(key string) bool {
 }
 
 // GetTimestamp returns the last modification timestamp
-func (md *Metadata) GetTimestamp() int64 {
-	return md.lastMod.Load()
+func (md *Metadata) GetTimestamp() hlc.Timestamp {
+	return hlc.Timestamp(md.lastModified.Load())
 }
 
+// TODO REMOVE ME!!!
 // GetLastModified returns when the metadata was last modified
-func (md *Metadata) GetLastModified() time.Time {
-	return time.Unix(0, md.lastMod.Load())
-}
+/* func (md *Metadata) GetLastModified() time.Time {
+	return time.Unix(0, md.lastModified.Load())
+} */
 
 // GetAll returns a copy of all metadata
 func (md *Metadata) GetAll() map[string]interface{} {
@@ -484,11 +489,12 @@ func (md *Metadata) GetAllAsString() map[string]string {
 }
 
 // update replaces all metadata if the timestamp is newer, if force is true then the timestamp check is ignored
-func (md *Metadata) update(data map[string]interface{}, timestamp int64, force bool) bool {
+func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp, force bool) bool {
 	// Only replace if the incoming timestamp is newer
-	currentTime := md.lastMod.Load()
+	currentTime := md.lastModified.Load()
+	currentTimestamp := hlc.Timestamp(currentTime)
 
-	if !force && timestamp <= currentTime {
+	if !force && timestamp.Before(currentTimestamp) {
 		return false // Reject older data
 	}
 
@@ -499,6 +505,6 @@ func (md *Metadata) update(data map[string]interface{}, timestamp int64, force b
 	}
 
 	md.data.Store(dataCopy)
-	md.lastMod.Store(timestamp)
+	md.lastModified.Store(uint64(timestamp))
 	return true
 }

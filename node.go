@@ -3,6 +3,8 @@ package gossip
 import (
 	"sync/atomic"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 type NodeState uint8
@@ -35,7 +37,7 @@ func (ns NodeState) String() string {
 type Node struct {
 	ID                 NodeID
 	address            Address
-	stateChangeTime    time.Time
+	stateChangeTime    hlc.Timestamp
 	state              NodeState
 	lastActivity       atomic.Int64 // Timestamp of last message received
 	Metadata           MetadataReader
@@ -50,7 +52,7 @@ func newNode(id NodeID, address Address) *Node {
 	n := &Node{
 		ID:              id,
 		address:         address,
-		stateChangeTime: time.Now(),
+		stateChangeTime: hlc.Now(),
 		state:           NodeAlive,
 		Metadata:        metadata,
 		metadata:        metadata,
