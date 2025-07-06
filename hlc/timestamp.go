@@ -69,6 +69,11 @@ func (ts Timestamp) After(other Timestamp) bool {
 	return ts > other
 }
 
+// Equal returns true if ts is equal to other.
+func (ts Timestamp) Equal(other Timestamp) bool {
+	return ts == other
+}
+
 // Time extracts the time component as time.Time.
 func (ts Timestamp) Time() time.Time {
 	relNs := (uint64(ts) & timeMask) >> counterBits
