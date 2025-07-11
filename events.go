@@ -12,85 +12,98 @@ type NodeStateChangeHandler func(*Node, NodeState)
 type NodeMetadataChangeHandler func(*Node)
 type GossipHandler func()
 
-// eventHandlerFunc is a type constraint for the supported event handler types
-type eventHandlerFunc interface {
-	NodeStateChangeHandler | NodeMetadataChangeHandler | GossipHandler
-}
-
 // HandlerID uniquely identifies a registered event handler
 type HandlerID uuid.UUID
 
 // EventHandlers manages a collection of handlers of a specific type
-type eventHandlers[T eventHandlerFunc] struct {
-	handlers atomic.Value // map[HandlerID]T
-	mu       sync.Mutex
+type EventHandlers[T any] struct {
+	handlers atomic.Pointer[[]T] // Changed to slice for faster iteration
+	mu       sync.RWMutex        // Changed to RWMutex for concurrent reads
+	idMap    map[HandlerID]int   // Track handler positions for removal
 }
 
-// NewEventHandlers creates a new handler collection for the specified handler type
-func NewEventHandlers[T eventHandlerFunc]() *eventHandlers[T] {
-	registry := &eventHandlers[T]{}
-	registry.handlers.Store(make(map[HandlerID]T))
+// NewEventHandlers creates a new handler collection for any type
+func NewEventHandlers[T any]() *EventHandlers[T] {
+	registry := &EventHandlers[T]{
+		idMap: make(map[HandlerID]int),
+	}
+	registry.handlers.Store(&[]T{})
 	return registry
 }
 
 // Add registers a handler and returns its ID
-func (l *eventHandlers[T]) Add(handler T) HandlerID {
-	// Generate a UUID and convert directly to HandlerID
+func (l *EventHandlers[T]) Add(handler T) HandlerID {
 	id := HandlerID(uuid.New())
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Get current map and create a new one with the added handler
-	currentMap := l.handlers.Load().(map[HandlerID]T)
-	newMap := make(map[HandlerID]T, len(currentMap)+1)
+	// Get current slice and create new one
+	currentSlice := l.handlers.Load()
+	newSlice := make([]T, len(*currentSlice)+1)
+	copy(newSlice, *currentSlice)
+	newSlice[len(*currentSlice)] = handler
 
-	// Copy existing handlers
-	for k, v := range currentMap {
-		newMap[k] = v
-	}
+	// Update ID mapping
+	l.idMap[id] = len(*currentSlice)
 
-	// Add new handler
-	newMap[id] = handler
-
-	// Store updated map
-	l.handlers.Store(newMap)
+	// Store new slice
+	l.handlers.Store(&newSlice)
 
 	return id
 }
 
 // Remove unregisters a handler by its ID
-func (l *eventHandlers[T]) Remove(id HandlerID) bool {
+func (l *EventHandlers[T]) Remove(id HandlerID) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	currentMap := l.handlers.Load().(map[HandlerID]T)
-
-	if _, exists := currentMap[id]; !exists {
+	currentSlice := l.handlers.Load()
+	index, exists := l.idMap[id]
+	if !exists || index >= len(*currentSlice) {
 		return false
 	}
 
-	// Create new map without the handler
-	newMap := make(map[HandlerID]T, len(currentMap)-1)
-	for k, v := range currentMap {
-		if k != id {
-			newMap[k] = v
+	// Create new slice without the handler
+	newSlice := make([]T, len(*currentSlice)-1)
+	copy(newSlice[:index], (*currentSlice)[:index])
+	copy(newSlice[index:], (*currentSlice)[index+1:])
+
+	// Update ID mappings for shifted elements
+	delete(l.idMap, id)
+	for otherID, otherIndex := range l.idMap {
+		if otherIndex > index {
+			l.idMap[otherID] = otherIndex - 1
 		}
 	}
 
-	l.handlers.Store(newMap)
+	l.handlers.Store(&newSlice)
 	return true
 }
 
-// GetHandlers returns all registered handlers
-func (l *eventHandlers[T]) GetHandlers() []T {
-	// This is a lock-free read operation
-	currentMap := l.handlers.Load().(map[HandlerID]T)
-
-	handlers := make([]T, 0, len(currentMap))
-	for _, handler := range currentMap {
-		handlers = append(handlers, handler)
+// GetHandlers returns all registered handlers (lock-free read)
+func (l *EventHandlers[T]) GetHandlers() []T {
+	// Completely lock-free read operation
+	currentSlice := l.handlers.Load()
+	if currentSlice == nil {
+		return []T{}
 	}
 
-	return handlers
+	// Return a copy to prevent external modification
+	result := make([]T, len(*currentSlice))
+	copy(result, *currentSlice)
+	return result
+}
+
+// ForEach executes a function for each handler (optimized for iteration)
+func (l *EventHandlers[T]) ForEach(fn func(T)) {
+	// Lock-free iteration
+	currentSlice := l.handlers.Load()
+	if currentSlice == nil {
+		return
+	}
+
+	for _, handler := range *currentSlice {
+		fn(handler)
+	}
 }

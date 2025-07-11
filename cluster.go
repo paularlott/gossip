@@ -36,9 +36,9 @@ type Cluster struct {
 	handlers                    *handlerRegistry
 	broadcastQueue              chan *broadcastQItem
 	healthMonitor               *healthMonitor
-	stateEventHandlers          *eventHandlers[NodeStateChangeHandler]
-	metadataChangeEventHandlers *eventHandlers[NodeMetadataChangeHandler]
-	gossipEventHandlers         *eventHandlers[GossipHandler]
+	stateEventHandlers          *EventHandlers[NodeStateChangeHandler]
+	metadataChangeEventHandlers *EventHandlers[NodeMetadataChangeHandler]
+	gossipEventHandlers         *EventHandlers[GossipHandler]
 	gossipTicker                *time.Ticker
 	gossipInterval              time.Duration
 	broadcastQItemPool          sync.Pool
@@ -849,17 +849,15 @@ func (c *Cluster) RemoveNodeMetadataChangeHandler(id HandlerID) bool {
 }
 
 func (c *Cluster) notifyNodeStateChanged(node *Node, prevState NodeState) {
-	currentHandlers := c.stateEventHandlers.GetHandlers()
-	for _, handler := range currentHandlers {
+	c.stateEventHandlers.ForEach(func(handler NodeStateChangeHandler) {
 		go handler(node, prevState)
-	}
+	})
 }
 
 func (c *Cluster) notifyMetadataChanged(node *Node) {
-	currentHandlers := c.metadataChangeEventHandlers.GetHandlers()
-	for _, handler := range currentHandlers {
+	c.metadataChangeEventHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
 		go handler(node)
-	}
+	})
 }
 
 func (c *Cluster) NodeIsLocal(node *Node) bool {
@@ -880,10 +878,9 @@ func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
 }
 
 func (c *Cluster) notifyDoGossip() {
-	currentHandlers := c.gossipEventHandlers.GetHandlers()
-	for _, handler := range currentHandlers {
+	c.gossipEventHandlers.ForEach(func(handler GossipHandler) {
 		handler()
-	}
+	})
 }
 
 func (c *Cluster) gossipManager() {
