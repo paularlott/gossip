@@ -51,8 +51,10 @@ type Config struct {
 	HealthCheckSampleSize         int                     // Number of random nodes to check each interval
 	ActivityThresholdPercent      float64                 // Percentage of activity threshold for a node to be considered alive, multiplied with HealthCheckInterval
 	SuspectThreshold              int                     // Number of consecutive failures before marking suspect
-	SuspectTimeout                time.Duration           // How long a node can be suspect before final check
-	DeadNodeTimeout               time.Duration           // How long to keep dead nodes before removal
+	SuspectAttemptInterval        time.Duration           // How frequently to check a suspect node
+	SuspectRetentionPeriod        time.Duration           // How long to retain suspect nodes for before moving to dead state
+	RecoveryAttemptInterval       time.Duration           // How often to attempt recovery of dead nodes
+	DeadNodeRetentionPeriod       time.Duration           // How long to keep dead nodes for recovery attempts
 	RefutationThreshold           int                     // Number of peers refuting suspicion to restore node
 	EnableIndirectPings           bool                    // Whether to use indirect pings
 	PingTimeout                   time.Duration           // Timeout for ping operations, should be less than HealthCheckInterval
@@ -92,8 +94,10 @@ func DefaultConfig() *Config {
 		HealthCheckSampleSize:         7,
 		ActivityThresholdPercent:      0.5,
 		SuspectThreshold:              3,
-		SuspectTimeout:                15 * time.Second,
-		DeadNodeTimeout:               1 * time.Minute,
+		SuspectAttemptInterval:        5 * time.Second,
+		SuspectRetentionPeriod:        5 * time.Minute,
+		RecoveryAttemptInterval:       30 * time.Second,
+		DeadNodeRetentionPeriod:       4 * time.Hour,
 		RefutationThreshold:           2,
 		EnableIndirectPings:           true,
 		PingTimeout:                   500 * time.Millisecond,

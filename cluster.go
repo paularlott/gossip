@@ -428,46 +428,7 @@ func (c *Cluster) Join(peers []string) error {
 				c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
 				return
 			}
-
-			joinMsg := &joinMessage{
-				ID:                 c.localNode.ID,
-				Address:            c.localNode.address,
-				MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
-				Metadata:           c.localNode.metadata.GetAll(),
-				ProtocolVersion:    PROTOCOL_VERSION,
-				ApplicationVersion: c.config.ApplicationVersion,
-			}
-
-			for _, addr := range addresses {
-				joinReply := &joinReplyMessage{}
-
-				node := newNode(c.localNode.ID, addr)
-				err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
-				if err != nil {
-					//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
-					continue
-				}
-
-				if !joinReply.Accepted {
-					c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer %s rejected our join request", peerAddr)
-					continue
-				}
-
-				// Update the node with the peer's advertised address and ID then save it
-				node.ID = joinReply.ID
-				node.address = joinReply.Address
-				node.ProtocolVersion = joinReply.ProtocolVersion
-				node.ApplicationVersion = joinReply.ApplicationVersion
-				node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-				if c.nodes.addOrUpdate(node) {
-					c.config.Logger.Debugf("gossip: Joined peer: %s (%s)", peerAddr, addr.String())
-					err = c.exchangeState(node, []NodeID{c.localNode.ID})
-					if err != nil {
-						c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer %s", peerAddr)
-					}
-					break
-				}
-			}
+			c.joinPeer(addresses)
 		}(peerAddr)
 	}
 
@@ -479,6 +440,48 @@ func (c *Cluster) Join(peers []string) error {
 	}
 
 	return nil
+}
+
+func (c *Cluster) joinPeer(addresses []Address) {
+	joinMsg := &joinMessage{
+		ID:                 c.localNode.ID,
+		Address:            c.localNode.address,
+		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
+		Metadata:           c.localNode.metadata.GetAll(),
+		ProtocolVersion:    PROTOCOL_VERSION,
+		ApplicationVersion: c.config.ApplicationVersion,
+	}
+
+	for _, addr := range addresses {
+		joinReply := &joinReplyMessage{}
+
+		node := newNode(c.localNode.ID, addr)
+		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
+		if err != nil {
+			//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
+			continue
+		}
+
+		if !joinReply.Accepted {
+			c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
+			continue
+		}
+
+		// Update the node with the peer's advertised address and ID then save it
+		node.ID = joinReply.ID
+		node.address = joinReply.Address
+		node.ProtocolVersion = joinReply.ProtocolVersion
+		node.ApplicationVersion = joinReply.ApplicationVersion
+		node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
+		if c.nodes.addOrUpdate(node) {
+			c.config.Logger.Debugf("gossip: Joined peer: %s", addr.String())
+			err = c.exchangeState(node, []NodeID{c.localNode.ID})
+			if err != nil {
+				c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
+			}
+			break
+		}
+	}
 }
 
 // MMarks the local node as leaving and broadcasts this state to the cluster

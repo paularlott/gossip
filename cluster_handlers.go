@@ -21,13 +21,17 @@ func (c *Cluster) registerSystemHandlers() {
 }
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return nil // Silently ignore as this can happen during cluster boot
-	}
-
 	ping := pingMessage{}
 	if err := packet.Unmarshal(&ping); err != nil {
 		return err
+	}
+
+	if sender == nil {
+		// If we have an address in the ping then try connecting to it as we don't know this sender yet
+		if ping.Address != nil {
+			c.joinPeer([]Address{*ping.Address})
+		}
+		return nil // Silently ignore as this can happen during cluster boot
 	}
 
 	// Check if the ping is for us
@@ -66,8 +70,8 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	}
 
 	// Create a temporary node for the target
-	targetNode := newNode(ping.TargetID, ping.Address)
-	ping.Ok, err = c.healthMonitor.pingNode(targetNode)
+	targetNode := newNode(ping.TargetID, *ping.Address)
+	ping.Ok, _ = c.healthMonitor.pingNode(targetNode, false)
 
 	// Respond to the sender with the ping acknowledgment
 	return c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)

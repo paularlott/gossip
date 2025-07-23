@@ -112,9 +112,9 @@ func (hm *healthMonitor) healthCheckLoop() {
 
 	// Create a ticker for periodic health checks
 	checkTicker := time.NewTicker(hm.config.HealthCheckInterval)
-	suspectTicker := time.NewTicker(hm.config.SuspectTimeout)
-	deadNodeTicker := time.NewTicker(hm.config.DeadNodeTimeout)
-	cleanupTicker := time.NewTicker(hm.config.DeadNodeTimeout * 5)
+	suspectTicker := time.NewTicker(hm.config.SuspectAttemptInterval)
+	deadNodeTicker := time.NewTicker(hm.config.RecoveryAttemptInterval)
+	cleanupTicker := time.NewTicker(hm.config.RecoveryAttemptInterval)
 
 	defer checkTicker.Stop()
 	defer suspectTicker.Stop()
@@ -399,7 +399,7 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 
 	// If the node has been suspect for too long, check it one more time
 	suspectDuration := time.Since(evidence.suspectTime)
-	if suspectDuration > hm.config.SuspectTimeout {
+	if suspectDuration >= hm.config.SuspectRetentionPeriod {
 		// Try one final ping
 		if alive, _ := hm.pingAny(node); alive {
 			hm.config.Logger.
@@ -450,7 +450,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 		deadDuration := now.Sub(node.stateChangeTime.Time())
 
 		// After a certain timeout, permanently remove the node
-		if deadDuration > hm.config.DeadNodeTimeout {
+		if deadDuration >= hm.config.DeadNodeRetentionPeriod {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
 				Debugf("Dead node timeout expired, removing from cluster")
@@ -460,8 +460,30 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 
 			// Clean up any suspicion tracking
 			hm.cleanNodeState(node.ID)
+		} else {
+			hm.config.Logger.
+				Field("node", node.ID.String()).
+				Debugf("Attempting to recover dead node %s, remaining time: %s", node.ID.String(), deadDuration)
+			hm.attemptDeadNodeRecovery(node)
 		}
 	}
+}
+
+// Attempt to recover a dead node by pinging it and updating its state if it responds
+func (hm *healthMonitor) attemptDeadNodeRecovery(node *Node) {
+	// Try to ping the node
+	go func(node *Node) {
+		alive, err := hm.pingNode(node, true)
+		if err == nil && alive {
+			hm.config.Logger.
+				Field("node", node.ID.String()).
+				Debugf("Recovered node %s from dead", node.ID.String())
+
+			// Recover the dead node
+			hm.cluster.nodes.updateState(node.ID, NodeAlive)
+			hm.cleanNodeState(node.ID)
+		}
+	}(node)
 }
 
 // Helper function to remove evidence from a specific node from all other nodes' suspicion tracking
@@ -745,7 +767,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 }
 
 // pingNode sends a ping message direct to the specified node and waits for an acknowledgment.
-func (hm *healthMonitor) pingNode(node *Node) (bool, error) {
+func (hm *healthMonitor) pingNode(node *Node, recoveryPing bool) (bool, error) {
 	// Create a context that can be cancelled either by timeout or cluster shutdown
 	// This creates a context hierarchy: parent (shutdown) -> child (timeout)
 	parentCtx := context.Background()
@@ -780,6 +802,9 @@ func (hm *healthMonitor) pingNode(node *Node) (bool, error) {
 	ping := pingMessage{
 		TargetID: node.ID,
 		Seq:      seq,
+	}
+	if recoveryPing {
+		ping.Address = &hm.cluster.localNode.address
 	}
 	if err := hm.cluster.sendMessageTo(TransportBestEffort, node, 1, pingMsg, &ping); err != nil {
 		return false, err
@@ -860,7 +885,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 	// Send the ping message
 	ping := indirectPingMessage{
 		TargetID: node.ID,
-		Address:  node.address,
+		Address:  &node.address,
 		Seq:      seq,
 	}
 
@@ -903,7 +928,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 // Tries to ping a node directly first, and if that fails, it tries to ping it indirectly.
 func (hm *healthMonitor) pingAny(node *Node) (bool, error) {
 	// Try direct ping first
-	alive, err := hm.pingNode(node)
+	alive, err := hm.pingNode(node, false)
 	if alive {
 		return true, nil
 	}
