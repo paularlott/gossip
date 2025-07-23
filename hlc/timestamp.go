@@ -2,8 +2,8 @@
 // monotonically increasing timestamps suitable for distributed systems. The HLC combines
 // physical time (with nanosecond precision) and a logical counter to ensure causality
 // even in the presence of clock skew or concurrent events. Timestamps are encoded as
-// 64-bit unsigned integers, with 52 bits for time (relative to a fixed epoch 1st Jan 2025)
-// and 12 bits for the logical counter. The Clock type provides thread-safe timestamp
+// 64-bit unsigned integers, with 54 bits for time (relative to a fixed epoch 1st Jan 2025)
+// and 10 bits for the logical counter. The Clock type provides thread-safe timestamp
 // generation using atomic operations.
 
 package hlc
@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	timeBits    = 52
-	counterBits = 12
+	timeBits    = 54
+	counterBits = 10
 	timeMask    = (uint64(1)<<timeBits - 1) << counterBits
 	counterMask = uint64(1)<<counterBits - 1
 
@@ -39,8 +39,8 @@ func NewClock() *Clock {
 // Now returns a new Timestamp based on the current time and HLC rules.
 func (c *Clock) Now() Timestamp {
 	for {
-		now := uint64(time.Now().UnixNano())
-		relNow := now - epochUnixNano
+		now := time.Now().UnixNano()
+		relNow := uint64(now - epochUnixNano)
 		last := atomic.LoadUint64(&c.last)
 		lastTime := last >> counterBits
 		lastCounter := last & counterMask
@@ -76,9 +76,13 @@ func (ts Timestamp) Equal(other Timestamp) bool {
 
 // Time extracts the time component as time.Time.
 func (ts Timestamp) Time() time.Time {
-	relNs := (uint64(ts) & timeMask) >> counterBits
-	ns := relNs + epochUnixNano
-	return time.Unix(0, int64(ns))
+	// Extract the time portion by shifting right to remove counter bits
+	relNs := uint64(ts) >> counterBits
+
+	// Convert back to absolute nanoseconds since Unix epoch
+	absoluteNs := int64(relNs) + epochUnixNano
+
+	return time.Unix(0, absoluteNs)
 }
 
 // Counter extracts the counter component.
