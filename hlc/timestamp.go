@@ -1,6 +1,6 @@
 // Package hlc implements a Hybrid Logical Clock (HLC) for generating globally unique,
 // monotonically increasing timestamps suitable for distributed systems. The HLC combines
-// physical time (with nanosecond precision) and a logical counter to ensure causality
+// physical time (with microsecond precision) and a logical counter to ensure causality
 // even in the presence of clock skew or concurrent events. Timestamps are encoded as
 // 64-bit unsigned integers, with 54 bits for time (relative to a fixed epoch 1st Jan 2025)
 // and 10 bits for the logical counter. The Clock type provides thread-safe timestamp
@@ -19,8 +19,8 @@ const (
 	timeMask    = (uint64(1)<<timeBits - 1) << counterBits
 	counterMask = uint64(1)<<counterBits - 1
 
-	// Epoch: 1st Jan 2025, 00:00:00 UTC
-	epochUnixNano = 1735689600000000000
+	// Epoch: 1st Jan 2025, 00:00:00 UTC (in microseconds)
+	epochUnixMicro = 1735689600000000
 )
 
 // Timestamp represents a Hybrid Logical Clock timestamp.
@@ -39,8 +39,8 @@ func NewClock() *Clock {
 // Now returns a new Timestamp based on the current time and HLC rules.
 func (c *Clock) Now() Timestamp {
 	for {
-		now := time.Now().UnixNano()
-		relNow := uint64(now - epochUnixNano)
+		now := time.Now().UnixMicro()
+		relNow := uint64(now - epochUnixMicro)
 		last := atomic.LoadUint64(&c.last)
 		lastTime := last >> counterBits
 		lastCounter := last & counterMask
@@ -77,12 +77,12 @@ func (ts Timestamp) Equal(other Timestamp) bool {
 // Time extracts the time component as time.Time.
 func (ts Timestamp) Time() time.Time {
 	// Extract the time portion by shifting right to remove counter bits
-	relNs := uint64(ts) >> counterBits
+	relMicro := uint64(ts) >> counterBits
 
-	// Convert back to absolute nanoseconds since Unix epoch
-	absoluteNs := int64(relNs) + epochUnixNano
+	// Convert back to absolute microseconds since Unix epoch
+	absoluteMicro := int64(relMicro) + epochUnixMicro
 
-	return time.Unix(0, absoluteNs)
+	return time.UnixMicro(absoluteMicro)
 }
 
 // Counter extracts the counter component.

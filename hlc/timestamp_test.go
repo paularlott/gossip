@@ -7,15 +7,15 @@ import (
 
 func TestTimestampConstants(t *testing.T) {
 	// Test that our constants make sense
-	t.Logf("epochUnixNano: %d", epochUnixNano)
+	t.Logf("epochUnixMicro: %d", epochUnixMicro)
 	t.Logf("timeBits: %d", timeBits)
 	t.Logf("counterBits: %d", counterBits)
 	t.Logf("maxTime: %d", (uint64(1)<<timeBits)-1)
 
 	// Verify epoch is January 1, 2025
 	expectedEpoch := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	if epochUnixNano != expectedEpoch.UnixNano() {
-		t.Errorf("Epoch mismatch: expected %d, got %d", expectedEpoch.UnixNano(), epochUnixNano)
+	if epochUnixMicro != expectedEpoch.UnixMicro() {
+		t.Errorf("Epoch mismatch: expected %d, got %d", expectedEpoch.UnixMicro(), epochUnixMicro)
 	}
 }
 
@@ -29,10 +29,10 @@ func TestTimestampTimeConversion(t *testing.T) {
 
 	extractedTime := ts.Time()
 
-	t.Logf("Before: %v (%d)", beforeTime, beforeTime.UnixNano())
+	t.Logf("Before: %v (%d)", beforeTime, beforeTime.UnixMicro())
 	t.Logf("Timestamp: %d", uint64(ts))
-	t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixNano())
-	t.Logf("After: %v (%d)", afterTime, afterTime.UnixNano())
+	t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
+	t.Logf("After: %v (%d)", afterTime, afterTime.UnixMicro())
 
 	// The extracted time should be between beforeTime and afterTime
 	if extractedTime.Before(beforeTime) {
@@ -47,24 +47,24 @@ func TestTimestampRoundTrip(t *testing.T) {
 	// Test specific times around the epoch
 	testTimes := []time.Time{
 		time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),             // Epoch start
-		time.Date(2025, 1, 1, 0, 0, 0, 1, time.UTC),             // 1 nanosecond after epoch
+		time.Date(2025, 1, 1, 0, 0, 0, 1000, time.UTC),          // 1 microsecond after epoch
 		time.Date(2025, 1, 1, 0, 0, 1, 0, time.UTC),             // 1 second after epoch
-		time.Date(2025, 6, 15, 12, 30, 45, 123456789, time.UTC), // Mid-year
+		time.Date(2025, 6, 15, 12, 30, 45, 123456000, time.UTC), // Mid-year
 	}
 
 	for _, testTime := range testTimes {
 		t.Run(testTime.Format(time.RFC3339Nano), func(t *testing.T) {
-			// Calculate what the relative nanoseconds should be
-			relNs := uint64(testTime.UnixNano() - epochUnixNano)
+			// Calculate what the relative microseconds should be
+			relMicro := uint64(testTime.UnixMicro() - epochUnixMicro)
 
 			// Create a timestamp with zero counter
-			ts := Timestamp(relNs << counterBits)
+			ts := Timestamp(relMicro << counterBits)
 			extractedTime := ts.Time()
 
-			t.Logf("Original: %v (%d)", testTime, testTime.UnixNano())
-			t.Logf("RelNs: %d", relNs)
+			t.Logf("Original: %v (%d)", testTime, testTime.UnixMicro())
+			t.Logf("RelMicro: %d", relMicro)
 			t.Logf("Timestamp: %d", uint64(ts))
-			t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixNano())
+			t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
 
 			// The times should match exactly (ignoring counter bits)
 			if !extractedTime.Equal(testTime) {
@@ -80,8 +80,8 @@ func TestTimestampEpochHandling(t *testing.T) {
 	ts := Timestamp(0) // Zero timestamp should represent epoch
 	extractedTime := ts.Time()
 
-	t.Logf("Epoch time: %v (%d)", epochTime, epochTime.UnixNano())
-	t.Logf("Zero timestamp extracted: %v (%d)", extractedTime, extractedTime.UnixNano())
+	t.Logf("Epoch time: %v (%d)", epochTime, epochTime.UnixMicro())
+	t.Logf("Zero timestamp extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
 
 	if !extractedTime.Equal(epochTime) {
 		t.Errorf("Epoch conversion failed: expected %v, got %v", epochTime, extractedTime)
@@ -104,18 +104,18 @@ func TestClockMonotonicity(t *testing.T) {
 func TestTimestampBitManipulation(t *testing.T) {
 	// Test that we can extract time and counter correctly
 	testTime := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC) // 1 hour after epoch
-	relNs := uint64(testTime.UnixNano() - epochUnixNano)
+	relMicro := uint64(testTime.UnixMicro() - epochUnixMicro)
 
 	// Create timestamp with specific counter value
 	counter := uint64(42)
-	ts := Timestamp((relNs << counterBits) | counter)
+	ts := Timestamp((relMicro << counterBits) | counter)
 
 	// Extract time part (should ignore counter)
 	extractedTime := ts.Time()
-	expectedTime := time.Unix(0, int64(relNs)+epochUnixNano)
+	expectedTime := time.UnixMicro(int64(relMicro) + epochUnixMicro)
 
 	t.Logf("Original time: %v", testTime)
-	t.Logf("RelNs: %d", relNs)
+	t.Logf("RelMicro: %d", relMicro)
 	t.Logf("Counter: %d", counter)
 	t.Logf("Timestamp: %d", uint64(ts))
 	t.Logf("Extracted time: %v", extractedTime)
@@ -131,23 +131,23 @@ func TestDebugBitManipulation(t *testing.T) {
 	beforeTime := time.Now()
 	ts := NewClock().Now()
 
-	t.Logf("Before time: %d", beforeTime.UnixNano())
-	t.Logf("Epoch: %d", epochUnixNano)
-	t.Logf("Relative ns should be: %d", uint64(beforeTime.UnixNano())-epochUnixNano)
+	t.Logf("Before time: %d", beforeTime.UnixMicro())
+	t.Logf("Epoch: %d", epochUnixMicro)
+	t.Logf("Relative micro should be: %d", uint64(beforeTime.UnixMicro())-epochUnixMicro)
 
-	// Extract what the timestamp thinks the relative ns is
-	extractedRelNs := uint64(ts) >> counterBits
+	// Extract what the timestamp thinks the relative micro is
+	extractedRelMicro := uint64(ts) >> counterBits
 	t.Logf("Timestamp raw: %d", uint64(ts))
-	t.Logf("Extracted rel ns: %d", extractedRelNs)
+	t.Logf("Extracted rel micro: %d", extractedRelMicro)
 	t.Logf("Counter: %d", uint64(ts)&counterMask)
 
 	// What time does this give us?
-	reconstructedTime := time.Unix(0, int64(extractedRelNs)+epochUnixNano)
-	t.Logf("Reconstructed time: %v (%d)", reconstructedTime, reconstructedTime.UnixNano())
+	reconstructedTime := time.UnixMicro(int64(extractedRelMicro) + epochUnixMicro)
+	t.Logf("Reconstructed time: %v (%d)", reconstructedTime, reconstructedTime.UnixMicro())
 
 	// Let's also check the Now() implementation
-	now := uint64(time.Now().UnixNano())
-	relNow := now - epochUnixNano
+	now := uint64(time.Now().UnixMicro())
+	relNow := now - epochUnixMicro
 	t.Logf("Current time: %d", now)
 	t.Logf("Current rel time: %d", relNow)
 	t.Logf("Shifted rel time: %d", relNow<<counterBits)
@@ -155,39 +155,39 @@ func TestDebugBitManipulation(t *testing.T) {
 
 func TestTypeConversions(t *testing.T) {
 	now := time.Now()
-	nowNs := now.UnixNano()
-	nowUint := uint64(nowNs)
+	nowMicro := now.UnixMicro()
+	nowUint := uint64(nowMicro)
 
-	t.Logf("Now as int64: %d", nowNs)
+	t.Logf("Now as int64: %d", nowMicro)
 	t.Logf("Now as uint64: %d", nowUint)
-	t.Logf("Epoch as int64: %d", epochUnixNano)
-	t.Logf("Epoch as uint64: %d", uint64(epochUnixNano))
+	t.Logf("Epoch as int64: %d", epochUnixMicro)
+	t.Logf("Epoch as uint64: %d", uint64(epochUnixMicro))
 
 	// Test the subtraction both ways
-	relNs1 := nowUint - uint64(epochUnixNano)
-	relNs2 := uint64(nowNs - epochUnixNano)
+	relMicro1 := nowUint - uint64(epochUnixMicro)
+	relMicro2 := uint64(nowMicro - epochUnixMicro)
 
-	t.Logf("Method 1 (uint64 - uint64): %d", relNs1)
-	t.Logf("Method 2 (uint64(int64 - int64)): %d", relNs2)
+	t.Logf("Method 1 (uint64 - uint64): %d", relMicro1)
+	t.Logf("Method 2 (uint64(int64 - int64)): %d", relMicro2)
 
-	if relNs1 != relNs2 {
+	if relMicro1 != relMicro2 {
 		t.Errorf("Type conversion issue detected!")
 	}
 }
 
 func TestDebugArithmetic(t *testing.T) {
-	now := time.Now().UnixNano()
+	now := time.Now().UnixMicro()
 
 	// Test the old way (broken)
 	nowUint := uint64(now)
-	relNowBroken := uint64(nowUint - epochUnixNano) // This is wrong!
+	relNowBroken := uint64(nowUint - epochUnixMicro) // This is wrong!
 
 	// Test the correct way
-	relNowFixed := uint64(now - epochUnixNano)
+	relNowFixed := uint64(now - epochUnixMicro)
 
 	t.Logf("Now (int64): %d", now)
 	t.Logf("Now (uint64): %d", nowUint)
-	t.Logf("Epoch: %d", epochUnixNano)
+	t.Logf("Epoch: %d", epochUnixMicro)
 	t.Logf("Broken calculation: %d", relNowBroken)
 	t.Logf("Fixed calculation: %d", relNowFixed)
 
@@ -197,4 +197,29 @@ func TestDebugArithmetic(t *testing.T) {
 	} else {
 		t.Logf("Calculations differ as expected - broken: %d, fixed: %d", relNowBroken, relNowFixed)
 	}
+}
+
+func TestTimeRangeCalculationMicroseconds(t *testing.T) {
+	// Calculate the maximum time we can represent
+	maxRelativeMicro := (uint64(1) << timeBits) - 1
+	maxAbsoluteMicro := int64(maxRelativeMicro) + epochUnixMicro
+	maxTime := time.UnixMicro(maxAbsoluteMicro)
+
+	t.Logf("Max relative microseconds: %d", maxRelativeMicro)
+	t.Logf("Max absolute microseconds: %d", maxAbsoluteMicro)
+	t.Logf("Max representable time: %v", maxTime)
+
+	// Convert to years
+	microsecondsPerYear := 365.25 * 24 * 3600 * 1e6
+	yearsFromEpoch := float64(maxRelativeMicro) / microsecondsPerYear
+	t.Logf("Years from epoch: %.1f", yearsFromEpoch)
+
+	// Check current usage
+	now := time.Now()
+	currentRelMicro := uint64(now.UnixMicro() - epochUnixMicro)
+	usagePercent := float64(currentRelMicro) / float64(maxRelativeMicro) * 100
+
+	t.Logf("Current time: %v", now)
+	t.Logf("Current relative microseconds: %d", currentRelMicro)
+	t.Logf("Current usage: %.6f%%", usagePercent)
 }
