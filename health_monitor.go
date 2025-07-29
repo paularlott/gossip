@@ -463,7 +463,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 		} else {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
-				Debugf("Attempting to recover dead node %s, remaining time: %s", node.ID.String(), deadDuration)
+				Debugf("Attempting to recover dead node %s, remaining time: %s", node.ID.String(), hm.config.DeadNodeRetentionPeriod-deadDuration)
 			hm.attemptDeadNodeRecovery(node)
 		}
 	}
@@ -546,7 +546,8 @@ func (hm *healthMonitor) removeNodeEvidenceFromAllNodes(nodeID NodeID) {
 // Handle incoming suspicion message from another node
 func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 	if sender == nil {
-		return fmt.Errorf("unknown sender")
+		// We don't know about the node so we can just ignore the message
+		return nil
 	}
 
 	msg := suspicionMessage{}
@@ -693,7 +694,8 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 // Handle incoming suspicion message from another node
 func (hm *healthMonitor) handleLeaving(sender *Node, packet *Packet) error {
 	if sender == nil {
-		return fmt.Errorf("unknown sender")
+		// We don't know about the node so we can just ignore the message
+		return nil
 	}
 
 	msg := leavingMessage{}

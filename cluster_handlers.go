@@ -194,7 +194,8 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 
 func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	if sender == nil {
-		return fmt.Errorf("unknown sender")
+		// Nothing to do as we don't know the node at this point
+		return nil
 	}
 
 	var metadataUpdate metadataUpdateMessage
