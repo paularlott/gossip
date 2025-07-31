@@ -381,9 +381,15 @@ func (t *transport) WritePacket(conn net.Conn, packet *Packet) error {
 }
 
 func (t *transport) writeRawPacket(conn net.Conn, rawPacket []byte) error {
+	// Set write deadline for the connection
+	err := conn.SetWriteDeadline(time.Now().Add(t.config.TCPDeadline))
+	if err != nil {
+		return err
+	}
+
 	// Prepare the complete response in a single buffer (length + data)
 	var writeBuffer bytes.Buffer
-	err := binary.Write(&writeBuffer, binary.BigEndian, uint32(len(rawPacket)))
+	err = binary.Write(&writeBuffer, binary.BigEndian, uint32(len(rawPacket)))
 	if err != nil {
 		return err
 	}
