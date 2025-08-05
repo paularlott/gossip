@@ -36,7 +36,8 @@ func (ns NodeState) String() string {
 
 type Node struct {
 	ID                 NodeID
-	address            Address
+	advertiseAddr      string  // Raw advertise address (may contain SRV records, URLs, etc.)
+	address            Address // Resolved address (IP/Port or WebSocket URL) - resolved locally when needed
 	stateChangeTime    hlc.Timestamp
 	state              NodeState
 	lastActivity       atomic.Int64 // Timestamp of last message received
@@ -46,12 +47,13 @@ type Node struct {
 	ApplicationVersion string
 }
 
-func newNode(id NodeID, address Address) *Node {
+func newNode(id NodeID, advertiseAddr string) *Node {
 	metadata := NewMetadata()
 
 	n := &Node{
 		ID:              id,
-		address:         address,
+		advertiseAddr:   advertiseAddr,
+		address:         Address{}, // Empty until resolved
 		stateChangeTime: hlc.Now(),
 		state:           NodeAlive,
 		Metadata:        metadata,
@@ -76,8 +78,8 @@ func (node *Node) GetState() NodeState {
 	return node.state
 }
 
-func (node *Node) GetAddress() Address {
-	return node.address
+func (node *Node) GetAdvertisedAddress() string {
+	return node.advertiseAddr
 }
 
 func (node *Node) DeadOrLeft() bool {

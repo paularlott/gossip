@@ -7,9 +7,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -104,7 +101,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		shutdownContext:             ctx,
 		cancelFunc:                  cancel,
 		msgHistory:                  newMessageHistory(config),
-		localNode:                   newNode(NodeID(u), Address{}),
+		localNode:                   newNode(NodeID(u), config.AdvertiseAddr),
 		handlers:                    newHandlerRegistry(),
 		broadcastQueue:              make(chan *broadcastQItem, config.SendQueueSize),
 		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
@@ -122,33 +119,31 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
 	}
 
-	// Resolve the local node's address
-	addresses, err := cluster.ResolveAddress(config.AdvertiseAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve advertise address (%s): %v", config.AdvertiseAddr, err)
-	}
-	cluster.localNode.address = addresses[0]
-
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
-	// Resolve the local node's address
-	if config.SocketTransportEnabled {
-		addresses, err = cluster.ResolveAddress(config.BindAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve bind address: %v", err)
-		}
-	} else {
-		addresses = []Address{cluster.localNode.address}
-	}
-
-	// Check we have a bind port or advertised address
-	if addresses[0].Port == 0 && cluster.localNode.address.URL == "" {
-		return nil, fmt.Errorf("no bind port or advertised WebSocket address specified")
-	}
-
+	// Create transport first so we can use it for address resolution
 	if config.Transport == nil {
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, addresses[0])
+		// For bind address, we need to resolve it to create the transport
+		var bindAddresses []Address
+		if config.SocketTransportEnabled {
+			// Create a temporary transport to resolve bind address
+			tempTransport := &transport{config: config}
+			bindAddresses, err = tempTransport.ResolveAddress(config.BindAddr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve bind address: %v", err)
+			}
+		} else {
+			// For WebSocket-only mode, we don't need a bind address with IP/Port
+			bindAddresses = []Address{{}} // Empty address for WebSocket-only
+		}
+
+		// Check we have a bind port or are using WebSocket-only mode
+		if config.SocketTransportEnabled && (len(bindAddresses) == 0 || bindAddresses[0].Port == 0) {
+			return nil, fmt.Errorf("no bind port specified for socket transport")
+		}
+
+		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, bindAddresses[0])
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %v", err)
 		}
@@ -232,171 +227,6 @@ func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	c.transport.WebsocketHandler(c.shutdownContext, w, r)
 }
 
-func (c *Cluster) ResolveAddress(addressStr string) ([]Address, error) {
-	// If SRV record
-	if strings.HasPrefix(addressStr, "srv+") {
-		serviceName := addressStr[4:] // Remove the "srv+" prefix
-
-		// If http(s):// then we're doing web sockets, lets resolve the address
-		if strings.HasPrefix(serviceName, "http://") || strings.HasPrefix(serviceName, "https://") || strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "wss://") {
-			addresses := make([]Address, 0)
-
-			// If no web socket provider is set then we can't do this
-			if c.config.WebsocketProvider == nil || (!c.config.AllowInsecureWebsockets && (strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "http://"))) {
-				return addresses, ErrUnsupportedAddressFormat
-			}
-
-			// Extract the host from the url
-			parsedURL, err := url.Parse(serviceName)
-			if err != nil {
-				return addresses, fmt.Errorf("failed to parse URL: %v", err)
-			}
-
-			addr, err := c.lookupSRV(parsedURL.Hostname(), false)
-			if err != nil {
-				return addresses, fmt.Errorf("failed to lookup SRV record: %v", err)
-			}
-
-			if len(addr) > 0 {
-				// Fix the schema to be ws:// or wss://
-				if strings.HasPrefix(parsedURL.Scheme, "http") {
-					parsedURL.Scheme = "ws" + strings.TrimPrefix(parsedURL.Scheme, "http")
-				}
-
-				addresses = append(addresses, Address{
-					URL: fmt.Sprintf("%s://%s:%d%s", parsedURL.Scheme, parsedURL.Hostname(), addr[0].Port, parsedURL.Path),
-				})
-			}
-
-			return addresses, nil
-		} else {
-			// If socket transport not enabled then we can't do this
-			if !c.config.SocketTransportEnabled {
-				return []Address{}, ErrUnsupportedAddressFormat
-			}
-
-			return c.lookupSRV(serviceName, true)
-		}
-	}
-
-	// If http(s):// then we're doing web sockets, lets resolve the address
-	if strings.HasPrefix(addressStr, "http://") || strings.HasPrefix(addressStr, "https://") || strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "wss://") {
-		if c.config.WebsocketProvider == nil || (!c.config.AllowInsecureWebsockets && (strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "http://"))) {
-			return []Address{}, ErrUnsupportedAddressFormat
-		}
-
-		if strings.HasPrefix(addressStr, "http") {
-			addressStr = "ws" + strings.TrimPrefix(addressStr, "http")
-		}
-
-		return []Address{
-			{
-				URL: addressStr,
-			},
-		}, nil
-	} else {
-		if !c.config.SocketTransportEnabled {
-			return []Address{}, ErrUnsupportedAddressFormat
-		}
-
-		return c.lookupIP(addressStr, c.config.DefaultPort)
-	}
-}
-
-func (c *Cluster) lookupSRV(serviceName string, resolveToIPs bool) ([]Address, error) {
-	addresses := make([]Address, 0)
-
-	// Make sure the service ends with a dot
-	if !strings.HasSuffix(serviceName, ".") {
-		serviceName += "."
-	}
-
-	// Look up the SRV record
-	_, addrs, err := net.LookupSRV("", "", serviceName)
-	if err != nil {
-		return addresses, fmt.Errorf("failed to lookup SRV record")
-	}
-
-	if len(addrs) == 0 {
-		return addresses, fmt.Errorf("no SRV records found for service")
-	}
-
-	if resolveToIPs {
-		for _, srv := range addrs {
-			addr, err := c.lookupIP(srv.Target, int(srv.Port))
-			if err == nil {
-				addresses = append(addresses, addr...)
-			}
-		}
-	} else {
-		for _, srv := range addrs {
-			addresses = append(addresses, Address{
-				Port: int(srv.Port),
-			})
-		}
-	}
-
-	return addresses, nil
-}
-
-func (c *Cluster) lookupIP(host string, defaultPort int) ([]Address, error) {
-	addresses := make([]Address, 0)
-
-	// If the address string contains only numbers then assume it's a port and prefix with :
-	if _, err := strconv.Atoi(host); err == nil {
-		host = ":" + host
-	}
-
-	// If the host doesn't contain a port then use the default port
-	if !strings.Contains(host, ":") {
-		host = fmt.Sprintf("%s:%d", host, defaultPort)
-	}
-
-	// Split the address into host and port
-	hostStr, portStr, err := net.SplitHostPort(host)
-	if err != nil {
-		return addresses, err
-	}
-
-	// If host is empty then use loopback address
-	if hostStr == "" {
-		hostStr = "127.0.0.1"
-	}
-
-	// Parse port value
-	var port int
-	portVal, err := strconv.ParseUint(portStr, 10, 16)
-	if err == nil {
-		port = int(portVal)
-	} else {
-		port = defaultPort
-	}
-
-	// Resolve the IP address
-	var ip net.IP
-	if ip = net.ParseIP(hostStr); ip == nil {
-		// Host is a hostname, resolve it
-		ips, err := net.LookupIP(hostStr)
-		if err != nil {
-			return addresses, fmt.Errorf("failed to resolve hostname")
-		}
-
-		for _, ip = range ips {
-			addresses = append(addresses, Address{
-				IP:   ip,
-				Port: port,
-			})
-		}
-	} else {
-		addresses = append(addresses, Address{
-			IP:   ip,
-			Port: port,
-		})
-	}
-
-	return addresses, nil
-}
-
 func (c *Cluster) Join(peers []string) error {
 	if len(peers) == 0 {
 		return fmt.Errorf("no peers provided")
@@ -422,13 +252,7 @@ func (c *Cluster) Join(peers []string) error {
 				return
 			}
 
-			// Resolve the address
-			addresses, err := c.ResolveAddress(peerAddr)
-			if err != nil {
-				c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
-				return
-			}
-			c.joinPeer(addresses)
+			c.joinPeer(peerAddr)
 		}(peerAddr)
 	}
 
@@ -442,23 +266,29 @@ func (c *Cluster) Join(peers []string) error {
 	return nil
 }
 
-func (c *Cluster) joinPeer(addresses []Address) {
+func (c *Cluster) joinPeer(peerAddr string) {
 	joinMsg := &joinMessage{
 		ID:                 c.localNode.ID,
-		Address:            c.localNode.address,
+		AdvertiseAddr:      c.localNode.advertiseAddr,
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
 		ApplicationVersion: c.config.ApplicationVersion,
 	}
 
+	addresses, err := c.transport.ResolveAddress(peerAddr)
+	if err != nil {
+		c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
+		return
+	}
+
 	for _, addr := range addresses {
 		joinReply := &joinReplyMessage{}
 
-		node := newNode(c.localNode.ID, addr)
+		// Create temporary node with resolved address for this connection attempt
+		node := newNode(c.localNode.ID, peerAddr)
 		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 		if err != nil {
-			//c.config.Logger.Err(err).Debugf("Failed to join peer %s", peerAddr)
 			continue
 		}
 
@@ -467,9 +297,10 @@ func (c *Cluster) joinPeer(addresses []Address) {
 			continue
 		}
 
-		// Update the node with the peer's advertised address and ID then save it
+		// Update the node with the peer's information
 		node.ID = joinReply.ID
-		node.address = joinReply.Address
+		node.advertiseAddr = joinReply.AdvertiseAddr
+		node.address = addr // We keep the resolved address that worked
 		node.ProtocolVersion = joinReply.ProtocolVersion
 		node.ApplicationVersion = joinReply.ApplicationVersion
 		node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
@@ -621,7 +452,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
 			ID:                n.ID,
-			Address:           n.address,
+			AdvertiseAddr:     n.advertiseAddr,
 			State:             n.state,
 			StateChangeTime:   n.stateChangeTime,
 			MetadataTimestamp: n.metadata.GetTimestamp(),

@@ -27,9 +27,9 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 	}
 
 	if sender == nil {
-		// If we have an address in the ping then try connecting to it as we don't know this sender yet
-		if ping.Address != nil {
-			c.joinPeer([]Address{*ping.Address})
+		// If we have an advertise address in the ping then try connecting to it as we don't know this sender yet
+		if ping.AdvertiseAddr != "" {
+			c.joinPeer(ping.AdvertiseAddr)
 		}
 		return nil // Silently ignore as this can happen during cluster boot
 	}
@@ -70,7 +70,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 	}
 
 	// Create a temporary node for the target
-	targetNode := newNode(ping.TargetID, *ping.Address)
+	targetNode := newNode(ping.TargetID, ping.AdvertiseAddr)
 	ping.Ok, _ = c.healthMonitor.pingNode(targetNode, false)
 
 	// Respond to the sender with the ping acknowledgment
@@ -113,7 +113,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		rejectReason = fmt.Sprintf("incompatible application version: %s", joinMsg.ApplicationVersion)
 	} else {
 		// Check add the peer to our list of known peers unless it already exists
-		node := newNode(joinMsg.ID, joinMsg.Address)
+		node := newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
 
@@ -126,19 +126,16 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		c.enqueuePacketForBroadcast(packet.AddRef(), TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID}, nil)
 	}
 
-	// Respond to the sender with our information
-	selfJoinMsg := joinReplyMessage{
+	return &joinReplyMessage{
 		Accepted:           accepted,
 		RejectReason:       rejectReason,
 		ID:                 c.localNode.ID,
-		Address:            c.localNode.address,
+		AdvertiseAddr:      c.localNode.advertiseAddr,
 		MetadataTimestamp:  c.localNode.Metadata.GetTimestamp(),
 		Metadata:           c.localNode.Metadata.GetAll(),
 		ProtocolVersion:    c.localNode.ProtocolVersion,
 		ApplicationVersion: c.localNode.ApplicationVersion,
-	}
-
-	return &selfJoinMsg, nil
+	}, nil
 }
 
 func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
@@ -151,7 +148,7 @@ func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
 
 	// Check the protocol version and application version, reject if not compatible
 	if joinMsg.ID == c.localNode.ID || joinMsg.ProtocolVersion == c.localNode.ProtocolVersion && (c.config.ApplicationVersionCheck == nil || c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
-		node := newNode(joinMsg.ID, joinMsg.Address)
+		node := newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
 
@@ -179,7 +176,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
 			ID:                n.ID,
-			Address:           n.address,
+			AdvertiseAddr:     n.advertiseAddr,
 			State:             n.state,
 			StateChangeTime:   n.stateChangeTime,
 			MetadataTimestamp: n.metadata.GetTimestamp(),

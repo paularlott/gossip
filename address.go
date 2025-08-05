@@ -28,3 +28,7 @@ func (a Address) String() string {
 
 	return output
 }
+
+func (a Address) IsEmpty() bool {
+	return a.IP == nil && a.Port == 0 && a.URL == ""
+}

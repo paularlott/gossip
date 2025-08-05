@@ -639,7 +639,7 @@ func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
 			Field("from", sender.ID.String()).
 			Debugf("Received alive message for unknown node, adding to cluster")
 
-		newNode := newNode(msg.NodeID, msg.Address)
+		newNode := newNode(msg.NodeID, msg.AdvertiseAddr)
 		if hm.cluster.nodes.addIfNotExists(newNode) {
 			hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
 		}
@@ -741,8 +741,8 @@ func (hm *healthMonitor) broadcastAlive(aliveNode *Node) {
 	hm.config.Logger.Field("node", aliveNode.ID.String()).Debugf("Broadcasting alive status to cluster")
 
 	msg := &aliveMessage{
-		NodeID:  aliveNode.ID,
-		Address: aliveNode.address,
+		NodeID:        aliveNode.ID,
+		AdvertiseAddr: aliveNode.advertiseAddr,
 	}
 
 	hm.cluster.sendMessage(nil, TransportBestEffort, aliveMsg, &msg)
@@ -806,7 +806,7 @@ func (hm *healthMonitor) pingNode(node *Node, recoveryPing bool) (bool, error) {
 		Seq:      seq,
 	}
 	if recoveryPing {
-		ping.Address = &hm.cluster.localNode.address
+		ping.AdvertiseAddr = hm.cluster.localNode.advertiseAddr
 	}
 	if err := hm.cluster.sendMessageTo(TransportBestEffort, node, 1, pingMsg, &ping); err != nil {
 		return false, err
@@ -886,9 +886,9 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 
 	// Send the ping message
 	ping := indirectPingMessage{
-		TargetID: node.ID,
-		Address:  &node.address,
-		Seq:      seq,
+		TargetID:      node.ID,
+		AdvertiseAddr: node.advertiseAddr,
+		Seq:           seq,
 	}
 
 	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing()
@@ -989,7 +989,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 					Debugf("Discovered new node from remote state")
 
 				// Create a new node with the remote information
-				newNode := newNode(remoteState.ID, remoteState.Address)
+				newNode := newNode(remoteState.ID, remoteState.AdvertiseAddr)
 				newNode.state = remoteState.State
 				newNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true)
 

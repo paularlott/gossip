@@ -86,7 +86,7 @@ func (p *Packet) Codec() codec.Serializer {
 
 type joinMessage struct {
 	ID                 NodeID                 `msgpack:"id" json:"id"`
-	Address            Address                `msgpack:"addr" json:"addr"`
+	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
@@ -97,7 +97,7 @@ type joinReplyMessage struct {
 	Accepted           bool                   `msgpack:"acc" json:"acc"`
 	RejectReason       string                 `msgpack:"rr" json:"rr"`
 	ID                 NodeID                 `msgpack:"id" json:"id"`
-	Address            Address                `msgpack:"addr" json:"addr"`
+	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
@@ -106,7 +106,7 @@ type joinReplyMessage struct {
 
 type exchangeNodeState struct {
 	ID                NodeID                 `msgpack:"id" json:"id"`
-	Address           Address                `msgpack:"addr" json:"addr"`
+	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
 	State             NodeState              `msgpack:"s" json:"s"`
 	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
@@ -114,21 +114,21 @@ type exchangeNodeState struct {
 }
 
 type pingMessage struct {
-	TargetID NodeID   `msgpack:"ti" json:"ti"`
-	Seq      uint32   `msgpack:"seq" json:"seq"`
-	Address  *Address `msgpack:"addr" json:"addr,omitempty"`
+	TargetID      NodeID `msgpack:"ti" json:"ti"`
+	Seq           uint32 `msgpack:"seq" json:"seq"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
 }
 
 type indirectPingMessage struct {
-	TargetID NodeID   `msgpack:"ti" json:"ti"`
-	Seq      uint32   `msgpack:"seq" json:"seq"`
-	Address  *Address `msgpack:"addr" json:"addr,omitempty"`
-	Ok       bool     `msgpack:"ok" json:"ok"`
+	TargetID      NodeID `msgpack:"ti" json:"ti"`
+	Seq           uint32 `msgpack:"seq" json:"seq"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
+	Ok            bool   `msgpack:"ok" json:"ok"`
 }
 
 type aliveMessage struct {
-	NodeID  NodeID  `msgpack:"ni" json:"ni"`
-	Address Address `msgpack:"addr" json:"addr"`
+	NodeID        NodeID `msgpack:"ni" json:"ni"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr"`
 }
 
 type suspicionMessage struct {

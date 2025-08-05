@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,7 @@ type Transport interface {
 	ReadPacket(conn net.Conn) (*Packet, error)
 	SendPacket(transportType TransportType, nodes []*Node, packet *Packet) error
 	WebsocketHandler(ctx context.Context, w http.ResponseWriter, r *http.Request)
+	ResolveAddress(addressStr string) ([]Address, error)
 }
 
 type transport struct {
@@ -215,6 +218,11 @@ func (t *transport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (t *transport) DialPeer(node *Node) (net.Conn, error) {
+	// Ensure node address is resolved
+	if err := t.ensureNodeAddressResolved(node); err != nil {
+		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+	}
+
 	if node.address.Port > 0 {
 		// Create a TCP connection
 		tcpAddr := &net.TCPAddr{
@@ -473,6 +481,11 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 
 	// Send to each node
 	for _, node := range nodes {
+		// Ensure node address is resolved
+		if err := t.ensureNodeAddressResolved(node); err != nil {
+			return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+		}
+
 		// If using reliable transport then use TCP
 		if transportType == TransportReliable {
 			conn, err := t.DialPeer(node)
@@ -506,4 +519,192 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 	}
 
 	return nil
+}
+
+// ensureNodeAddressResolved ensures that a node's address is resolved from its advertise address
+func (t *transport) ensureNodeAddressResolved(node *Node) error {
+	if !node.address.IsEmpty() {
+		return nil // Already resolved
+	}
+
+	if node.advertiseAddr == "" {
+		return fmt.Errorf("no advertise address available")
+	}
+
+	addresses, err := t.ResolveAddress(node.advertiseAddr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve address %s: %v", node.advertiseAddr, err)
+	}
+
+	if len(addresses) == 0 {
+		return fmt.Errorf("no addresses resolved for %s", node.advertiseAddr)
+	}
+
+	node.address = addresses[0]
+	return nil
+}
+
+func (t *transport) ResolveAddress(addressStr string) ([]Address, error) {
+	// If SRV record
+	if strings.HasPrefix(addressStr, "srv+") {
+		serviceName := addressStr[4:] // Remove the "srv+" prefix
+
+		// If http(s):// then we're doing web sockets, lets resolve the address
+		if strings.HasPrefix(serviceName, "http://") || strings.HasPrefix(serviceName, "https://") || strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "wss://") {
+			addresses := make([]Address, 0)
+
+			// If no web socket provider is set then we can't do this
+			if t.config.WebsocketProvider == nil || (!t.config.AllowInsecureWebsockets && (strings.HasPrefix(serviceName, "ws://") || strings.HasPrefix(serviceName, "http://"))) {
+				return addresses, ErrUnsupportedAddressFormat
+			}
+
+			// Extract the host from the url
+			parsedURL, err := url.Parse(serviceName)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to parse URL: %v", err)
+			}
+
+			addr, err := t.lookupSRV(parsedURL.Hostname(), false)
+			if err != nil {
+				return addresses, fmt.Errorf("failed to lookup SRV record: %v", err)
+			}
+
+			if len(addr) > 0 {
+				// Fix the schema to be ws:// or wss://
+				if strings.HasPrefix(parsedURL.Scheme, "http") {
+					parsedURL.Scheme = "ws" + strings.TrimPrefix(parsedURL.Scheme, "http")
+				}
+
+				addresses = append(addresses, Address{
+					URL: fmt.Sprintf("%s://%s:%d%s", parsedURL.Scheme, parsedURL.Hostname(), addr[0].Port, parsedURL.Path),
+				})
+			}
+
+			return addresses, nil
+		} else {
+			// If socket transport not enabled then we can't do this
+			if !t.config.SocketTransportEnabled {
+				return []Address{}, ErrUnsupportedAddressFormat
+			}
+
+			return t.lookupSRV(serviceName, true)
+		}
+	}
+
+	// If http(s):// then we're doing web sockets, lets resolve the address
+	if strings.HasPrefix(addressStr, "http://") || strings.HasPrefix(addressStr, "https://") || strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "wss://") {
+		if t.config.WebsocketProvider == nil || (!t.config.AllowInsecureWebsockets && (strings.HasPrefix(addressStr, "ws://") || strings.HasPrefix(addressStr, "http://"))) {
+			return []Address{}, ErrUnsupportedAddressFormat
+		}
+
+		if strings.HasPrefix(addressStr, "http") {
+			addressStr = "ws" + strings.TrimPrefix(addressStr, "http")
+		}
+
+		return []Address{
+			{
+				URL: addressStr,
+			},
+		}, nil
+	} else {
+		if !t.config.SocketTransportEnabled {
+			return []Address{}, ErrUnsupportedAddressFormat
+		}
+
+		return t.lookupIP(addressStr, t.config.DefaultPort)
+	}
+}
+
+func (t *transport) lookupSRV(serviceName string, resolveToIPs bool) ([]Address, error) {
+	addresses := make([]Address, 0)
+
+	// Make sure the service ends with a dot
+	if !strings.HasSuffix(serviceName, ".") {
+		serviceName += "."
+	}
+
+	// Look up the SRV record
+	_, addrs, err := net.LookupSRV("", "", serviceName)
+	if err != nil {
+		return addresses, fmt.Errorf("failed to lookup SRV record")
+	}
+
+	if len(addrs) == 0 {
+		return addresses, fmt.Errorf("no SRV records found for service")
+	}
+
+	if resolveToIPs {
+		for _, srv := range addrs {
+			addr, err := t.lookupIP(srv.Target, int(srv.Port))
+			if err == nil {
+				addresses = append(addresses, addr...)
+			}
+		}
+	} else {
+		for _, srv := range addrs {
+			addresses = append(addresses, Address{
+				Port: int(srv.Port),
+			})
+		}
+	}
+
+	return addresses, nil
+}
+
+func (t *transport) lookupIP(host string, defaultPort int) ([]Address, error) {
+	addresses := make([]Address, 0)
+
+	// If the address string contains only numbers then assume it's a port and prefix with :
+	if _, err := strconv.Atoi(host); err == nil {
+		host = ":" + host
+	}
+
+	// If the host doesn't contain a port then use the default port
+	if !strings.Contains(host, ":") {
+		host = fmt.Sprintf("%s:%d", host, defaultPort)
+	}
+
+	// Split the address into host and port
+	hostStr, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		return addresses, err
+	}
+
+	// If host is empty then use loopback address
+	if hostStr == "" {
+		hostStr = "127.0.0.1"
+	}
+
+	// Parse port value
+	var port int
+	portVal, err := strconv.ParseUint(portStr, 10, 16)
+	if err == nil {
+		port = int(portVal)
+	} else {
+		port = defaultPort
+	}
+
+	// Resolve the IP address
+	var ip net.IP
+	if ip = net.ParseIP(hostStr); ip == nil {
+		// Host is a hostname, resolve it
+		ips, err := net.LookupIP(hostStr)
+		if err != nil {
+			return addresses, fmt.Errorf("failed to resolve hostname")
+		}
+
+		for _, ip = range ips {
+			addresses = append(addresses, Address{
+				IP:   ip,
+				Port: port,
+			})
+		}
+	} else {
+		addresses = append(addresses, Address{
+			IP:   ip,
+			Port: port,
+		})
+	}
+
+	return addresses, nil
 }
