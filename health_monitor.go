@@ -181,16 +181,43 @@ func (hm *healthMonitor) cleanupNodeFailures() {
 }
 
 func (hm *healthMonitor) checkRandomNodes() {
+	aliveCount := hm.cluster.nodes.getAliveCount()
 
-	// If no live peers then try joining, a count of 1 means only the local node is present
-	if hm.cluster.nodes.getAliveCount() <= 1 {
+	// Enhanced rejoin logic - also check if we haven't heard from ANY node recently
+	shouldRejoin := aliveCount <= 1
+
+	if !shouldRejoin && aliveCount > 1 {
+		// Check if all our "alive" peers are actually responsive
+		allNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeAlive})
+		recentActivity := 0
+		activityThreshold := hm.config.HealthCheckInterval * 3 // 3x the check interval
+
+		for _, node := range allNodes {
+			if node.ID == hm.cluster.localNode.ID {
+				continue
+			}
+			if time.Since(node.getLastActivity()) < activityThreshold {
+				recentActivity++
+			}
+		}
+
+		// If no nodes have recent activity, we might be isolated
+		if recentActivity == 0 {
+			shouldRejoin = true
+			hm.config.Logger.Warnf("No recent activity from any peers, attempting rejoin")
+		}
+	}
+
+	if shouldRejoin {
 		hm.joinPeersMutex.Lock()
 		peers := make([]string, len(hm.joinPeers))
 		copy(peers, hm.joinPeers)
 		hm.joinPeersMutex.Unlock()
 
 		if len(peers) > 0 {
-			hm.config.Logger.Field("known_peer_count", len(peers)).Tracef("No peers connected, trying to rejoin cluster")
+			hm.config.Logger.Field("known_peer_count", len(peers)).
+				Field("alive_count", aliveCount).
+				Warnf("Attempting to rejoin cluster due to isolation")
 			hm.cluster.Join(peers)
 		}
 		return

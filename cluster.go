@@ -351,6 +351,18 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// Record the message in the message history
 	c.msgHistory.recordMessage(packet.SenderID, packet.MessageID)
 
+	// Record activity from the sender
+	senderNode := c.nodes.get(packet.SenderID)
+	if senderNode != nil {
+		senderNode.updateLastActivity()
+
+		// If not marked alive then we need to recover it to alive
+		if senderNode.state != NodeAlive {
+			c.config.Logger.Tracef("gossip: Recovering node via message: %s", senderNode.ID.String())
+			c.nodes.updateState(senderNode.ID, NodeAlive)
+		}
+	}
+
 	// Run the message handler
 	h := c.handlers.getHandler(packet.MessageType)
 	if h != nil {
@@ -362,11 +374,6 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 				transportType = TransportBestEffort
 			}
 			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
-		}
-
-		senderNode := c.nodes.get(packet.SenderID)
-		if senderNode != nil {
-			senderNode.updateLastActivity()
 		}
 
 		err := h.dispatch(c, senderNode, packet)

@@ -245,8 +245,6 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 		}
 
 		return true
-
-		return true
 	}
 	return false
 }
