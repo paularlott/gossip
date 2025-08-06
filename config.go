@@ -64,6 +64,7 @@ type Config struct {
 	StateExchangeMultiplier       float64                 // Scale of peer sampling for state exchange messages
 	IndirectPingMultiplier        float64                 // Scale of peer sampling for indirect ping messages
 	TTLMultiplier                 float64                 // Multiplier for TTL, used to determine how many hops a message can take
+	ForceReliableTransport        bool                    // Force all messages to use reliable transport (TCP/WebSocket)
 }
 
 func DefaultConfig() *Config {
@@ -108,5 +109,6 @@ func DefaultConfig() *Config {
 		IndirectPingMultiplier:        0.7,
 		TTLMultiplier:                 1.0,
 		BearerToken:                   "",
+		ForceReliableTransport:        false,
 	}
 }

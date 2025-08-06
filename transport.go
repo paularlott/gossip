@@ -79,19 +79,25 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		}
 
 		// Create a UDP listener
-		udpAddr := &net.UDPAddr{
-			IP:   bindAddress.IP,
-			Port: int(bindAddress.Port),
-		}
-		transport.udpListener, err = net.ListenUDP("udp", udpAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create UDP listener: %w", err)
+		if !config.ForceReliableTransport {
+			udpAddr := &net.UDPAddr{
+				IP:   bindAddress.IP,
+				Port: int(bindAddress.Port),
+			}
+			transport.udpListener, err = net.ListenUDP("udp", udpAddr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create UDP listener: %w", err)
+			}
 		}
 
 		// Start the transports
-		wg.Add(2)
+		wg.Add(1)
 		go transport.tcpListen(ctx, wg)
-		go transport.udpListen(ctx, wg)
+
+		if !config.ForceReliableTransport {
+			wg.Add(1)
+			go transport.udpListen(ctx, wg)
+		}
 	}
 
 	wg.Add(1)
@@ -477,7 +483,7 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 	}
 
 	// If transport type is best effort but the packet is too large, switch to reliable or if not using TCP/UDP
-	if t.config.WebsocketProvider != nil || transportType == TransportBestEffort && (len(rawPacket) >= t.config.UDPMaxPacketSize) {
+	if t.config.ForceReliableTransport || t.config.WebsocketProvider != nil || transportType == TransportBestEffort && (len(rawPacket) >= t.config.UDPMaxPacketSize) {
 		transportType = TransportReliable
 	}
 
