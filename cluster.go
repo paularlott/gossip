@@ -282,11 +282,14 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		return
 	}
 
+	// Create a node which we'll use for connection attempts
+	node := newNode(c.localNode.ID, peerAddr)
+
 	for _, addr := range addresses {
 		joinReply := &joinReplyMessage{}
 
-		// Create temporary node with resolved address for this connection attempt
-		node := newNode(c.localNode.ID, peerAddr)
+		// Apply address to node and attempt to join
+		node.address = addr
 		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 		if err != nil {
 			continue
@@ -299,8 +302,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 
 		// Update the node with the peer's information
 		node.ID = joinReply.ID
-		node.advertiseAddr = joinReply.AdvertiseAddr
-		node.address = addr // We keep the resolved address that worked
+		node.advertiseAddr = joinReply.AdvertiseAddr // Use the address the node advertises
 		node.ProtocolVersion = joinReply.ProtocolVersion
 		node.ApplicationVersion = joinReply.ApplicationVersion
 		node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)

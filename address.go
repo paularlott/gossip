@@ -32,3 +32,10 @@ func (a Address) String() string {
 func (a Address) IsEmpty() bool {
 	return a.IP == nil && a.Port == 0 && a.URL == ""
 }
+
+func (a Address) Clear() {
+	fmt.Println("clearing address:", a.String())
+	a.IP = nil
+	a.Port = 0
+	a.URL = ""
+}

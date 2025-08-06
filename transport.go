@@ -231,6 +231,7 @@ func (t *transport) DialPeer(node *Node) (net.Conn, error) {
 		}
 		conn, err := net.DialTimeout("tcp", tcpAddr.String(), t.config.TCPDialTimeout)
 		if err != nil {
+			node.address.Clear()
 			return nil, err
 		}
 
@@ -242,6 +243,7 @@ func (t *transport) DialPeer(node *Node) (net.Conn, error) {
 
 		wsConn, err := t.wsProvider.Dial(node.address.URL)
 		if err != nil {
+			node.address.Clear()
 			return nil, err
 		}
 
@@ -490,12 +492,14 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 		if transportType == TransportReliable {
 			conn, err := t.DialPeer(node)
 			if err != nil {
+				node.address.Clear()
 				return err
 			}
 
 			// Write the packet to the connection
 			err = t.writeRawPacket(conn, rawPacket)
 			if err != nil {
+				node.address.Clear()
 				conn.Close()
 				return err
 			}
@@ -505,6 +509,7 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 		} else { // Send the message over UDP
 			err = t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline))
 			if err != nil {
+				node.address.Clear()
 				return err
 			}
 
@@ -513,6 +518,7 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 				Port: node.address.Port,
 			})
 			if err != nil {
+				node.address.Clear()
 				return err
 			}
 		}

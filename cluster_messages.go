@@ -146,6 +146,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 
 	conn, err := c.transport.DialPeer(dstNode)
 	if err != nil {
+		dstNode.address.Clear()
 		return err
 	}
 	defer conn.Close()
@@ -153,11 +154,13 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	// Write the packet to the connection
 	err = c.transport.WritePacket(conn, packet)
 	if err != nil {
+		dstNode.address.Clear()
 		return err
 	}
 
 	responsePacket, err := c.transport.ReadPacket(conn)
 	if err != nil {
+		dstNode.address.Clear()
 		return err
 	}
 	defer responsePacket.Release()
@@ -166,6 +169,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	if responsePayload != nil {
 		err = responsePacket.Unmarshal(responsePayload)
 		if err != nil {
+			dstNode.address.Clear()
 			return err
 		}
 	}
@@ -209,6 +213,7 @@ func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interfa
 
 	conn, err := c.transport.DialPeer(dstNode)
 	if err != nil {
+		dstNode.address.Clear()
 		return nil, err
 	}
 
@@ -222,6 +227,7 @@ func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interfa
 	// Write the packet to the connection
 	err = c.transport.WritePacket(conn, packet)
 	if err != nil {
+		dstNode.address.Clear()
 		conn.Close()
 		return nil, err
 	}
@@ -230,11 +236,13 @@ func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interfa
 	var ackMsg uint16
 	err = binary.Read(conn, binary.BigEndian, &ackMsg)
 	if err != nil {
+		dstNode.address.Clear()
 		conn.Close()
 		return nil, fmt.Errorf("failed to read message type: %w", err)
 	}
 
 	if ackMsg != uint16(streamOpenAckMsg) {
+		dstNode.address.Clear()
 		conn.Close()
 		return nil, fmt.Errorf("unexpected message type: expected %d, got %d", streamOpenAckMsg, ackMsg)
 	}

@@ -239,6 +239,13 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 		// Trigger event
 		nl.cluster.notifyNodeStateChanged(node, oldState)
 
+		// If state anything but alive clear address cache
+		if state != NodeAlive {
+			node.address.Clear()
+		}
+
+		return true
+
 		return true
 	}
 	return false
