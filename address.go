@@ -34,7 +34,6 @@ func (a Address) IsEmpty() bool {
 }
 
 func (a Address) Clear() {
-	fmt.Println("clearing address:", a.String())
 	a.IP = nil
 	a.Port = 0
 	a.URL = ""
