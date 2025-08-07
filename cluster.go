@@ -452,7 +452,11 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodes(c.CalcFanOut(), exclude)
+	randomNodes := c.nodes.getRandomNodesInStates(
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+		exclude,
+	)
 
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
