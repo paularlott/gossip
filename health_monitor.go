@@ -224,8 +224,9 @@ func (hm *healthMonitor) checkRandomNodes() {
 	}
 
 	// Get a random selection of nodes to check
-	nodesToCheck := hm.cluster.nodes.getRandomLiveNodes(
+	nodesToCheck := hm.cluster.nodes.getRandomNodesInStates(
 		hm.config.HealthCheckSampleSize,
+		[]NodeState{NodeAlive, NodeSuspect, NodeDead, NodeLeaving},
 		[]NodeID{hm.cluster.localNode.ID},
 	)
 
@@ -920,7 +921,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 
 	peerCount := hm.cluster.getPeerSubsetSizeIndirectPing()
 	sentCount := 0
-	indirectPeers := hm.cluster.nodes.getRandomLiveNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
+	indirectPeers := hm.cluster.nodes.getRandomNodes(peerCount, []NodeID{hm.cluster.localNode.ID, node.ID})
 	if len(indirectPeers) == 0 {
 		return false, fmt.Errorf("no indirect peers found")
 	}

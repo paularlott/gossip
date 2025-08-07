@@ -450,11 +450,9 @@ func (c *Cluster) getMaxTTL() uint8 {
 
 // Exchange the state of a random subset of nodes with the given node
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
-	// Determine how many nodes to include in the exchange
-	sampleSize := c.CalcPayloadSize(c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount())
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodes(sampleSize, exclude)
+	randomNodes := c.nodes.getRandomNodes(c.CalcFanOut(), exclude)
 
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
@@ -525,7 +523,7 @@ func (c *Cluster) broadcastWorker() {
 
 			// Get the peer subset to send the packet to
 			if item.peers == nil {
-				item.peers = c.nodes.getRandomLiveNodes(c.CalcFanOut(), item.excludePeers)
+				item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
 			}
 
 			if err := c.transport.SendPacket(item.transportType, item.peers, item.packet); err != nil {
@@ -563,7 +561,7 @@ func (c *Cluster) periodicStateSync() {
 				}
 
 				// Get random subset, excluding ourselves
-				peers := c.nodes.getRandomLiveNodes(peerCount, []NodeID{c.localNode.ID})
+				peers := c.nodes.getRandomNodes(peerCount, []NodeID{c.localNode.ID})
 
 				// Perform state exchange with selected peers
 				for _, peer := range peers {
@@ -709,7 +707,7 @@ func (c *Cluster) NodeIsLocal(node *Node) bool {
 
 // Get a random subset of nodes to use for gossiping or exchanging states with, excluding ourselves
 func (c *Cluster) GetCandidates() []*Node {
-	return c.nodes.getRandomLiveNodes(c.CalcFanOut(), []NodeID{c.localNode.ID})
+	return c.nodes.getRandomNodes(c.CalcFanOut(), []NodeID{c.localNode.ID})
 }
 
 func (c *Cluster) HandleGossipFunc(handler GossipHandler) HandlerID {

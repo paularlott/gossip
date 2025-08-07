@@ -334,14 +334,9 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 	return result
 }
 
-// GetRandomLiveNodes returns up to k random live nodes (Alive or Suspect)
-func (nl *nodeList) getRandomLiveNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect}, excludeIDs)
-}
-
-// GetRandomNodes returns up to k random nodes in any state
+// GetRandomNodes returns up to k random live nodes (Alive or Suspect)
 func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID) []*Node {
-	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead}, excludeIDs)
+	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect}, excludeIDs)
 }
 
 // GetAliveCount returns the number of nodes with state NodeAlive

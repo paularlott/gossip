@@ -211,12 +211,6 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 		t.Errorf("Expected 3 alive nodes, got %d", len(aliveNodes))
 	}
 
-	// Get alive and suspect nodes (live nodes)
-	liveNodes := nl.getRandomLiveNodes(10, nil)
-	if len(liveNodes) != 4 {
-		t.Errorf("Expected 4 live nodes, got %d", len(liveNodes))
-	}
-
 	// Get all nodes
 	allNodes := nl.getRandomNodes(10, nil)
 	if len(allNodes) != 5 {
