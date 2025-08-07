@@ -676,13 +676,17 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 
 // Handle incoming alive refutation message
 func (hm *healthMonitor) handleAlive(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
 	msg := aliveMessage{}
 	if err := packet.Unmarshal(&msg); err != nil {
 		return err
+	}
+
+	if sender == nil {
+		if msg.AdvertiseAddr != "" {
+			hm.cluster.joinPeer(msg.AdvertiseAddr)
+		}
+
+		return nil
 	}
 
 	// Check if we know about this node
