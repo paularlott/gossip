@@ -1008,7 +1008,7 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 		// If we don't know this node, add it
 		if localNode == nil {
 			// Ignore unknown nodes that are leaving or dead, otherwise add the node
-			if remoteState.State == NodeAlive || remoteState.State == NodeSuspect {
+			if remoteState.State != NodeSuspect {
 				hm.config.Logger.
 					Field("node", remoteState.ID.String()).
 					Field("remote_state", remoteState.State.String()).

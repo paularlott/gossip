@@ -11,7 +11,6 @@ func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandler(indirectPingAckMsg, false, c.handleIndirectPingAck)
 
 	c.handlers.registerHandlerWithReply(nodeJoinMsg, c.handleJoin)
-	c.handlers.registerHandler(nodeJoiningMsg, true, c.handleJoining)
 	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
 	c.handlers.registerHandler(metadataUpdateMsg, true, c.handleMetadataUpdate)
 
@@ -120,10 +119,6 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		if c.nodes.addOrUpdate(node) {
 			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
 		}
-
-		// Gossip the node to our peers
-		packet.MessageType = nodeJoiningMsg
-		c.enqueuePacketForBroadcast(packet.AddRef(), TransportBestEffort, []NodeID{c.localNode.ID, packet.SenderID}, nil)
 	}
 
 	return &joinReplyMessage{
@@ -138,27 +133,6 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 	}, nil
 }
 
-func (c *Cluster) handleJoining(sender *Node, packet *Packet) error {
-	var joinMsg joinMessage
-
-	err := packet.Unmarshal(&joinMsg)
-	if err != nil {
-		return err
-	}
-
-	// Check the protocol version and application version, reject if not compatible
-	if joinMsg.ID == c.localNode.ID || joinMsg.ProtocolVersion == c.localNode.ProtocolVersion && (c.config.ApplicationVersionCheck == nil || c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion)) {
-		node := newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
-		node.ProtocolVersion = joinMsg.ProtocolVersion
-		node.ApplicationVersion = joinMsg.ApplicationVersion
-
-		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
-		c.nodes.addOrUpdate(node)
-	}
-
-	return nil
-}
-
 func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
 	if sender == nil {
 		return nil, fmt.Errorf("unknown sender")
@@ -170,7 +144,14 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 		return nil, err
 	}
 
-	nodes := c.nodes.getRandomNodes(c.CalcFanOut(), []NodeID{})
+	// Merge the remote states with our local states
+	c.healthMonitor.combineRemoteNodeState(sender, peerStates)
+
+	// Get a random selection of nodes
+	nodes := c.nodes.getRandomNodesForGossip(
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeID{},
+	)
 
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
@@ -183,8 +164,6 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 			Metadata:          n.metadata.GetAll(),
 		})
 	}
-
-	go c.healthMonitor.combineRemoteNodeState(sender, peerStates)
 
 	return &localStates, nil
 }

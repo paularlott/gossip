@@ -437,3 +437,17 @@ func (nl *nodeList) recalculateCounters() {
 	nl.leavingCount.Store(leaving)
 	nl.deadCount.Store(dead)
 }
+
+// getRandomNodesForGossip returns nodes prioritizing recent state changes
+func (nl *nodeList) getRandomNodesForGossip(k int, excludeIDs []NodeID) []*Node {
+	// Get recent state changes first (alive, suspect, leaving, recent dead)
+	recentNodes := nl.getRandomNodesInStates(k*3/4, []NodeState{NodeAlive, NodeSuspect, NodeLeaving}, excludeIDs)
+
+	// Fill remaining slots with dead nodes (for consistency)
+	if len(recentNodes) < k {
+		deadNodes := nl.getRandomNodesInStates(k-len(recentNodes), []NodeState{NodeDead}, excludeIDs)
+		recentNodes = append(recentNodes, deadNodes...)
+	}
+
+	return recentNodes
+}

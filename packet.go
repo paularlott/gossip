@@ -20,7 +20,6 @@ const (
 	indirectPingMsg                       // Sent to test if a peer is alive, but not directly reachable
 	indirectPingAckMsg                    // Sent in response to an indirect ping message
 	nodeJoinMsg                           // Sent by peers when they are joining the network, as doing a push / pull state transfer
-	nodeJoiningMsg                        // Sent by the node that is handling join to announce the joiner to the cluster
 	pushPullStateMsg                      // Sent by peers when pushing / pulling state
 	aliveMsg                              // Sent to announce a node is alive
 	suspicionMsg                          // Sent to announce a node is suspected to be dead

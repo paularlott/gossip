@@ -452,9 +452,8 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+	randomNodes := c.nodes.getRandomNodesForGossip(
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
 		exclude,
 	)
 
@@ -729,14 +728,14 @@ func (c *Cluster) notifyDoGossip() {
 }
 
 func (c *Cluster) gossipManager() {
-	// Add jitter to prevent all nodes syncing at the same time
-	jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 2)))
-	time.Sleep(jitter)
-
-	c.gossipInterval = c.config.GossipInterval
-	c.gossipTicker = time.NewTicker(c.config.GossipInterval)
-
 	go func() {
+		// Add jitter to prevent all nodes syncing at the same time
+		jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 2)))
+		time.Sleep(jitter)
+
+		c.gossipInterval = c.config.GossipInterval
+		c.gossipTicker = time.NewTicker(c.config.GossipInterval)
+
 		for {
 			select {
 			case <-c.gossipTicker.C:
