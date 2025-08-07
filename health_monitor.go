@@ -501,7 +501,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 func (hm *healthMonitor) attemptDeadNodeRecovery(node *Node) {
 	// Try to ping the node
 	go func(node *Node) {
-		alive, err := hm.pingNode(node, true)
+		alive, err := hm.pingNode(node)
 		if err == nil && alive {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
@@ -797,7 +797,7 @@ func (hm *healthMonitor) broadcastLeaving(leavingNode *Node) {
 }
 
 // pingNode sends a ping message direct to the specified node and waits for an acknowledgment.
-func (hm *healthMonitor) pingNode(node *Node, recoveryPing bool) (bool, error) {
+func (hm *healthMonitor) pingNode(node *Node) (bool, error) {
 	// Create a context that can be cancelled either by timeout or cluster shutdown
 	// This creates a context hierarchy: parent (shutdown) -> child (timeout)
 	parentCtx := context.Background()
@@ -830,11 +830,9 @@ func (hm *healthMonitor) pingNode(node *Node, recoveryPing bool) (bool, error) {
 
 	// Send the ping message
 	ping := pingMessage{
-		TargetID: node.ID,
-		Seq:      seq,
-	}
-	if recoveryPing {
-		ping.AdvertiseAddr = hm.cluster.localNode.advertiseAddr
+		TargetID:      node.ID,
+		Seq:           seq,
+		AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
 	}
 	if err := hm.cluster.sendMessageTo(TransportBestEffort, node, 1, pingMsg, &ping); err != nil {
 		return false, err
@@ -958,7 +956,7 @@ func (hm *healthMonitor) indirectPingNode(node *Node) (bool, error) {
 // Tries to ping a node directly first, and if that fails, it tries to ping it indirectly.
 func (hm *healthMonitor) pingAny(node *Node) (bool, error) {
 	// Try direct ping first
-	alive, err := hm.pingNode(node, false)
+	alive, err := hm.pingNode(node)
 	if alive {
 		return true, nil
 	}
@@ -1024,6 +1022,14 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				// Add the node to our list & notify the state change
 				hm.cluster.nodes.addIfNotExists(newNode)
 				hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
+
+				// Send a ping to the node, if it doesn't know us it'll cause it to join with us
+				ping := pingMessage{
+					TargetID:      remoteState.ID,
+					Seq:           1,
+					AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
+				}
+				hm.cluster.sendMessage([]*Node{newNode}, TransportBestEffort, pingMsg, &ping)
 			}
 
 			// No further processing needed for new nodes

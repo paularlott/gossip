@@ -26,8 +26,8 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 		return err
 	}
 
-	if sender == nil {
-		// If we have an advertise address in the ping then try connecting to it as we don't know this sender yet
+	// If unknown sender and we have an advertise address in the ping then try connecting to it as we don't know this sender yet
+	if sender == nil && ping.AdvertiseAddr != "" {
 		if ping.AdvertiseAddr != "" {
 			c.joinPeer(ping.AdvertiseAddr)
 		}
@@ -71,7 +71,7 @@ func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
 
 	// Create a temporary node for the target
 	targetNode := newNode(ping.TargetID, ping.AdvertiseAddr)
-	ping.Ok, _ = c.healthMonitor.pingNode(targetNode, false)
+	ping.Ok, _ = c.healthMonitor.pingNode(targetNode)
 
 	// Respond to the sender with the ping acknowledgment
 	return c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)
