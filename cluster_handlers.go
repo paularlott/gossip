@@ -26,8 +26,8 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
 		return err
 	}
 
-	// If unknown sender and we have an advertise address in the ping then try connecting to it as we don't know this sender yet
-	if sender == nil && ping.AdvertiseAddr != "" {
+	// If unknown sender, try to join if we have an advertise address, otherwise ignore
+	if sender == nil {
 		if ping.AdvertiseAddr != "" {
 			c.joinPeer(ping.AdvertiseAddr)
 		}
