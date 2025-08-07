@@ -1137,6 +1137,15 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 
 				// Re-evaluate with the new evidence
 				hm.evaluateSuspectNode(localNode)
+			} else if localNode.state == NodeLeaving {
+				// If we think it's leaving and remote reports dead, transition to dead
+				hm.config.Logger.
+					Field("node", localNode.ID.String()).
+					Debugf("gossip: Remote reports leaving node as dead, marking as dead")
+				hm.cluster.nodes.updateState(localNode.ID, NodeDead)
+
+				// Clean up any tracking state
+				hm.cleanNodeState(localNode.ID)
 			}
 			// If we already think it's dead, nothing to do
 
