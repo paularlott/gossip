@@ -65,6 +65,7 @@ type Config struct {
 	IndirectPingMultiplier        float64                 // Scale of peer sampling for indirect ping messages
 	TTLMultiplier                 float64                 // Multiplier for TTL, used to determine how many hops a message can take
 	ForceReliableTransport        bool                    // Force all messages to use reliable transport (TCP/WebSocket)
+	Resolver                      Resolver                // DNS resolver to use for address resolution, if not set uses default resolver
 }
 
 func DefaultConfig() *Config {

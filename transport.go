@@ -48,6 +48,7 @@ type transport struct {
 	udpListener   *net.UDPConn
 	packetChannel chan *Packet
 	wsProvider    websocket.Provider
+	resolver      Resolver
 }
 
 func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindAddress Address) (*transport, error) {
@@ -58,6 +59,12 @@ func NewTransport(ctx context.Context, wg *sync.WaitGroup, config *Config, bindA
 		config:        config,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		wsProvider:    config.WebsocketProvider,
+		resolver:      config.Resolver,
+	}
+
+	// Use default resolver if none provided
+	if transport.resolver == nil {
+		transport.resolver = NewDefaultResolver()
 	}
 
 	if bindAddress.Port == 0 {
@@ -635,10 +642,10 @@ func (t *transport) lookupSRV(serviceName string, resolveToIPs bool) ([]Address,
 		serviceName += "."
 	}
 
-	// Look up the SRV record
-	_, addrs, err := net.LookupSRV("", "", serviceName)
+	// Look up the SRV record using the pluggable resolver
+	addrs, err := t.resolver.LookupSRV(serviceName)
 	if err != nil {
-		return addresses, fmt.Errorf("failed to lookup SRV record")
+		return addresses, err
 	}
 
 	if len(addrs) == 0 {
@@ -647,15 +654,17 @@ func (t *transport) lookupSRV(serviceName string, resolveToIPs bool) ([]Address,
 
 	if resolveToIPs {
 		for _, srv := range addrs {
-			addr, err := t.lookupIP(srv.Target, int(srv.Port))
-			if err == nil {
-				addresses = append(addresses, addr...)
+			if srv.IP != nil {
+				addresses = append(addresses, Address{
+					IP:   srv.IP,
+					Port: srv.Port,
+				})
 			}
 		}
 	} else {
 		for _, srv := range addrs {
 			addresses = append(addresses, Address{
-				Port: int(srv.Port),
+				Port: srv.Port,
 			})
 		}
 	}
@@ -699,17 +708,19 @@ func (t *transport) lookupIP(host string, defaultPort int) ([]Address, error) {
 	// Resolve the IP address
 	var ip net.IP
 	if ip = net.ParseIP(hostStr); ip == nil {
-		// Host is a hostname, resolve it
-		ips, err := net.LookupIP(hostStr)
+		// Host is a hostname, resolve it using the pluggable resolver
+		ipStrs, err := t.resolver.LookupIP(hostStr)
 		if err != nil {
-			return addresses, fmt.Errorf("failed to resolve hostname")
+			return addresses, err
 		}
 
-		for _, ip = range ips {
-			addresses = append(addresses, Address{
-				IP:   ip,
-				Port: port,
-			})
+		for _, ipStr := range ipStrs {
+			if ip = net.ParseIP(ipStr); ip != nil {
+				addresses = append(addresses, Address{
+					IP:   ip,
+					Port: port,
+				})
+			}
 		}
 	} else {
 		addresses = append(addresses, Address{
