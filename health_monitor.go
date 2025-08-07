@@ -131,6 +131,7 @@ func (hm *healthMonitor) healthCheckLoop() {
 
 		case <-suspectTicker.C:
 			hm.processSuspectNodes()
+			hm.processLeavingNodes()
 
 		case <-deadNodeTicker.C:
 			hm.cleanupDeadNodes()
@@ -381,6 +382,31 @@ func (hm *healthMonitor) processSuspectNodes() {
 	wg.Wait()
 }
 
+func (hm *healthMonitor) processLeavingNodes() {
+	leavingNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeLeaving})
+
+	for _, node := range leavingNodes {
+		// Skip the local node
+		if node.ID == hm.cluster.localNode.ID {
+			continue
+		}
+
+		// Check how long the node has been in leaving state
+		leavingDuration := time.Since(node.stateChangeTime.Time())
+
+		// After a timeout, mark as dead
+		if leavingDuration >= hm.config.SuspectRetentionPeriod {
+			hm.config.Logger.
+				Field("node", node.ID.String()).
+				Field("leaving_duration", leavingDuration).
+				Debugf("Leaving node timed out, marking as dead")
+
+			hm.cluster.nodes.updateState(node.ID, NodeDead)
+			hm.cleanNodeState(node.ID)
+		}
+	}
+}
+
 func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 	// Get suspicion tracking data
 	evidenceObj, _ := hm.suspicionMap.LoadOrStore(
@@ -465,7 +491,7 @@ func (hm *healthMonitor) getSuspicionQuorum() int {
 }
 
 func (hm *healthMonitor) cleanupDeadNodes() {
-	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead, NodeLeaving})
+	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead})
 
 	now := time.Now()
 	for _, node := range deadNodes {
@@ -484,7 +510,7 @@ func (hm *healthMonitor) cleanupDeadNodes() {
 				Debugf("Dead node timeout expired, removing from cluster")
 
 			hm.removeNodeEvidenceFromAllNodes(node.ID)
-			hm.cluster.nodes.removeIfInState(node.ID, []NodeState{NodeDead, NodeLeaving})
+			hm.cluster.nodes.removeIfInState(node.ID, []NodeState{NodeDead})
 
 			// Clean up any suspicion tracking
 			hm.cleanNodeState(node.ID)
