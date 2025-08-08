@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -213,12 +214,18 @@ func (c *Cluster) Stop() {
 // Handler for incoming WebSocket connections when gossiping over web sockets
 func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
 	if c.config.BearerToken != "" {
-		// Get the auth token
-		var bearer string
-		fmt.Sscanf(r.Header.Get("Authorization"), "Bearer %s", &bearer)
+		authHeader := r.Header.Get("Authorization")
+		const bearerPrefix = "Bearer "
+
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			c.config.Logger.Debugf("gossip: Missing or invalid Authorization header format")
+			http.Error(w, "Invalid authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		bearer := strings.TrimSpace(authHeader[len(bearerPrefix):])
 		if bearer != c.config.BearerToken {
 			c.config.Logger.Debugf("gossip: Invalid bearer token")
-
 			http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
 			return
 		}

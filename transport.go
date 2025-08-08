@@ -214,7 +214,7 @@ func (t *transport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 			copy(packetData, buf[:n])
 
 			go func() {
-				packet, err := t.packetFromBuffer(packetData, false)
+				packet, err := t.packetFromBuffer(packetData)
 				if err != nil {
 					t.config.Logger.Err(err).Errorf("Failed to decode UDP packet")
 					return
@@ -338,7 +338,7 @@ func (t *transport) packetToBuffer(packet *Packet) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (t *transport) packetFromBuffer(data []byte, lowLevelTransportIsSecure bool) (*Packet, error) {
+func (t *transport) packetFromBuffer(data []byte) (*Packet, error) {
 	var err error
 
 	// Get the header size and flags from the first 2 bytes
@@ -469,13 +469,7 @@ func (t *transport) ReadPacket(conn net.Conn) (*Packet, error) {
 		return nil, err
 	}
 
-	// Test if we're using a secure websocket connection
-	underlyingTransportIsSecure := false
-	if wsConn, ok := conn.(websocket.Conn); ok {
-		underlyingTransportIsSecure = wsConn.IsSecure()
-	}
-
-	packet, err := t.packetFromBuffer(receivedData, underlyingTransportIsSecure)
+	packet, err := t.packetFromBuffer(receivedData)
 	if err == nil {
 		packet.conn = conn
 	}
