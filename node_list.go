@@ -197,8 +197,17 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 	return shard.nodes[nodeID]
 }
 
-// UpdateState updates the state of a node
+// UpdateState updates the state of a node using a local timestamp
 func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
+	// Delegate to unified function with local timestamp
+	return nl.updateStateWithTimestamp(nodeID, state, hlc.Now())
+}
+
+// updateStateWithTimestamp updates the state of a node using the provided timestamp.
+// Use this for remote-driven updates, passing the remote state-change timestamp.
+// For local updates, pass hlc.Now(). If the state is unchanged, the timestamp is only
+// updated if the provided timestamp is newer than the current stateChangeTime.
+func (nl *nodeList) updateStateWithTimestamp(nodeID NodeID, state NodeState, ts hlc.Timestamp) bool {
 	// Never allow the local node to be marked as Suspect or Dead
 	if nodeID == nl.cluster.localNode.ID {
 		// Only allow Alive or Leaving for local node
@@ -218,8 +227,11 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 	if node, exists := shard.nodes[nodeID]; exists {
 		oldState := node.state
 
-		// Skip if state hasn't changed
+		// If the state hasn't changed, we can still update the timestamp if newer
 		if oldState == state {
+			if ts.After(node.stateChangeTime) {
+				node.stateChangeTime = ts
+			}
 			return true
 		}
 
@@ -228,7 +240,12 @@ func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
 
 		// Update node state
 		node.state = state
-		node.stateChangeTime = hlc.Now()
+		// Use the provided timestamp if it's newer than current; otherwise fall back to local Now()
+		if ts.After(node.stateChangeTime) {
+			node.stateChangeTime = ts
+		} else {
+			node.stateChangeTime = hlc.Now()
+		}
 
 		// Add to new state map
 		shard.byState[state][nodeID] = node

@@ -1037,8 +1037,8 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 
 		// If we don't know this node, add it
 		if localNode == nil {
-			// Ignore unknown nodes that are leaving or dead, otherwise add the node
-			if remoteState.State != NodeSuspect {
+			// Only add unknown nodes that are Alive or Leaving; skip Suspect/Dead
+			if remoteState.State == NodeAlive || remoteState.State == NodeLeaving {
 				hm.config.Logger.
 					Field("node", remoteState.ID.String()).
 					Field("remote_state", remoteState.State.String()).
@@ -1047,19 +1047,22 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				// Create a new node with the remote information
 				newNode := newNode(remoteState.ID, remoteState.AdvertiseAddr)
 				newNode.state = remoteState.State
+				newNode.stateChangeTime = remoteState.StateChangeTime
 				newNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true)
 
 				// Add the node to our list & notify the state change
 				hm.cluster.nodes.addIfNotExists(newNode)
 				hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
 
-				// Send a ping to the node, if it doesn't know us it'll cause it to join with us
-				ping := pingMessage{
-					TargetID:      remoteState.ID,
-					Seq:           1,
-					AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
+				// Send a ping only for Alive nodes to accelerate join; skip for Leaving
+				if remoteState.State == NodeAlive {
+					ping := pingMessage{
+						TargetID:      remoteState.ID,
+						Seq:           1,
+						AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
+					}
+					hm.cluster.sendMessage([]*Node{newNode}, TransportBestEffort, pingMsg, &ping)
 				}
-				hm.cluster.sendMessage([]*Node{newNode}, TransportBestEffort, pingMsg, &ping)
 			}
 
 			// No further processing needed for new nodes
@@ -1142,10 +1145,13 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 				hm.config.Logger.
 					Field("node", localNode.ID.String()).
 					Debugf("gossip: Remote reports leaving node as dead, marking as dead")
-				hm.cluster.nodes.updateState(localNode.ID, NodeDead)
+				hm.cluster.nodes.updateStateWithTimestamp(localNode.ID, NodeDead, remoteState.StateChangeTime)
 
 				// Clean up any tracking state
 				hm.cleanNodeState(localNode.ID)
+			} else if localNode.state == NodeDead {
+				// Apply remote timestamp if newer even if state matches
+				hm.cluster.nodes.updateStateWithTimestamp(localNode.ID, NodeDead, remoteState.StateChangeTime)
 			}
 			// If we already think it's dead, nothing to do
 
@@ -1217,15 +1223,14 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 
 		// Remote reports node as leaving
 		case remoteState.State == NodeLeaving:
-			if localNode.state != NodeLeaving {
-				hm.config.Logger.
-					Field("node", localNode.ID.String()).
-					Debugf("gossip: Remote reports node as leaving, updating state")
-				hm.cluster.nodes.updateState(localNode.ID, NodeLeaving)
+			// Always apply remote-driven state and timestamp (if newer)
+			hm.config.Logger.
+				Field("node", localNode.ID.String()).
+				Debugf("gossip: Remote reports node as leaving, applying remote state/time if newer")
+			hm.cluster.nodes.updateStateWithTimestamp(localNode.ID, NodeLeaving, remoteState.StateChangeTime)
 
-				// Clean up any failure tracking and suspicion evidence
-				hm.cleanNodeState(localNode.ID)
-			}
+			// Clean up any failure tracking and suspicion evidence
+			hm.cleanNodeState(localNode.ID)
 		}
 	}
 }
