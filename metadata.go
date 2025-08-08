@@ -494,7 +494,7 @@ func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp,
 	currentTime := md.lastModified.Load()
 	currentTimestamp := hlc.Timestamp(currentTime)
 
-	if !force && timestamp.Before(currentTimestamp) {
+	if !force && !timestamp.After(currentTimestamp) {
 		return false // Reject older data
 	}
 
