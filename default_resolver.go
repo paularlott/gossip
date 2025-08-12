@@ -29,34 +29,44 @@ func (r *DefaultResolver) LookupIP(host string) ([]string, error) {
 
 // LookupSRV takes a service name and returns a list of service records as TCPAddr that match the service name
 func (r *DefaultResolver) LookupSRV(service string) ([]*net.TCPAddr, error) {
-	// Make sure the service ends with a dot
+	// Guard empty service to avoid indexing panic
+	if len(service) == 0 {
+		return nil, fmt.Errorf("empty service")
+	}
+	// Make sure the service ends with a dot so net.LookupSRV treats it as absolute
 	if service[len(service)-1] != '.' {
 		service += "."
 	}
 
+	// Per net.LookupSRV docs, empty service/proto means lookup SRV for name as-is.
 	_, addrs, err := net.LookupSRV("", "", service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup SRV record: %w", err)
 	}
-
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no SRV records found for service")
 	}
 
-	result := make([]*net.TCPAddr, len(addrs))
-	for i, srv := range addrs {
-		result[i] = &net.TCPAddr{
-			IP:   net.ParseIP(srv.Target),
-			Port: int(srv.Port),
+	// net.LookupSRV already returns results sorted by priority and randomized by weight.
+	// Build a flat list of TCPAddrs using all resolved IPs for each valid SRV target.
+	var result []*net.TCPAddr
+	for _, srv := range addrs {
+		// Skip invalid/no-service entries
+		if srv.Port == 0 || srv.Target == "." {
+			continue
 		}
-		// If IP parsing fails, try to resolve the hostname
-		if result[i].IP == nil {
-			ips, err := r.LookupIP(srv.Target)
-			if err != nil || len(ips) == 0 {
-				continue
+		ips, err := r.LookupIP(srv.Target)
+		if err != nil || len(ips) == 0 {
+			continue
+		}
+		for _, ipStr := range ips {
+			if ip := net.ParseIP(ipStr); ip != nil {
+				result = append(result, &net.TCPAddr{IP: ip, Port: int(srv.Port)})
 			}
-			result[i].IP = net.ParseIP(ips[0])
 		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no SRV records with resolvable IPs")
 	}
 	return result, nil
 }
