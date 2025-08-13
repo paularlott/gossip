@@ -11,7 +11,7 @@ type Address struct {
 	URL  string `msgpack:"url,omitempty" json:"url,omitempty"`
 }
 
-func (a Address) String() string {
+func (a *Address) String() string {
 	output := ""
 
 	if a.Port > 0 {
@@ -29,11 +29,11 @@ func (a Address) String() string {
 	return output
 }
 
-func (a Address) IsEmpty() bool {
+func (a *Address) IsEmpty() bool {
 	return a.IP == nil && a.Port == 0 && a.URL == ""
 }
 
-func (a Address) Clear() {
+func (a *Address) Clear() {
 	a.IP = nil
 	a.Port = 0
 	a.URL = ""

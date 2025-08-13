@@ -97,7 +97,7 @@ func (dng *DataNodeGroup[T]) Close() {
 
 // initializeWithExistingNodes adds all existing matching nodes to the group
 func (dng *DataNodeGroup[T]) initializeWithExistingNodes() {
-	nodes := dng.cluster.AliveNodes()
+	nodes := dng.cluster.nodes.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
 	for _, node := range nodes {
 		if dng.nodeMatchesCriteria(node) {
 			dng.addNode(node)
@@ -125,12 +125,12 @@ func (dng *DataNodeGroup[T]) nodeMatchesCriteria(node *Node) bool {
 
 // handleNodeStateChange processes node state changes
 func (dng *DataNodeGroup[T]) handleNodeStateChange(node *Node, prevState NodeState) {
-	if node.Alive() {
+	if node.Alive() || node.Suspect() {
 		// Node is now alive, check if it matches criteria
 		if dng.nodeMatchesCriteria(node) {
 			dng.addNode(node)
 		}
-	} else if prevState == NodeAlive {
+	} else if prevState == NodeAlive || prevState == NodeSuspect {
 		// Node is no longer alive, remove it
 		dng.removeNode(node)
 	}

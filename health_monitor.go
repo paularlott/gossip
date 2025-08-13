@@ -362,7 +362,7 @@ func (hm *healthMonitor) processSuspectNodes() {
 	nodeChan := make(chan *Node, len(suspectNodes))
 
 	// Start workers
-	for range maxWorkers {
+	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

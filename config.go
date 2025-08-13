@@ -66,6 +66,7 @@ type Config struct {
 	TTLMultiplier                 float64                 // Multiplier for TTL, used to determine how many hops a message can take
 	ForceReliableTransport        bool                    // Force all messages to use reliable transport (TCP/WebSocket)
 	Resolver                      Resolver                // DNS resolver to use for address resolution, if not set uses default resolver
+	PreferIPv6                    bool                    // Prefer IPv6 addresses when resolving hostnames (default false = prefer IPv4)
 }
 
 func DefaultConfig() *Config {
@@ -111,5 +112,6 @@ func DefaultConfig() *Config {
 		TTLMultiplier:                 1.0,
 		BearerToken:                   "",
 		ForceReliableTransport:        false,
+		PreferIPv6:                    false,
 	}
 }

@@ -237,18 +237,42 @@ func (t *transport) DialPeer(node *Node) (net.Conn, error) {
 	}
 
 	if node.address.Port > 0 {
-		// Create a TCP connection
-		tcpAddr := &net.TCPAddr{
-			IP:   node.address.IP,
-			Port: node.address.Port,
-		}
-		conn, err := net.DialTimeout("tcp", tcpAddr.String(), t.config.TCPDialTimeout)
-		if err != nil {
-			node.address.Clear()
-			return nil, err
+		// Try to dial, and if it fails, re-resolve and attempt other addresses
+		tryDial := func(addr Address) (net.Conn, error) {
+			tcpAddr := &net.TCPAddr{IP: addr.IP, Port: addr.Port}
+			return net.DialTimeout("tcp", tcpAddr.String(), t.config.TCPDialTimeout)
 		}
 
-		return conn, nil
+		// First try the cached address
+		if node.address.IP != nil {
+			if conn, err := tryDial(node.address); err == nil {
+				return conn, nil
+			}
+			// Cached address failed; clear to force re-resolve
+			node.address.Clear()
+		}
+
+		// Re-resolve and iterate through all addresses
+		addrs, err := t.ResolveAddress(node.advertiseAddr)
+		if err != nil || len(addrs) == 0 {
+			return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+		}
+
+		// Iterate through addresses to find a working one
+		var firstErr error
+		for _, addr := range addrs {
+			if conn, err := tryDial(addr); err == nil {
+				// Cache working address
+				node.address = addr
+				return conn, nil
+			} else if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr == nil {
+			firstErr = ErrNoTransportAvailable
+		}
+		return nil, firstErr
 	} else if node.address.URL != "" {
 		if t.wsProvider == nil {
 			return nil, fmt.Errorf("no websocket provider configured")
@@ -490,7 +514,7 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 
 	// Send to each node
 	for _, node := range nodes {
-		// Ensure node address is resolved
+		// Ensure node address is resolved (may be cached)
 		if err := t.ensureNodeAddressResolved(node); err != nil {
 			return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 		}
@@ -514,19 +538,41 @@ func (t *transport) SendPacket(transportType TransportType, nodes []*Node, packe
 			conn.Close()
 
 		} else { // Send the message over UDP
-			err = t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline))
-			if err != nil {
-				node.address.Clear()
+			// First try cached address
+			tryWrite := func(addr Address) error {
+				if err := t.udpListener.SetWriteDeadline(time.Now().Add(t.config.UDPDeadline)); err != nil {
+					return err
+				}
+				_, err := t.udpListener.WriteToUDP(rawPacket, &net.UDPAddr{IP: addr.IP, Port: addr.Port})
 				return err
 			}
 
-			_, err = t.udpListener.WriteToUDP(rawPacket, &net.UDPAddr{
-				IP:   node.address.IP,
-				Port: node.address.Port,
-			})
-			if err != nil {
+			if node.address.IP != nil {
+				if err := tryWrite(node.address); err == nil {
+					continue
+				}
 				node.address.Clear()
-				return err
+			}
+
+			// Re-resolve and iterate
+			addrs, err := t.ResolveAddress(node.advertiseAddr)
+			if err != nil || len(addrs) == 0 {
+				return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+			}
+			var sendErr error
+			for _, addr := range addrs {
+				if err := tryWrite(addr); err == nil {
+					node.address = addr // cache
+					sendErr = nil
+					break
+				} else {
+					if sendErr == nil {
+						sendErr = err
+					}
+				}
+			}
+			if sendErr != nil {
+				return sendErr
 			}
 		}
 	}
@@ -647,13 +693,23 @@ func (t *transport) lookupSRV(serviceName string, resolveToIPs bool) ([]Address,
 	}
 
 	if resolveToIPs {
+		// Partition v4/v6 according to preference
+		var v4, v6 []Address
 		for _, srv := range addrs {
 			if srv.IP != nil {
-				addresses = append(addresses, Address{
-					IP:   srv.IP,
-					Port: srv.Port,
-				})
+				if srv.IP.To4() != nil {
+					v4 = append(v4, Address{IP: srv.IP, Port: srv.Port})
+				} else {
+					v6 = append(v6, Address{IP: srv.IP, Port: srv.Port})
+				}
 			}
+		}
+		if t.config.PreferIPv6 {
+			addresses = append(addresses, v6...)
+			addresses = append(addresses, v4...)
+		} else {
+			addresses = append(addresses, v4...)
+			addresses = append(addresses, v6...)
 		}
 	} else {
 		for _, srv := range addrs {
@@ -708,19 +764,33 @@ func (t *transport) lookupIP(host string, defaultPort int) ([]Address, error) {
 			return addresses, err
 		}
 
+		// Partition by IP family
+		var v4, v6 []net.IP
 		for _, ipStr := range ipStrs {
 			if ip = net.ParseIP(ipStr); ip != nil {
-				addresses = append(addresses, Address{
-					IP:   ip,
-					Port: port,
-				})
+				if ip.To4() != nil {
+					v4 = append(v4, ip)
+				} else {
+					v6 = append(v6, ip)
+				}
 			}
 		}
+
+		// Order based on preference
+		ordered := make([]net.IP, 0, len(v4)+len(v6))
+		if t.config.PreferIPv6 {
+			ordered = append(ordered, v6...)
+			ordered = append(ordered, v4...)
+		} else {
+			ordered = append(ordered, v4...)
+			ordered = append(ordered, v6...)
+		}
+
+		for _, ip := range ordered {
+			addresses = append(addresses, Address{IP: ip, Port: port})
+		}
 	} else {
-		addresses = append(addresses, Address{
-			IP:   ip,
-			Port: port,
-		})
+		addresses = append(addresses, Address{IP: ip, Port: port})
 	}
 
 	return addresses, nil

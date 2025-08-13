@@ -86,7 +86,7 @@ func (ng *NodeGroup) Close() {
 
 // initializeWithExistingNodes adds all existing matching nodes to the group
 func (ng *NodeGroup) initializeWithExistingNodes() {
-	nodes := ng.cluster.AliveNodes()
+	nodes := ng.cluster.nodes.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
 	for _, node := range nodes {
 		if ng.nodeMatchesCriteria(node) {
 			ng.addNode(node)
@@ -115,12 +115,12 @@ func (ng *NodeGroup) nodeMatchesCriteria(node *Node) bool {
 
 // handleNodeStateChange processes node state changes
 func (ng *NodeGroup) handleNodeStateChange(node *Node, prevState NodeState) {
-	if node.Alive() {
+	if node.Alive() || node.Suspect() {
 		// Node is now alive, check if it matches criteria
 		if ng.nodeMatchesCriteria(node) {
 			ng.addNode(node)
 		}
-	} else if prevState == NodeAlive {
+	} else if prevState == NodeAlive || prevState == NodeSuspect {
 		// Node is no longer alive, remove it
 		ng.removeNode(node)
 	}
