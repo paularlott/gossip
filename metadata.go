@@ -42,8 +42,9 @@ type Metadata struct {
 func NewMetadata() *Metadata {
 	md := &Metadata{}
 	md.data.Store(make(map[string]interface{}))
-	ts := hlc.Now()
-	md.lastModified.Store(uint64(ts))
+	// Start at zero to allow first incoming update from remote to set its timestamp.
+	// Local writes will set a fresh HLC timestamp via setters.
+	md.lastModified.Store(0)
 	return md
 }
 
