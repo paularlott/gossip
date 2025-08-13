@@ -160,6 +160,10 @@ func (dng *DataNodeGroup[T]) handleNodeMetadataChange(node *Node) {
 		dng.removeNode(node)
 	} else if matches && exists {
 		// Node still matches but metadata changed, trigger update callback
+		// Refresh stored node pointer to the canonical one
+		shard.mutex.Lock()
+		nodeData.Node = node
+		shard.mutex.Unlock()
 		if dng.onNodeUpdated != nil {
 			dng.onNodeUpdated(node, nodeData.Data)
 		}

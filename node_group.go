@@ -145,6 +145,11 @@ func (ng *NodeGroup) handleNodeMetadataChange(node *Node) {
 		ng.addNode(node)
 	} else if !matches && exists {
 		ng.removeNode(node)
+	} else if matches && exists {
+		// Node still matches; refresh the stored pointer to keep in sync with node list
+		shard.mutex.Lock()
+		shard.nodes[node.ID] = node
+		shard.mutex.Unlock()
 	}
 }
 
