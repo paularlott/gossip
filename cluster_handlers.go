@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"fmt"
+	"reflect"
 )
 
 func (c *Cluster) registerSystemHandlers() {
@@ -187,6 +188,17 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 
 	if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
 		c.notifyMetadataChanged(node)
+	} else {
+		// If the timestamp is not newer but the data differs, accept the update when it
+		// comes directly from the node itself (authoritative source). This heals cases
+		// where clocks or prior incorrect timestamps prevented convergence.
+		current := node.metadata.GetAll()
+		if !reflect.DeepEqual(current, metadataUpdate.Metadata) {
+			// Force-apply the update
+			if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, true) {
+				c.notifyMetadataChanged(node)
+			}
+		}
 	}
 
 	return nil

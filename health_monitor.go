@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1069,6 +1070,15 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 			continue
 		} else if localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, false) {
 			hm.cluster.notifyMetadataChanged(localNode)
+		} else if sender != nil && sender.ID == remoteState.ID {
+			// Authoritative metadata from the node itself during push/pull: if data differs
+			// but timestamp isn't newer, force-apply to ensure convergence.
+			current := localNode.metadata.GetAll()
+			if !reflect.DeepEqual(current, remoteState.Metadata) {
+				if localNode.metadata.update(remoteState.Metadata, remoteState.MetadataTimestamp, true) {
+					hm.cluster.notifyMetadataChanged(localNode)
+				}
+			}
 		}
 
 		// We know about this node, determine if we should update our state
