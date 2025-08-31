@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/paularlott/gossip/hlc"
 )
 
 var (
@@ -115,6 +116,21 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
+
+	// Automatically broadcast metadata changes for the local node
+	cluster.localNode.metadata.SetOnLocalChange(func(ts hlc.Timestamp, snapshot map[string]interface{}) {
+		// Best-effort broadcast using provided timestamp and snapshot
+		updateMsg := &metadataUpdateMessage{
+			MetadataTimestamp: ts,
+			Metadata:          snapshot,
+		}
+		if packet, err := cluster.createPacket(cluster.localNode.ID, metadataUpdateMsg, cluster.getMaxTTL(), updateMsg); err == nil {
+			cluster.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{cluster.localNode.ID}, nil)
+			cluster.notifyMetadataChanged(cluster.localNode)
+		} else {
+			cluster.config.Logger.Err(err).Tracef("gossip: failed to create metadata update packet")
+		}
+	})
 
 	if len(cluster.config.EncryptionKey) == 0 && cluster.config.Cipher != nil {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")

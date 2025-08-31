@@ -187,25 +187,6 @@ func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload
 	return c.sendToWithResponse(dstNode, msgType, payload, responsePayload)
 }
 
-// Send a metadata update to the cluster.
-func (c *Cluster) UpdateMetadata() error {
-	updateMsg := &metadataUpdateMessage{
-		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
-		Metadata:          c.localNode.metadata.GetAll(),
-	}
-
-	packet, err := c.createPacket(c.localNode.ID, metadataUpdateMsg, c.getMaxTTL(), &updateMsg)
-	if err != nil {
-		return err
-	}
-
-	c.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{c.localNode.ID}, nil)
-
-	// Trigger a metadata update event
-	c.notifyMetadataChanged(c.localNode)
-	return nil
-}
-
 func (c *Cluster) OpenStream(dstNode *Node, msgType MessageType, payload interface{}) (net.Conn, error) {
 	if msgType < ReservedMsgsStart {
 		return nil, fmt.Errorf("invalid message type")

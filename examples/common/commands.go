@@ -150,8 +150,6 @@ func handleSetmetaCommand(c *gossip.Cluster, args []string) {
 
 	c.LocalMetadata().SetString(key, value)
 	fmt.Printf("Metadata set: %s = %s\n", key, value)
-
-	c.UpdateMetadata()
 }
 
 func handleGetmetaCommand(c *gossip.Cluster, args []string) {

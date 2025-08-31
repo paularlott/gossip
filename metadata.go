@@ -34,8 +34,9 @@ var _ MetadataReader = (*Metadata)(nil)
 
 // Metadata holds node metadata with type-safe accessors
 type Metadata struct {
-	data         atomic.Value  // Holds map[string]interface{}
-	lastModified atomic.Uint64 // Last modification timestamp in nanoseconds
+	data          atomic.Value                                // Holds map[string]interface{}
+	lastModified  atomic.Uint64                               // Last modification timestamp in nanoseconds
+	onLocalChange func(hlc.Timestamp, map[string]interface{}) // Callback on local changes: (ts, snapshot)
 }
 
 // NewMetadata creates a new metadata container
@@ -45,6 +46,8 @@ func NewMetadata() *Metadata {
 	// Start at zero to allow first incoming update from remote to set its timestamp.
 	// Local writes will set a fresh HLC timestamp via setters.
 	md.lastModified.Store(0)
+	// Initialize onLocalChange with a no-op to simplify calling without nil checks
+	md.onLocalChange = func(hlc.Timestamp, map[string]interface{}) {}
 	return md
 }
 
@@ -68,6 +71,9 @@ func (md *Metadata) set(key string, value interface{}) *Metadata {
 	ts := hlc.Now()
 	md.data.Store(newData)
 	md.lastModified.Store(uint64(ts))
+
+	// Fire local change callback with the freshly stored timestamp and snapshot
+	md.onLocalChange(ts, newData)
 
 	return md
 }
@@ -432,6 +438,9 @@ func (md *Metadata) Delete(key string) {
 	ts := hlc.Now()
 	md.data.Store(newData)
 	md.lastModified.Store(uint64(ts))
+
+	// Fire local change callback with the freshly stored timestamp and snapshot
+	md.onLocalChange(ts, newData)
 }
 
 // Exists returns true if the key exists in the metadata
@@ -508,4 +517,14 @@ func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp,
 	md.data.Store(dataCopy)
 	md.lastModified.Store(uint64(timestamp))
 	return true
+}
+
+// SetOnLocalChange sets a callback that is invoked whenever local setters (Set*/Delete)
+// modify the metadata. Remote updates via update() do not trigger this callback.
+func (md *Metadata) SetOnLocalChange(cb func(hlc.Timestamp, map[string]interface{})) {
+	if cb == nil {
+		md.onLocalChange = func(hlc.Timestamp, map[string]interface{}) {}
+	} else {
+		md.onLocalChange = cb
+	}
 }
