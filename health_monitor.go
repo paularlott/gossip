@@ -613,11 +613,18 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 	// Check if we know about this node
 	suspectNode := hm.cluster.nodes.get(msg.NodeID)
 	if suspectNode == nil {
+		// If unknown, add a placeholder node in Suspect state so membership converges
 		hm.config.Logger.
 			Field("suspect", msg.NodeID.String()).
 			Field("from", sender.ID.String()).
-			Debugf("Received suspicion for unknown node")
-		return nil
+			Debugf("Received suspicion for unknown node, adding as suspect")
+
+		newNode := newNode(msg.NodeID, "")
+		newNode.state = NodeSuspect
+		if hm.cluster.nodes.addIfNotExists(newNode) {
+			hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
+		}
+		suspectNode = newNode
 	}
 
 	// If the node is us refute the suspicion
@@ -770,10 +777,17 @@ func (hm *healthMonitor) handleLeaving(sender *Node, packet *Packet) error {
 	// Check if we know about this node
 	node := hm.cluster.nodes.get(msg.NodeID)
 	if node == nil {
+		// If unknown, add a placeholder node in Leaving state so membership converges
 		hm.config.Logger.
 			Field("node", msg.NodeID.String()).
-			Debugf("Received leaving message for unknown node, ignoring")
-		return nil
+			Debugf("Received leaving message for unknown node, adding as leaving")
+
+		newNode := newNode(msg.NodeID, "")
+		newNode.state = NodeLeaving
+		if hm.cluster.nodes.addIfNotExists(newNode) {
+			hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
+		}
+		node = newNode
 	}
 
 	// A leaving message is authoritative - it overrides any current state
@@ -1038,8 +1052,8 @@ func (hm *healthMonitor) combineRemoteNodeState(sender *Node, remoteStates []exc
 
 		// If we don't know this node, add it
 		if localNode == nil {
-			// Only add unknown nodes that are Alive or Leaving; skip Suspect/Dead
-			if remoteState.State == NodeAlive || remoteState.State == NodeLeaving {
+			// Add unknown nodes for Alive, Leaving, or Suspect; skip Dead to avoid resurrecting
+			if remoteState.State == NodeAlive || remoteState.State == NodeLeaving || remoteState.State == NodeSuspect {
 				hm.config.Logger.
 					Field("node", remoteState.ID.String()).
 					Field("remote_state", remoteState.State.String()).

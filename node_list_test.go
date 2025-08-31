@@ -211,10 +211,10 @@ func TestNodeList_GetRandomNodesInStates(t *testing.T) {
 		t.Errorf("Expected 3 alive nodes, got %d", len(aliveNodes))
 	}
 
-	// Get all nodes
-	allNodes := nl.getRandomNodes(10, nil)
+	// Get all nodes (including dead) using explicit states
+	allNodes := nl.getRandomNodesInStates(10, []NodeState{NodeAlive, NodeSuspect, NodeDead}, nil)
 	if len(allNodes) != 5 {
-		t.Errorf("Expected 5 nodes total, got %d", len(allNodes))
+		t.Errorf("Expected 5 nodes total (alive+suspect+dead), got %d", len(allNodes))
 	}
 
 	// Get nodes with exclusion

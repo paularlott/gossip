@@ -28,6 +28,7 @@ func (c *coderWebsocketConn) IsSecure() bool {
 type CoderWebSocket struct {
 	conn     *coderws.Conn
 	ctx      context.Context
+	cancel   context.CancelFunc
 	isSecure bool
 }
 
@@ -55,6 +56,9 @@ func (c *CoderWebSocket) NextReader() (messageType int, reader io.Reader, err er
 
 // Close implements WebSocket.Close
 func (c *CoderWebSocket) Close() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
 	return c.conn.Close(coderws.StatusNormalClosure, "")
 }
 
@@ -101,12 +105,13 @@ func (p *CoderProvider) Dial(url string) (WebSocket, error) {
 		return nil, fmt.Errorf("failed to dial WebSocket: %w", err)
 	}
 
-	// Create context for the websocket
-	connCtx, _ := context.WithTimeout(context.Background(), p.HandshakeTimeout)
+	// Create context for the websocket and ensure cancel is called on close via wrapper
+	connCtx, connCancel := context.WithTimeout(context.Background(), p.HandshakeTimeout)
 
 	return &CoderWebSocket{
 		conn:     wsConn,
 		ctx:      connCtx,
+		cancel:   connCancel,
 		isSecure: strings.HasPrefix(strings.ToLower(url), "wss://"),
 	}, nil
 }
@@ -126,11 +131,12 @@ func (p *CoderProvider) Upgrade(w http.ResponseWriter, r *http.Request) (WebSock
 		return nil, fmt.Errorf("failed to upgrade connection to WebSocket: %w", err)
 	}
 
-	connCtx, _ := context.WithTimeout(context.Background(), p.HandshakeTimeout)
+	connCtx, connCancel := context.WithTimeout(context.Background(), p.HandshakeTimeout)
 
 	return &CoderWebSocket{
 		conn:     wsConn,
 		ctx:      connCtx,
+		cancel:   connCancel,
 		isSecure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 	}, nil
 }

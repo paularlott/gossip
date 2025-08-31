@@ -227,11 +227,8 @@ func (nl *nodeList) updateStateWithTimestamp(nodeID NodeID, state NodeState, ts 
 	if node, exists := shard.nodes[nodeID]; exists {
 		oldState := node.state
 
-		// If the state hasn't changed, we can still update the timestamp if newer
+		// If the state hasn't changed, do not update timestamp to avoid unnecessary churn
 		if oldState == state {
-			if ts.After(node.stateChangeTime) {
-				node.stateChangeTime = ts
-			}
 			return true
 		}
 
