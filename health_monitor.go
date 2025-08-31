@@ -396,7 +396,11 @@ func (hm *healthMonitor) processLeavingNodes() {
 		leavingDuration := time.Since(node.stateChangeTime.Time())
 
 		// After a timeout, mark as dead
-		if leavingDuration >= hm.config.SuspectRetentionPeriod {
+		retention := hm.config.LeavingRetentionPeriod
+		if retention <= 0 {
+			retention = hm.config.SuspectRetentionPeriod
+		}
+		if leavingDuration >= retention {
 			hm.config.Logger.
 				Field("node", node.ID.String()).
 				Field("leaving_duration", leavingDuration).
@@ -424,6 +428,36 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 	confirmationCount := len(evidence.confirmations)
 	refutationCount := len(evidence.refutations)
 	evidence.mutex.RUnlock()
+
+	// Special-case tiny clusters: in a 2-node cluster there's no quorum to be had.
+	// If we've kept the node suspect for a short grace and it still doesn't respond,
+	// mark it dead to avoid lingering suspects forever.
+	aliveCount := hm.cluster.nodes.getAliveCount()
+
+	// Compute suspect duration now as it's needed below
+	suspectDuration := time.Since(evidence.suspectTime)
+
+	if aliveCount <= 2 {
+		// Grace period before declaring dead in tiny clusters: at least 2x health interval
+		// (bounded by SuspectAttemptInterval if that is smaller)
+		grace := hm.config.HealthCheckInterval * 2
+		if hm.config.SuspectAttemptInterval > 0 && hm.config.SuspectAttemptInterval < grace {
+			grace = hm.config.SuspectAttemptInterval
+		}
+
+		if suspectDuration >= grace {
+			if alive, _ := hm.pingAny(node); !alive {
+				hm.config.Logger.
+					Field("node", node.ID.String()).
+					Field("alive_count", aliveCount).
+					Debugf("Suspect in tiny cluster after grace and still unreachable, marking as dead")
+
+				hm.cluster.nodes.updateState(node.ID, NodeDead)
+				hm.suspicionMap.Delete(node.ID)
+				return
+			}
+		}
+	}
 
 	// Check if we have enough peer confirmations to mark node as dead
 	quorum := hm.getSuspicionQuorum()
@@ -453,7 +487,6 @@ func (hm *healthMonitor) evaluateSuspectNode(node *Node) {
 	}
 
 	// If the node has been suspect for too long, check it one more time
-	suspectDuration := time.Since(evidence.suspectTime)
 	if suspectDuration >= hm.config.SuspectRetentionPeriod {
 		// Try one final ping
 		if alive, _ := hm.pingAny(node); alive {
@@ -625,6 +658,14 @@ func (hm *healthMonitor) handleSuspicion(sender *Node, packet *Packet) error {
 			hm.cluster.notifyNodeStateChanged(newNode, NodeUnknown)
 		}
 		suspectNode = newNode
+
+		// Reset/seed suspicion evidence for this unknown node so tiny-cluster
+		// fast path doesn't shortcut to Dead immediately.
+		hm.suspicionMap.Store(msg.NodeID, &suspicionEvidence{
+			suspectTime:   time.Now(),
+			confirmations: make(map[NodeID]bool),
+			refutations:   make(map[NodeID]bool),
+		})
 	}
 
 	// If the node is us refute the suspicion

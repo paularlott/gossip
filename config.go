@@ -67,6 +67,7 @@ type Config struct {
 	ForceReliableTransport        bool                    // Force all messages to use reliable transport (TCP/WebSocket)
 	Resolver                      Resolver                // DNS resolver to use for address resolution, if not set uses default resolver
 	PreferIPv6                    bool                    // Prefer IPv6 addresses when resolving hostnames (default false = prefer IPv4)
+	LeavingRetentionPeriod        time.Duration           // How long to keep nodes in Leaving state before transitioning to Dead
 }
 
 func DefaultConfig() *Config {
@@ -113,5 +114,6 @@ func DefaultConfig() *Config {
 		BearerToken:                   "",
 		ForceReliableTransport:        false,
 		PreferIPv6:                    false,
+		LeavingRetentionPeriod:        30 * time.Second,
 	}
 }

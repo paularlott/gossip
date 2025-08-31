@@ -4,7 +4,6 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/paularlott/gossip/hlc"
 )
@@ -22,7 +21,6 @@ type nodeList struct {
 	shardCount int
 	shardMask  uint32
 	shards     []*nodeListShard
-	randSource *rand.Rand // For thread-safe random selection
 
 	// Atomic counters for quick access without traversing the map
 	aliveCount   atomic.Int64
@@ -33,12 +31,10 @@ type nodeList struct {
 
 // NewNodeList creates a new node list
 func newNodeList(c *Cluster) *nodeList {
-	source := rand.New(rand.NewSource(time.Now().UnixNano()))
 	nl := &nodeList{
 		cluster:    c,
 		shardCount: c.config.NodeShardCount,
 		shardMask:  uint32(c.config.NodeShardCount - 1),
-		randSource: source,
 	}
 
 	// Initialize shards
@@ -332,7 +328,8 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 						result = append(result, node)
 					} else {
 						// Phase 2: Replace items with decreasing probability
-						j := nl.randSource.Intn(nodesSeen)
+						// Use package-level rand which is safe for concurrent use
+						j := rand.Intn(nodesSeen)
 						if j < k {
 							// Replace the item at index j
 							result[j] = node

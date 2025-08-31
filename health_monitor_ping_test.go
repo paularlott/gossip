@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,7 +21,8 @@ func newTestCluster(t *testing.T) *Cluster {
 	cfg.SuspectAttemptInterval = 50 * time.Millisecond
 	cfg.RecoveryAttemptInterval = 50 * time.Millisecond
 	cfg.PingTimeout = 30 * time.Millisecond
-	cfg.StateSyncInterval = 200 * time.Millisecond
+	// Disable periodic state sync to avoid background races in tests
+	cfg.StateSyncInterval = time.Hour
 	cfg.MsgHistoryGCInterval = 50 * time.Millisecond
 	cfg.MsgHistoryMaxAge = 50 * time.Millisecond
 
@@ -44,7 +46,7 @@ func TestPingNode_AckFlow(t *testing.T) {
 
 	// Wire fake transport to simulate immediate ack delivery
 	ft := c.transport.(*fakeTransport)
-	ft.onSend = func(pkt *Packet) error {
+	ft.SetOnSend(func(pkt *Packet) error {
 		switch pkt.MessageType {
 		case pingMsg:
 			// Deliver ack back
@@ -53,7 +55,7 @@ func TestPingNode_AckFlow(t *testing.T) {
 			c.healthMonitor.pingAckReceived(ping.TargetID, ping.Seq, true)
 		}
 		return nil
-	}
+	})
 
 	ok, err := c.healthMonitor.pingNode(remote)
 	if err != nil {
@@ -77,7 +79,7 @@ func TestIndirectPing_AckFlow(t *testing.T) {
 	c.nodes.addOrUpdate(helper2)
 
 	ft := c.transport.(*fakeTransport)
-	ft.onSend = func(pkt *Packet) error {
+	ft.SetOnSend(func(pkt *Packet) error {
 		switch pkt.MessageType {
 		case indirectPingMsg:
 			var ip indirectPingMessage
@@ -86,7 +88,7 @@ func TestIndirectPing_AckFlow(t *testing.T) {
 			c.healthMonitor.pingAckReceived(ip.TargetID, ip.Seq, true)
 		}
 		return nil
-	}
+	})
 
 	ok, err := c.healthMonitor.indirectPingNode(target)
 	if err != nil {
@@ -101,21 +103,21 @@ func TestMetadataAutoBroadcast_Smoke(t *testing.T) {
 	c := newTestCluster(t)
 	defer c.Stop()
 
-	sent := 0
+	var sent int64
 	ft := c.transport.(*fakeTransport)
-	ft.onSend = func(pkt *Packet) error {
+	ft.SetOnSend(func(pkt *Packet) error {
 		if pkt.MessageType == metadataUpdateMsg {
-			sent++
+			atomic.AddInt64(&sent, 1)
 		}
 		return nil
-	}
+	})
 
 	// Trigger metadata change
 	c.localNode.metadata.SetString("foo", "bar")
 
 	// Allow async enqueue/broadcast
 	time.Sleep(60 * time.Millisecond)
-	if sent == 0 {
+	if atomic.LoadInt64(&sent) == 0 {
 		t.Fatalf("expected metadata update to be broadcast")
 	}
 }
