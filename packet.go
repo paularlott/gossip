@@ -14,21 +14,13 @@ type MessageID hlc.Timestamp
 
 const (
 	// Message types
-	replyMsg           MessageType = iota // Reply to a message
-	pingMsg                               // Sent to test if a peer is alive
-	pingAckMsg                            // Sent in response to a ping message
-	indirectPingMsg                       // Sent to test if a peer is alive, but not directly reachable
-	indirectPingAckMsg                    // Sent in response to an indirect ping message
-	nodeJoinMsg                           // Sent by peers when they are joining the network, as doing a push / pull state transfer
-	pushPullStateMsg                      // Sent by peers when pushing / pulling state
-	aliveMsg                              // Sent to announce a node is alive
-	suspicionMsg                          // Sent to announce a node is suspected to be dead
-	leavingMsg                            // Sent to announce a node is leaving
-	metadataUpdateMsg                     // Update the metadata of a node
-	streamOpenAckMsg                      // Acknowledgement of a stream open
-	ReservedMsgsStart  MessageType = 64   // Reserved for future use
-	_                                     // skip to 128
-	UserMsg            MessageType = 128  // User messages start here
+	replyMsg          MessageType = iota // Reply to a message
+	nodeJoinMsg                          // Sent by peers when they are joining the network, as doing a push / pull state transfer
+	pushPullStateMsg                     // Sent by peers when pushing / pulling state
+	metadataUpdateMsg                    // Update the metadata of a node
+	ReservedMsgsStart MessageType = 64   // Reserved for future use
+	_                                    // skip to 128
+	UserMsg           MessageType = 128  // User messages start here
 )
 
 var (

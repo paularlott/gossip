@@ -34,6 +34,7 @@ func (ns NodeState) String() string {
 	}
 }
 
+// Struct to hold our view of the state of a node within the cluster
 type Node struct {
 	ID                 NodeID
 	advertiseAddr      string  // Raw advertise address (may contain SRV records, URLs, etc.)

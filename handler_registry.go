@@ -1,52 +1,27 @@
 package gossip
 
 import (
-	"encoding/binary"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
+// Message handler for fire and forget messages
 type Handler func(*Node, *Packet) error
+
+// Message handler for request / reply messages, must return reply data
 type ReplyHandler func(*Node, *Packet) (interface{}, error)
-type StreamHandler func(*Node, *Packet, net.Conn)
 
 type msgHandler struct {
-	forward       bool
-	handler       Handler
-	replyHandler  ReplyHandler
-	streamHandler StreamHandler
+	forward      bool
+	handler      Handler
+	replyHandler ReplyHandler
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
 func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 	if packet == nil {
 		return fmt.Errorf("packet is nil")
-	}
-
-	if packet.conn != nil && mh.streamHandler != nil {
-		// Start stream handlers in their own go routine as they could run for a while
-		go func() {
-			defer packet.Release()
-
-			// Ack the stream creation
-			err := packet.conn.SetWriteDeadline(time.Now().Add(c.config.TCPDeadline))
-			if err != nil {
-				return
-			}
-
-			err = binary.Write(packet.conn, binary.BigEndian, uint16(streamOpenAckMsg))
-			if err != nil {
-				return
-			}
-
-			// Upgrade the connection to a stream and call the stream handler
-			packet.conn, err = c.wrapStream(packet.conn)
-			mh.streamHandler(node, packet, packet.conn)
-		}()
-		return nil
 	}
 
 	// Ensure the packet is released and connection closed after processing
@@ -137,13 +112,6 @@ func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler
 	hr.register(msgType, msgHandler{
 		forward:      false,
 		replyHandler: handler,
-	})
-}
-
-func (hr *handlerRegistry) registerStreamHandler(msgType MessageType, handler StreamHandler) {
-	hr.register(msgType, msgHandler{
-		forward:       false,
-		streamHandler: handler,
 	})
 }
 

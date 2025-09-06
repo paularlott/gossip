@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -34,7 +33,6 @@ type Cluster struct {
 	localNode                   *Node
 	handlers                    *handlerRegistry
 	broadcastQueue              chan *broadcastQItem
-	healthMonitor               *healthMonitor
 	stateEventHandlers          *EventHandlers[NodeStateChangeHandler]
 	metadataChangeEventHandlers *EventHandlers[NodeMetadataChangeHandler]
 	gossipEventHandlers         *EventHandlers[GossipHandler]
@@ -189,9 +187,6 @@ func (c *Cluster) Start() {
 		go c.acceptPackets()
 	}
 
-	// Start the health monitor
-	c.healthMonitor = newHealthMonitor(c)
-
 	// Register the system message handlers
 	c.registerSystemHandlers()
 
@@ -207,10 +202,6 @@ func (c *Cluster) Start() {
 func (c *Cluster) Stop() {
 	if c.localNode.state != NodeLeaving {
 		c.Leave()
-	}
-
-	if c.healthMonitor != nil {
-		c.healthMonitor.stop()
 	}
 
 	if c.msgHistory != nil {
@@ -281,10 +272,7 @@ func (c *Cluster) Join(peers []string) error {
 
 	wg.Wait()
 
-	// Add the list of peers to the health monitor so they can be used for recovery
-	for _, peerAddr := range peers {
-		c.healthMonitor.addJoinPeer(peerAddr)
-	}
+	// TODO Maintain a list of peers we're using as seeds so they can be used for recovery
 
 	return nil
 }
@@ -343,9 +331,8 @@ func (c *Cluster) joinPeer(peerAddr string) {
 // MMarks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
 	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
-	if c.healthMonitor != nil {
-		c.healthMonitor.MarkNodeLeaving(c.localNode)
-	}
+
+	// TODO Mark our local node as leaving?
 }
 
 func (c *Cluster) acceptPackets() {
@@ -446,19 +433,6 @@ func (c *Cluster) CalcPayloadSize(totalItems int) int {
 	return int(math.Min(float64(totalItems), math.Max(1, math.Min(basePeerCount, cap))))
 }
 
-// getPeerSubsetSizeIndirectPing The number of peers to use for indirect pings.
-func (c *Cluster) getPeerSubsetSizeIndirectPing() int {
-	totalNodes := float64(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
-	if totalNodes <= 0 {
-		return 0
-	}
-
-	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.IndirectPingMultiplier)
-	cap := 6.0
-
-	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
-}
-
 func (c *Cluster) getMaxTTL() uint8 {
 	totalNodes := c.nodes.getAliveCount()
 	if totalNodes <= 0 {
@@ -508,8 +482,7 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 		return err
 	}
 
-	// Process the received states
-	c.healthMonitor.combineRemoteNodeState(node, peerStates)
+	// TODO Process the received states, combine with ours
 	return nil
 }
 
@@ -683,15 +656,6 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
-// Registers a handler to accept a message and open a stream between sender and destination, always uses the reliable transport
-func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) error {
-	if msgType < ReservedMsgsStart {
-		return fmt.Errorf("invalid message type")
-	}
-	c.handlers.registerStreamHandler(msgType, handler)
-	return nil
-}
-
 func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
 	if msgType < ReservedMsgsStart {
 		return false
@@ -808,24 +772,6 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 
 func (c *Cluster) Logger() Logger {
 	return c.config.Logger
-}
-
-// Checks the connections is of Stream type and enables compression if supported
-// This is a no-op if the connection is not a Stream
-func (c *Cluster) EnableStreamCompression(s net.Conn) *Cluster {
-	if stream, ok := s.(*Stream); ok {
-		stream.EnableCompression()
-	}
-	return c
-}
-
-// Checks the connections is of Stream type and disables compression if supported
-// This is a no-op if the connection is not a Stream
-func (c *Cluster) DisableStreamCompression(s net.Conn) *Cluster {
-	if stream, ok := s.(*Stream); ok {
-		stream.DisableCompression()
-	}
-	return c
 }
 
 func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {

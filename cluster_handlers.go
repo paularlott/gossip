@@ -6,89 +6,9 @@ import (
 )
 
 func (c *Cluster) registerSystemHandlers() {
-	c.handlers.registerHandler(pingMsg, false, c.handlePing)
-	c.handlers.registerHandler(pingAckMsg, false, c.handlePingAck)
-	c.handlers.registerHandler(indirectPingMsg, false, c.handleIndirectPing)
-	c.handlers.registerHandler(indirectPingAckMsg, false, c.handleIndirectPingAck)
-
 	c.handlers.registerHandlerWithReply(nodeJoinMsg, c.handleJoin)
 	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
 	c.handlers.registerHandler(metadataUpdateMsg, true, c.handleMetadataUpdate)
-
-	c.handlers.registerHandler(aliveMsg, true, c.healthMonitor.handleAlive)
-	c.handlers.registerHandler(suspicionMsg, true, c.healthMonitor.handleSuspicion)
-	c.handlers.registerHandler(leavingMsg, true, c.healthMonitor.handleLeaving)
-}
-
-func (c *Cluster) handlePing(sender *Node, packet *Packet) error {
-	ping := pingMessage{}
-	if err := packet.Unmarshal(&ping); err != nil {
-		return err
-	}
-
-	// If unknown sender, try to join if we have an advertise address, otherwise ignore
-	if sender == nil {
-		if ping.AdvertiseAddr != "" {
-			c.joinPeer(ping.AdvertiseAddr)
-		}
-		return nil // Silently ignore as this can happen during cluster boot
-	}
-
-	// Check if the ping is for us
-	if ping.TargetID != c.localNode.ID {
-		return nil
-	}
-
-	// Echo the ping back to the sender
-	return c.sendMessageTo(TransportBestEffort, sender, 1, pingAckMsg, &ping)
-}
-
-func (c *Cluster) handlePingAck(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
-	ping := pingMessage{}
-	if err := packet.Unmarshal(&ping); err != nil {
-		return err
-	}
-
-	c.healthMonitor.pingAckReceived(sender.ID, ping.Seq, true)
-	return nil
-}
-
-func (c *Cluster) handleIndirectPing(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
-	var err error
-
-	ping := indirectPingMessage{}
-	if err = packet.Unmarshal(&ping); err != nil {
-		return err
-	}
-
-	// Create a temporary node for the target
-	targetNode := newNode(ping.TargetID, ping.AdvertiseAddr)
-	ping.Ok, _ = c.healthMonitor.pingNode(targetNode)
-
-	// Respond to the sender with the ping acknowledgment
-	return c.sendMessageTo(TransportBestEffort, sender, 1, indirectPingAckMsg, &ping)
-}
-
-func (c *Cluster) handleIndirectPingAck(sender *Node, packet *Packet) error {
-	if sender == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
-	ping := indirectPingMessage{}
-	if err := packet.Unmarshal(&ping); err != nil {
-		return err
-	}
-
-	c.healthMonitor.pingAckReceived(sender.ID, ping.Seq, ping.Ok)
-	return nil
 }
 
 func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
@@ -145,8 +65,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 		return nil, err
 	}
 
-	// Merge the remote states with our local states
-	c.healthMonitor.combineRemoteNodeState(sender, peerStates)
+	// TODO Merge the remote states with our local states
 
 	// Get a random selection of nodes
 	nodes := c.nodes.getRandomNodesForGossip(
