@@ -14,10 +14,8 @@ import (
 )
 
 const (
-	timeBits    = 54
-	counterBits = 10
-	timeMask    = (uint64(1)<<timeBits - 1) << counterBits
-	counterMask = uint64(1)<<counterBits - 1
+	CounterBits = 10
+	counterMask = uint64(1)<<CounterBits - 1
 
 	// Epoch: 1st Jan 2025, 00:00:00 UTC (in microseconds)
 	epochUnixMicro = 1735689600000000
@@ -42,14 +40,14 @@ func (c *Clock) Now() Timestamp {
 		now := time.Now().UnixMicro()
 		relNow := uint64(now - epochUnixMicro)
 		last := atomic.LoadUint64(&c.last)
-		lastTime := last >> counterBits
+		lastTime := last >> CounterBits
 		lastCounter := last & counterMask
 
 		var ts uint64
 		if relNow > lastTime {
-			ts = (relNow << counterBits)
+			ts = (relNow << CounterBits)
 		} else {
-			ts = (lastTime << counterBits) | ((lastCounter + 1) & counterMask)
+			ts = (lastTime << CounterBits) | ((lastCounter + 1) & counterMask)
 		}
 
 		if atomic.CompareAndSwapUint64(&c.last, last, ts) {
@@ -77,7 +75,7 @@ func (ts Timestamp) Equal(other Timestamp) bool {
 // Time extracts the time component as time.Time.
 func (ts Timestamp) Time() time.Time {
 	// Extract the time portion by shifting right to remove counter bits
-	relMicro := uint64(ts) >> counterBits
+	relMicro := uint64(ts) >> CounterBits
 
 	// Convert back to absolute microseconds since Unix epoch
 	absoluteMicro := int64(relMicro) + epochUnixMicro

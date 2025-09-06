@@ -104,32 +104,6 @@ type exchangeNodeState struct {
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 }
 
-type pingMessage struct {
-	TargetID      NodeID `msgpack:"ti" json:"ti"`
-	Seq           uint32 `msgpack:"seq" json:"seq"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
-}
-
-type indirectPingMessage struct {
-	TargetID      NodeID `msgpack:"ti" json:"ti"`
-	Seq           uint32 `msgpack:"seq" json:"seq"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
-	Ok            bool   `msgpack:"ok" json:"ok"`
-}
-
-type aliveMessage struct {
-	NodeID        NodeID `msgpack:"ni" json:"ni"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr"`
-}
-
-type suspicionMessage struct {
-	NodeID NodeID `msgpack:"ni" json:"ni"`
-}
-
-type leavingMessage struct {
-	NodeID NodeID `msgpack:"ni" json:"ni"`
-}
-
 type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
