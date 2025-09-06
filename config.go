@@ -23,7 +23,7 @@ type Config struct {
 	Transport                Transport               // Transport layer to communicate over UDP or TCP
 	Logger                   Logger                  // Logger is the logger to use for logging messages
 	MsgCodec                 codec.Serializer        // The codec to use for encoding and decoding messages
-	Compressor               compression.Codec       // The codec to use for compressing and decompressing messages, if not given messages will not be compressed
+	Compressor               compression.Compressor  // The compressor to use for compressing and decompressing messages, if not given messages will not be compressed
 	CompressMinSize          int                     // The minimum size of a message before attempting to compress it
 	WebsocketProvider        websocket.Provider      // The provider to use for WebSocket connections
 	BearerToken              string                  // Bearer token to use for authentication, if not given no authentication will be used

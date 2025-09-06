@@ -17,6 +17,10 @@ func NewAESEncryptor() *AESEncryptor {
 	return &AESEncryptor{}
 }
 
+func (e *AESEncryptor) Name() string {
+	return "aes-gcm"
+}
+
 // Encrypt encrypts data using AES-GCM with a random nonce
 func (e *AESEncryptor) Encrypt(key []byte, data []byte) ([]byte, error) {
 	// Create cipher block
