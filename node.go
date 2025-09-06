@@ -1,9 +1,6 @@
 package gossip
 
 import (
-	"sync/atomic"
-	"time"
-
 	"github.com/paularlott/gossip/hlc"
 )
 
@@ -39,9 +36,10 @@ type Node struct {
 	ID                 NodeID
 	advertiseAddr      string  // Raw advertise address (may contain SRV records, URLs, etc.)
 	address            Address // Resolved address (IP/Port or WebSocket URL) - resolved locally when needed
-	stateChangeTime    hlc.Timestamp
 	state              NodeState
-	lastActivity       atomic.Int64 // Timestamp of last message received
+	stateChangeTime    hlc.Timestamp // When the node state last changed (HLC)
+	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)
+	lastMetadataTime   hlc.Timestamp // Timestamp of last metadata update we accepted (mirrors Metadata.GetTimestamp())
 	Metadata           MetadataReader
 	metadata           *Metadata
 	ProtocolVersion    uint16
@@ -51,28 +49,36 @@ type Node struct {
 func newNode(id NodeID, advertiseAddr string) *Node {
 	metadata := NewMetadata()
 
+	now := hlc.Now()
 	n := &Node{
-		ID:              id,
-		advertiseAddr:   advertiseAddr,
-		address:         Address{}, // Empty until resolved
-		stateChangeTime: hlc.Now(),
-		state:           NodeAlive,
-		Metadata:        metadata,
-		metadata:        metadata,
+		ID:               id,
+		advertiseAddr:    advertiseAddr,
+		address:          Address{}, // Empty until resolved
+		stateChangeTime:  now,
+		lastMessageTime:  now,
+		lastMetadataTime: 0, // Will be set when metadata is first updated / on join
+		state:            NodeAlive,
+		Metadata:         metadata,
+		metadata:         metadata,
 	}
-
-	n.lastActivity.Store(time.Now().UnixNano())
 
 	return n
 }
 
 func (n *Node) updateLastActivity() {
-	n.lastActivity.Store(time.Now().UnixNano())
+	n.lastMessageTime = hlc.Now()
 }
 
-func (n *Node) getLastActivity() time.Time {
-	nano := n.lastActivity.Load()
-	return time.Unix(0, nano)
+func (n *Node) getLastActivity() hlc.Timestamp {
+	return n.lastMessageTime
+}
+
+func (n *Node) getLastMetadataTimestamp() hlc.Timestamp {
+	return n.lastMetadataTime
+}
+
+func (n *Node) getStateChangeTimestamp() hlc.Timestamp {
+	return n.stateChangeTime
 }
 
 func (node *Node) GetState() NodeState {
