@@ -19,7 +19,6 @@ type nodeListShard struct {
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
-	cluster    *Cluster
 	shardCount int
 	shardMask  uint32
 	shards     []*nodeListShard
@@ -64,7 +63,6 @@ func stateSetToKey(states []NodeState) string {
 // NewNodeList creates a new node list
 func newNodeList(c *Cluster) *nodeList {
 	nl := &nodeList{
-		cluster:                c,
 		shardCount:             c.config.NodeShardCount,
 		shardMask:              uint32(c.config.NodeShardCount - 1),
 		stateCache:             make(map[string][]*Node),
@@ -140,10 +138,6 @@ func (nl *nodeList) remove(nodeID NodeID) {
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
-	if nodeID == nl.cluster.localNode.ID {
-		return false
-	}
-
 	shard := nl.getShard(nodeID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()
