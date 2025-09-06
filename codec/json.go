@@ -10,6 +10,10 @@ func NewJsonCodec() *JsonCodec {
 	return &JsonCodec{}
 }
 
+func (mp *JsonCodec) Name() string {
+	return "json"
+}
+
 func (mp *JsonCodec) Marshal(v interface{}) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {

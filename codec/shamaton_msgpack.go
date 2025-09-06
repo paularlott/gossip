@@ -10,6 +10,10 @@ func NewShamatonMsgpackCodec() *ShamatonMsgpackCodec {
 	return &ShamatonMsgpackCodec{}
 }
 
+func (mp *ShamatonMsgpackCodec) Name() string {
+	return "shamaton-msgpack"
+}
+
 func (mp *ShamatonMsgpackCodec) Marshal(v interface{}) ([]byte, error) {
 	return shamaton.Marshal(v)
 }

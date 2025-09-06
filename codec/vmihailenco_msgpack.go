@@ -10,6 +10,10 @@ func NewVmihailencoMsgpackCodec() *VmihailencoMsgpackCodec {
 	return &VmihailencoMsgpackCodec{}
 }
 
+func (mp *VmihailencoMsgpackCodec) Name() string {
+	return "vmihailenco-msgpack"
+}
+
 func (mp *VmihailencoMsgpackCodec) Marshal(v interface{}) ([]byte, error) {
 	return vmihailenco.Marshal(v)
 }
