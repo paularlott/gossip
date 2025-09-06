@@ -405,6 +405,311 @@ func BenchmarkMixedOperations(b *testing.B) {
 	}
 }
 
+// Additional comprehensive tests for maximum coverage
+
+func TestMessageHistoryShardMask(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 8
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	if mh.shardMask != 7 {
+		t.Errorf("Expected shardMask 7 for 8 shards, got %d", mh.shardMask)
+	}
+
+	config.MsgHistoryShardCount = 16
+	mh2 := newMessageHistory(config)
+	defer mh2.stop()
+
+	if mh2.shardMask != 15 {
+		t.Errorf("Expected shardMask 15 for 16 shards, got %d", mh2.shardMask)
+	}
+}
+
+func TestMessageHistoryShardDistributionConsistency(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 4
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	clock := hlc.NewClock()
+	messageID := MessageID(clock.Now())
+
+	// Same messageID should always return same shard
+	for i := 0; i < 100; i++ {
+		shard1 := mh.getShard(messageID)
+		shard2 := mh.getShard(messageID)
+		if shard1 != shard2 {
+			t.Fatal("Same messageID should always return same shard")
+		}
+	}
+}
+
+func TestMessageHistoryMultipleNodes(t *testing.T) {
+	config := DefaultConfig()
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	clock := hlc.NewClock()
+	messageID := MessageID(clock.Now())
+
+	// Record same messageID for multiple nodes
+	nodes := make([]NodeID, 10)
+	for i := 0; i < 10; i++ {
+		nodes[i] = NodeID(uuid.New())
+		mh.recordMessage(nodes[i], messageID)
+	}
+
+	// All should be contained
+	for i, nodeID := range nodes {
+		if !mh.contains(nodeID, messageID) {
+			t.Errorf("Node %d should contain messageID", i)
+		}
+	}
+
+	// Different messageID should not be contained
+	otherMessageID := MessageID(clock.Now())
+	for i, nodeID := range nodes {
+		if mh.contains(nodeID, otherMessageID) {
+			t.Errorf("Node %d should not contain different messageID", i)
+		}
+	}
+}
+
+func TestMessageHistoryPruningBehavior(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryGCInterval = 5 * time.Millisecond
+	config.MsgHistoryMaxAge = 20 * time.Millisecond
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	nodeID := NodeID(uuid.New())
+	clock := hlc.NewClock()
+
+	// Record multiple messages
+	messageIDs := make([]MessageID, 5)
+	for i := 0; i < 5; i++ {
+		messageIDs[i] = MessageID(clock.Now())
+		mh.recordMessage(nodeID, messageIDs[i])
+		time.Sleep(2 * time.Millisecond) // Spread timestamps
+	}
+
+	// All should exist initially
+	for i, msgID := range messageIDs {
+		if !mh.contains(nodeID, msgID) {
+			t.Errorf("Message %d should exist before pruning", i)
+		}
+	}
+
+	// Wait for pruning
+	time.Sleep(50 * time.Millisecond)
+
+	// All should be pruned
+	for i, msgID := range messageIDs {
+		if mh.contains(nodeID, msgID) {
+			t.Errorf("Message %d should be pruned", i)
+		}
+	}
+}
+
+func TestMessageHistoryContextCancellation(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryGCInterval = 1 * time.Millisecond
+	mh := newMessageHistory(config)
+
+	// Stop should cancel the pruning goroutine
+	mh.stop()
+
+	// Multiple stops should not panic
+	mh.stop()
+	mh.stop()
+}
+
+func TestMessageHistoryShardIsolation(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 4
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	clock := hlc.NewClock()
+	nodeID := NodeID(uuid.New())
+
+	// Record messages that should go to different shards
+	messageIDs := make([]MessageID, 100)
+	shardMap := make(map[*historyShard][]MessageID)
+
+	for i := 0; i < 100; i++ {
+		messageIDs[i] = MessageID(clock.Now())
+		shard := mh.getShard(messageIDs[i])
+		shardMap[shard] = append(shardMap[shard], messageIDs[i])
+		mh.recordMessage(nodeID, messageIDs[i])
+	}
+
+	// Verify messages are in correct shards
+	for shard, msgIDs := range shardMap {
+		shard.mutex.RLock()
+		for _, msgID := range msgIDs {
+			key := messageKey{nodeID: nodeID, messageID: msgID}
+			if _, exists := shard.entries[key]; !exists {
+				t.Errorf("Message %v should be in shard %p", msgID, shard)
+			}
+		}
+		shard.mutex.RUnlock()
+	}
+}
+
+func TestMessageHistoryEmptyNodeID(t *testing.T) {
+	config := DefaultConfig()
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	emptyNodeID := NodeID(uuid.Nil)
+	clock := hlc.NewClock()
+	messageID := MessageID(clock.Now())
+
+	// Should handle empty node ID
+	mh.recordMessage(emptyNodeID, messageID)
+	if !mh.contains(emptyNodeID, messageID) {
+		t.Fatal("Should handle empty node ID")
+	}
+}
+
+func TestMessageHistoryZeroMessageID(t *testing.T) {
+	config := DefaultConfig()
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	nodeID := NodeID(uuid.New())
+	zeroMessageID := MessageID(0)
+
+	// Should handle zero message ID
+	mh.recordMessage(nodeID, zeroMessageID)
+	if !mh.contains(nodeID, zeroMessageID) {
+		t.Fatal("Should handle zero message ID")
+	}
+}
+
+func TestMessageHistoryHighVolumeShardDistribution(t *testing.T) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 8
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	clock := hlc.NewClock()
+	nodeID := NodeID(uuid.New())
+	shardCounts := make(map[*historyShard]int)
+
+	// Generate many messages to test distribution
+	for i := 0; i < 10000; i++ {
+		messageID := MessageID(clock.Now())
+		shard := mh.getShard(messageID)
+		shardCounts[shard]++
+		mh.recordMessage(nodeID, messageID)
+	}
+
+	// All shards should be used
+	if len(shardCounts) != 8 {
+		t.Errorf("Expected all 8 shards to be used, got %d", len(shardCounts))
+	}
+
+	// Check reasonable distribution (no shard should be empty)
+	for shard, count := range shardCounts {
+		if count == 0 {
+			t.Errorf("Shard %p should have messages", shard)
+		}
+		if count < 100 { // Very loose check for reasonable distribution
+			t.Errorf("Shard %p has suspiciously few messages: %d", shard, count)
+		}
+	}
+}
+
+// Additional benchmarks for comprehensive performance testing
+
+func BenchmarkMessageHistoryShardSelection(b *testing.B) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 64
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	clock := hlc.NewClock()
+	messageIDs := make([]MessageID, 1000)
+	for i := 0; i < 1000; i++ {
+		messageIDs[i] = MessageID(clock.Now())
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mh.getShard(messageIDs[i%len(messageIDs)])
+	}
+}
+
+func BenchmarkMessageHistoryContainsMiss(b *testing.B) {
+	config := DefaultConfig()
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	nodeID := NodeID(uuid.New())
+	clock := hlc.NewClock()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		messageID := MessageID(clock.Now())
+		mh.contains(nodeID, messageID) // Always miss
+	}
+}
+
+func BenchmarkMessageHistoryContainsHit(b *testing.B) {
+	config := DefaultConfig()
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	nodeID := NodeID(uuid.New())
+	clock := hlc.NewClock()
+	messageID := MessageID(clock.Now())
+	mh.recordMessage(nodeID, messageID)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mh.contains(nodeID, messageID) // Always hit
+	}
+}
+
+func BenchmarkMessageHistoryHighContentionSingleShard(b *testing.B) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 1 // Force contention
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		nodeID := NodeID(uuid.New())
+		clock := hlc.NewClock()
+		for pb.Next() {
+			messageID := MessageID(clock.Now())
+			mh.recordMessage(nodeID, messageID)
+			mh.contains(nodeID, messageID)
+		}
+	})
+}
+
+func BenchmarkMessageHistoryLowContentionManyShards(b *testing.B) {
+	config := DefaultConfig()
+	config.MsgHistoryShardCount = 128 // Reduce contention
+	mh := newMessageHistory(config)
+	defer mh.stop()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		nodeID := NodeID(uuid.New())
+		clock := hlc.NewClock()
+		for pb.Next() {
+			messageID := MessageID(clock.Now())
+			mh.recordMessage(nodeID, messageID)
+			mh.contains(nodeID, messageID)
+		}
+	})
+}
+
 // Test memory allocation patterns
 func BenchmarkRecordMessageAllocs(b *testing.B) {
 	config := DefaultConfig()

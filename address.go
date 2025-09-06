@@ -34,6 +34,7 @@ func (a *Address) IsEmpty() bool {
 }
 
 func (a *Address) Clear() {
+	// TODO we shouldn't clear just flag that it needs to be resolved again
 	a.IP = nil
 	a.Port = 0
 	a.URL = ""

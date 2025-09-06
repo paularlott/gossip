@@ -68,8 +68,9 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	// TODO Merge the remote states with our local states
 
 	// Get a random selection of nodes
-	nodes := c.nodes.getRandomNodesForGossip(
+	nodes := c.nodes.getRandomNodesInStates(
 		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect},
 		[]NodeID{},
 	)
 
@@ -106,7 +107,7 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	}
 
 	if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
-		c.notifyMetadataChanged(node)
+		c.nodes.notifyMetadataChanged(node)
 	} else {
 		// If the timestamp is not newer but the data differs, accept the update when it
 		// comes directly from the node itself (authoritative source). This heals cases
@@ -115,7 +116,7 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		if !reflect.DeepEqual(current, metadataUpdate.Metadata) {
 			// Force-apply the update
 			if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, true) {
-				c.notifyMetadataChanged(node)
+				c.nodes.notifyMetadataChanged(node)
 			}
 		}
 	}

@@ -23,22 +23,20 @@ const (
 )
 
 type Cluster struct {
-	config                      *Config
-	shutdownContext             context.Context
-	cancelFunc                  context.CancelFunc
-	shutdownWg                  sync.WaitGroup
-	msgHistory                  *messageHistory
-	transport                   Transport
-	nodes                       *nodeList
-	localNode                   *Node
-	handlers                    *handlerRegistry
-	broadcastQueue              chan *broadcastQItem
-	stateEventHandlers          *EventHandlers[NodeStateChangeHandler]
-	metadataChangeEventHandlers *EventHandlers[NodeMetadataChangeHandler]
-	gossipEventHandlers         *EventHandlers[GossipHandler]
-	gossipTicker                *time.Ticker
-	gossipInterval              time.Duration
-	broadcastQItemPool          sync.Pool
+	config              *Config
+	shutdownContext     context.Context
+	cancelFunc          context.CancelFunc
+	shutdownWg          sync.WaitGroup
+	msgHistory          *messageHistory
+	transport           Transport
+	nodes               *nodeList
+	localNode           *Node
+	handlers            *handlerRegistry
+	broadcastQueue      chan *broadcastQItem
+	gossipEventHandlers *EventHandlers[GossipHandler]
+	gossipTicker        *time.Ticker
+	gossipInterval      time.Duration
+	broadcastQItemPool  sync.Pool
 }
 
 type broadcastQItem struct {
@@ -97,17 +95,15 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
-		config:                      config,
-		shutdownContext:             ctx,
-		cancelFunc:                  cancel,
-		msgHistory:                  newMessageHistory(config),
-		localNode:                   newNode(NodeID(u), config.AdvertiseAddr),
-		handlers:                    newHandlerRegistry(),
-		broadcastQueue:              make(chan *broadcastQItem, config.SendQueueSize),
-		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
-		metadataChangeEventHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
-		gossipEventHandlers:         NewEventHandlers[GossipHandler](),
-		broadcastQItemPool:          sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
+		config:              config,
+		shutdownContext:     ctx,
+		cancelFunc:          cancel,
+		msgHistory:          newMessageHistory(config),
+		localNode:           newNode(NodeID(u), config.AdvertiseAddr),
+		handlers:            newHandlerRegistry(),
+		broadcastQueue:      make(chan *broadcastQItem, config.SendQueueSize),
+		gossipEventHandlers: NewEventHandlers[GossipHandler](),
+		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -124,7 +120,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		}
 		if packet, err := cluster.createPacket(cluster.localNode.ID, metadataUpdateMsg, cluster.getMaxTTL(), updateMsg); err == nil {
 			cluster.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{cluster.localNode.ID}, nil)
-			cluster.notifyMetadataChanged(cluster.localNode)
+			// TODO notify? cluster.notifyMetadataChanged(cluster.localNode)
 		} else {
 			cluster.config.Logger.Err(err).Tracef("gossip: failed to create metadata update packet")
 		}
@@ -449,8 +445,9 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodesForGossip(
+	randomNodes := c.nodes.getRandomNodesInStates(
 		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect},
 		exclude,
 	)
 
@@ -664,31 +661,19 @@ func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
 }
 
 func (c *Cluster) HandleNodeStateChangeFunc(handler NodeStateChangeHandler) HandlerID {
-	return c.stateEventHandlers.Add(handler)
+	return c.nodes.OnNodeStateChange(handler)
 }
 
 func (c *Cluster) RemoveNodeStateChangeHandler(id HandlerID) bool {
-	return c.stateEventHandlers.Remove(id)
+	return c.nodes.RemoveStateChangeHandler(id)
 }
 
 func (c *Cluster) HandleNodeMetadataChangeFunc(handler NodeMetadataChangeHandler) HandlerID {
-	return c.metadataChangeEventHandlers.Add(handler)
+	return c.nodes.OnNodeMetadataChange(handler)
 }
 
 func (c *Cluster) RemoveNodeMetadataChangeHandler(id HandlerID) bool {
-	return c.metadataChangeEventHandlers.Remove(id)
-}
-
-func (c *Cluster) notifyNodeStateChanged(node *Node, prevState NodeState) {
-	c.stateEventHandlers.ForEach(func(handler NodeStateChangeHandler) {
-		go handler(node, prevState)
-	})
-}
-
-func (c *Cluster) notifyMetadataChanged(node *Node) {
-	c.metadataChangeEventHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
-		go handler(node)
-	})
+	return c.nodes.RemoveMetadataChangeHandler(id)
 }
 
 func (c *Cluster) NodeIsLocal(node *Node) bool {

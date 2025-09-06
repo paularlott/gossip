@@ -81,29 +81,15 @@ func (l *EventHandlers[T]) Remove(id HandlerID) bool {
 	return true
 }
 
-// GetHandlers returns all registered handlers (lock-free read)
-func (l *EventHandlers[T]) GetHandlers() []T {
-	// Completely lock-free read operation
-	currentSlice := l.handlers.Load()
-	if currentSlice == nil {
-		return []T{}
-	}
-
-	// Return a copy to prevent external modification
-	result := make([]T, len(*currentSlice))
-	copy(result, *currentSlice)
-	return result
-}
-
 // ForEach executes a function for each handler (optimized for iteration)
 func (l *EventHandlers[T]) ForEach(fn func(T)) {
 	// Lock-free iteration
 	currentSlice := l.handlers.Load()
-	if currentSlice == nil {
+	if currentSlice == nil || len(*currentSlice) == 0 {
 		return
 	}
 
-	for _, handler := range *currentSlice {
-		fn(handler)
+	for i := range *currentSlice {
+		fn((*currentSlice)[i])
 	}
 }

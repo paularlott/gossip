@@ -33,6 +33,10 @@ type nodeList struct {
 	// Cache for state-based node lists
 	cacheMutex sync.RWMutex
 	stateCache map[string][]*Node // key: sorted states string
+
+	// Event handlers
+	stateChangeHandlers    *EventHandlers[NodeStateChangeHandler]
+	metadataChangeHandlers *EventHandlers[NodeMetadataChangeHandler]
 }
 
 // Add cache key generation
@@ -60,10 +64,12 @@ func stateSetToKey(states []NodeState) string {
 // NewNodeList creates a new node list
 func newNodeList(c *Cluster) *nodeList {
 	nl := &nodeList{
-		cluster:    c,
-		shardCount: c.config.NodeShardCount,
-		shardMask:  uint32(c.config.NodeShardCount - 1),
-		stateCache: make(map[string][]*Node),
+		cluster:                c,
+		shardCount:             c.config.NodeShardCount,
+		shardMask:              uint32(c.config.NodeShardCount - 1),
+		stateCache:             make(map[string][]*Node),
+		stateChangeHandlers:    NewEventHandlers[NodeStateChangeHandler](),
+		metadataChangeHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
 	}
 
 	// Initialize shards
@@ -108,7 +114,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 		shard.nodes[node.ID] = node
 		if oldState != node.state {
 			nl.updateCountersForStateChange(oldState, node.state)
-			nl.cluster.notifyNodeStateChanged(node, oldState)
+			nl.notifyNodeStateChanged(node, oldState)
 		}
 		return true
 	}
@@ -116,7 +122,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 	// New node
 	shard.nodes[node.ID] = node
 	nl.updateCountersForStateChange(NodeUnknown, node.state)
-	nl.cluster.notifyNodeStateChanged(node, NodeUnknown)
+	nl.notifyNodeStateChanged(node, NodeUnknown)
 	return true
 }
 
@@ -166,16 +172,6 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 
 // UpdateState updates the state of a node using a local timestamp
 func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
-	// Never allow the local node to be marked as Suspect or Dead
-	if nodeID == nl.cluster.localNode.ID {
-		if newState != NodeAlive && newState != NodeLeaving {
-			nl.cluster.config.Logger.
-				Field("rejected_state", newState.String()).
-				Debugf("Attempted to set invalid state for local node, ignoring")
-			return false
-		}
-	}
-
 	shard := nl.getShard(nodeID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()
@@ -188,7 +184,7 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 		node.state = newState
 		node.stateChangeTime = hlc.Now()
 		nl.updateCountersForStateChange(oldState, newState)
-		nl.cluster.notifyNodeStateChanged(node, oldState)
+		nl.notifyNodeStateChanged(node, oldState)
 		if newState != NodeAlive { // Clear cached resolved address to force re-resolution later
 			node.address.Clear()
 		}
@@ -377,119 +373,31 @@ func (nl *nodeList) getAll() []*Node {
 	return nl.getCachedNodesInStates([]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
-// RecalculateCounters rebuilds all counters
-func (nl *nodeList) recalculateCounters() {
-	var alive, suspect, leaving, dead int64
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-		for _, n := range shard.nodes {
-			switch n.state {
-			case NodeAlive:
-				alive++
-			case NodeSuspect:
-				suspect++
-			case NodeLeaving:
-				leaving++
-			case NodeDead:
-				dead++
-			}
-		}
-		shard.mutex.RUnlock()
-	}
-	nl.aliveCount.Store(alive)
-	nl.suspectCount.Store(suspect)
-	nl.leavingCount.Store(leaving)
-	nl.deadCount.Store(dead)
+// Add event handler registration methods
+func (nl *nodeList) OnNodeStateChange(handler NodeStateChangeHandler) HandlerID {
+	return nl.stateChangeHandlers.Add(handler)
 }
 
-// getRandomNodesForGossip returns nodes prioritizing recent state changes
-func (nl *nodeList) getRandomNodesForGossip(k int, excludeIDs []NodeID) []*Node {
-	// Get recent state changes first (alive, suspect, leaving, recent dead)
-	recentNodes := nl.getRandomNodesInStates(k*3/4, []NodeState{NodeAlive, NodeSuspect, NodeLeaving}, excludeIDs)
-
-	// Fill remaining slots with dead nodes (for consistency)
-	if len(recentNodes) < k {
-		deadNodes := nl.getRandomNodesInStates(k-len(recentNodes), []NodeState{NodeDead}, excludeIDs)
-		recentNodes = append(recentNodes, deadNodes...)
-	}
-
-	return recentNodes
+func (nl *nodeList) OnNodeMetadataChange(handler NodeMetadataChangeHandler) HandlerID {
+	return nl.metadataChangeHandlers.Add(handler)
 }
 
-// Query: nodes whose state last changed before the provided timestamp (useful for purging long-dead nodes)
-func (nl *nodeList) getNodesWithStateChangeBefore(ts hlc.Timestamp, states []NodeState) []*Node {
-	res := make([]*Node, 0)
-	nl.forAllInStates(states, func(n *Node) bool {
-		if n.stateChangeTime.Before(ts) {
-			res = append(res, n)
-		}
-		return true
+func (nl *nodeList) RemoveStateChangeHandler(id HandlerID) bool {
+	return nl.stateChangeHandlers.Remove(id)
+}
+
+func (nl *nodeList) RemoveMetadataChangeHandler(id HandlerID) bool {
+	return nl.metadataChangeHandlers.Remove(id)
+}
+
+func (nl *nodeList) notifyNodeStateChanged(node *Node, prevState NodeState) {
+	nl.stateChangeHandlers.ForEach(func(handler NodeStateChangeHandler) {
+		go handler(node, prevState)
 	})
-	return res
 }
 
-// Query: nodes whose last activity (any message) was before timestamp; states filter optional (nil => any state)
-func (nl *nodeList) getNodesWithLastActivityBefore(ts hlc.Timestamp, states []NodeState) []*Node {
-	res := make([]*Node, 0)
-	var stateSet map[NodeState]struct{}
-	if len(states) > 0 {
-		stateSet = make(map[NodeState]struct{}, len(states))
-		for _, s := range states {
-			stateSet[s] = struct{}{}
-		}
-	}
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-		for _, n := range shard.nodes {
-			if stateSet != nil {
-				if _, ok := stateSet[n.state]; !ok {
-					continue
-				}
-			}
-			if n.lastMessageTime.Before(ts) {
-				res = append(res, n)
-			}
-		}
-		shard.mutex.RUnlock()
-	}
-	return res
-}
-
-// Query: nodes whose metadata timestamp is older than the given timestamp (used to trigger manual sync)
-func (nl *nodeList) getNodesWithOldMetadata(ts hlc.Timestamp) []*Node {
-	res := make([]*Node, 0)
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-		for _, n := range shard.nodes {
-			if n.lastMetadataTime.Before(ts) {
-				res = append(res, n)
-			}
-		}
-		shard.mutex.RUnlock()
-	}
-	return res
-}
-
-// Update a node's metadata timestamp if newer (returns true if accepted)
-func (nl *nodeList) updateMetadataTimestamp(nodeID NodeID, ts hlc.Timestamp) bool {
-	shard := nl.getShard(nodeID)
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
-	if n, ok := shard.nodes[nodeID]; ok {
-		if ts.After(n.lastMetadataTime) {
-			n.lastMetadataTime = ts
-			return true
-		}
-	}
-	return false
-}
-
-// Convenience: sorted list of alive nodes by last activity oldest first (useful for probing)
-func (nl *nodeList) getLeastRecentlyActiveAlive(limit int) []*Node {
-	all := nl.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
-	sort.Slice(all, func(i, j int) bool { return all[i].lastMessageTime < all[j].lastMessageTime })
-	if limit > 0 && len(all) > limit {
-		return all[:limit]
-	}
-	return all
+func (nl *nodeList) notifyMetadataChanged(node *Node) {
+	nl.metadataChangeHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
+		go handler(node)
+	})
 }
