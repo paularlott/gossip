@@ -51,13 +51,14 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 }
 
 type handlerRegistry struct {
-	handlers atomic.Value
+	handlers atomic.Pointer[map[MessageType]msgHandler]
 	mu       sync.Mutex
 }
 
 func newHandlerRegistry() *handlerRegistry {
 	registry := &handlerRegistry{}
-	registry.handlers.Store(make(map[MessageType]msgHandler))
+	initialMap := make(map[MessageType]msgHandler)
+	registry.handlers.Store(&initialMap)
 	return registry
 }
 
@@ -65,39 +66,48 @@ func (hr *handlerRegistry) register(t MessageType, h msgHandler) {
 	hr.mu.Lock()
 	defer hr.mu.Unlock()
 
-	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
-
-	newHandlers := make(map[MessageType]msgHandler, len(currentHandlers))
-	for k, v := range currentHandlers {
-		newHandlers[k] = v
+	currentHandlers := hr.handlers.Load()
+	if currentHandlers == nil {
+		currentHandlers = &map[MessageType]msgHandler{}
 	}
 
-	if _, ok := newHandlers[t]; ok {
+	// Check for existing handler
+	if _, ok := (*currentHandlers)[t]; ok {
 		panic(fmt.Sprintf("Handler already registered for message type: %d", t))
 	}
 
+	// Create new map with extra capacity for future additions
+	newHandlers := make(map[MessageType]msgHandler, len(*currentHandlers)+4)
+	for k, v := range *currentHandlers {
+		newHandlers[k] = v
+	}
 	newHandlers[t] = h
-	hr.handlers.Store(newHandlers)
+
+	hr.handlers.Store(&newHandlers)
 }
 
 func (hr *handlerRegistry) unregister(msgType MessageType) bool {
 	hr.mu.Lock()
 	defer hr.mu.Unlock()
 
-	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
+	currentHandlers := hr.handlers.Load()
+	if currentHandlers == nil {
+		return false
+	}
 
-	if _, ok := currentHandlers[msgType]; !ok {
+	if _, ok := (*currentHandlers)[msgType]; !ok {
 		return false // No handler registered for this message type
 	}
 
-	newHandlers := make(map[MessageType]msgHandler, len(currentHandlers)-1)
-	for k, v := range currentHandlers {
+	// Create new map without the removed handler
+	newHandlers := make(map[MessageType]msgHandler, len(*currentHandlers)-1)
+	for k, v := range *currentHandlers {
 		if k != msgType {
 			newHandlers[k] = v
 		}
 	}
 
-	hr.handlers.Store(newHandlers)
+	hr.handlers.Store(&newHandlers)
 	return true
 }
 
@@ -116,8 +126,12 @@ func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler
 }
 
 func (hr *handlerRegistry) getHandler(msgType MessageType) *msgHandler {
-	currentHandlers := hr.handlers.Load().(map[MessageType]msgHandler)
-	if handler, ok := currentHandlers[msgType]; ok {
+	currentHandlers := hr.handlers.Load()
+	if currentHandlers == nil {
+		return nil
+	}
+
+	if handler, ok := (*currentHandlers)[msgType]; ok {
 		return &handler
 	}
 	return nil
