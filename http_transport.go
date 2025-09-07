@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +35,10 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 			Timeout: transportMaxWaitTime,
 		},
 	}
+}
+
+func (ht *HTTPTransport) Start(ctx context.Context, wg *sync.WaitGroup) error {
+	return nil
 }
 
 func (ht *HTTPTransport) PacketChannel() chan *Packet {

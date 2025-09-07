@@ -85,10 +85,6 @@ func (node *Node) GetState() NodeState {
 	return node.state
 }
 
-func (node *Node) GetAdvertisedAddress() string {
-	return node.advertiseAddr
-}
-
 func (node *Node) DeadOrLeft() bool {
 	return node.state == NodeDead || node.state == NodeLeaving
 }
@@ -109,9 +105,4 @@ func (node *Node) Address() *Address {
 // AdvertiseAddr returns the node's advertise address string
 func (node *Node) AdvertiseAddr() string {
 	return node.advertiseAddr
-}
-
-// SetAdvertiseAddr sets the node's advertise address
-func (node *Node) SetAdvertiseAddr(addr string) {
-	node.advertiseAddr = addr
 }

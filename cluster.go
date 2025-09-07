@@ -101,6 +101,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		broadcastQueue:      make(chan *broadcastQItem, config.SendQueueSize),
 		gossipEventHandlers: NewEventHandlers[GossipHandler](),
 		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
+		transport:           config.Transport,
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -115,22 +116,18 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
-	// Create transport
-	if config.Transport != nil {
-		cluster.transport = config.Transport
-	} else {
-		cluster.transport, err = NewSocketTransport(ctx, &cluster.shutdownWg, config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create transport: %v", err)
-		}
-	}
-
 	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
 
 	return cluster, nil
 }
 
 func (c *Cluster) Start() {
+	// Start the transport
+	if err := c.transport.Start(c.shutdownContext, &c.shutdownWg); err != nil {
+		c.config.Logger.Err(err).Errorf("Failed to start transport")
+		panic("Failed to start cluster")
+	}
+
 	// Start the send workers
 	for range c.config.NumSendWorkers {
 		c.shutdownWg.Add(1)
@@ -238,7 +235,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 
 	// Update the node with the peer's information
 	node.ID = joinReply.ID
-	node.SetAdvertiseAddr(joinReply.AdvertiseAddr)
+	node.advertiseAddr = joinReply.AdvertiseAddr
 	node.ProtocolVersion = joinReply.ProtocolVersion
 	node.ApplicationVersion = joinReply.ApplicationVersion
 	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)

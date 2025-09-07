@@ -64,6 +64,8 @@ func main() {
 	if *webPort > 0 {
 		httpTransport = gossip.NewHTTPTransport(config)
 		config.Transport = httpTransport
+	} else {
+		config.Transport = gossip.NewSocketTransport(config)
 	}
 
 	config.ApplicationVersion = "0.0.1"

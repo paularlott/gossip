@@ -23,7 +23,7 @@ type SocketTransport struct {
 	resolver      Resolver
 }
 
-func NewSocketTransport(ctx context.Context, wg *sync.WaitGroup, config *Config) (*SocketTransport, error) {
+func NewSocketTransport(config *Config) *SocketTransport {
 	st := &SocketTransport{
 		config:        config,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
@@ -34,12 +34,16 @@ func NewSocketTransport(ctx context.Context, wg *sync.WaitGroup, config *Config)
 		st.resolver = NewDefaultResolver()
 	}
 
-	bindAddress, err := st.parseBindAddress(config.BindAddr)
+	return st
+}
+
+func (st *SocketTransport) Start(ctx context.Context, wg *sync.WaitGroup) error {
+	bindAddress, err := st.parseBindAddress(st.config.BindAddr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	config.Logger.
+	st.config.Logger.
 		Field("bind_addr", bindAddress.IP.String()).
 		Field("bind_port", bindAddress.Port).
 		Infof("transport: Bind to address")
@@ -50,24 +54,24 @@ func NewSocketTransport(ctx context.Context, wg *sync.WaitGroup, config *Config)
 	}
 	st.tcpListener, err = net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create TCP listener: %w", err)
+		return fmt.Errorf("failed to create TCP listener: %w", err)
 	}
 
-	if !config.ForceReliableTransport {
+	if !st.config.ForceReliableTransport {
 		udpAddr := &net.UDPAddr{
 			IP:   bindAddress.IP,
 			Port: int(bindAddress.Port),
 		}
 		st.udpListener, err = net.ListenUDP("udp", udpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create UDP listener: %w", err)
+			return fmt.Errorf("failed to create UDP listener: %w", err)
 		}
 	}
 
 	wg.Add(1)
 	go st.tcpListen(ctx, wg)
 
-	if !config.ForceReliableTransport {
+	if !st.config.ForceReliableTransport {
 		wg.Add(1)
 		go st.udpListen(ctx, wg)
 	}
@@ -78,7 +82,7 @@ func NewSocketTransport(ctx context.Context, wg *sync.WaitGroup, config *Config)
 		st.shutdown(wg)
 	}()
 
-	return st, nil
+	return nil
 }
 
 func (st *SocketTransport) parseBindAddress(bindAddr string) (*net.TCPAddr, error) {

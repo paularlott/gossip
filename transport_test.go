@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 type mockCodec struct{}
@@ -31,9 +33,14 @@ func TestNewTransportInterface(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	transport, err := NewSocketTransport(ctx, &wg, config)
+	transport := NewSocketTransport(config)
+	if transport == nil {
+		t.Fatal("Failed to create transport")
+	}
+
+	err := transport.Start(ctx, &wg)
 	if err != nil {
-		t.Fatalf("Failed to create transport: %v", err)
+		t.Fatalf("Failed to start transport: %v", err)
 	}
 
 	if transport == nil {
@@ -51,7 +58,7 @@ func TestNewTransportInterface(t *testing.T) {
 	packet.SetPayload([]byte("test"))
 	defer packet.Release()
 
-	node := &Node{ID: NodeID{}}
+	node := &Node{ID: NodeID(uuid.New()), advertiseAddr: "", address: Address{}}
 
 	// Test Send method
 	err = transport.Send(TransportBestEffort, node, packet)

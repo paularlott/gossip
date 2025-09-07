@@ -1,7 +1,9 @@
 package gossip
 
 import (
+	"context"
 	"fmt"
+	"sync"
 )
 
 type TransportType int
@@ -19,6 +21,9 @@ var (
 type Transport interface {
 	// Get the transport's name
 	Name() string
+
+	// Start the transport server
+	Start(ctx context.Context, wg *sync.WaitGroup) error
 
 	// PacketChannel returns the channel for incoming packets
 	PacketChannel() chan *Packet
