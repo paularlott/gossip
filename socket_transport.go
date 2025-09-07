@@ -123,8 +123,7 @@ func (st *SocketTransport) Send(transportType TransportType, node *Node, packet 
 		return err
 	}
 
-	if st.config.ForceReliableTransport || st.config.WebsocketProvider != nil ||
-		(transportType == TransportBestEffort && len(rawPacket) >= st.config.UDPMaxPacketSize) {
+	if st.config.ForceReliableTransport || (transportType == TransportBestEffort && len(rawPacket) >= st.config.UDPMaxPacketSize) {
 		transportType = TransportReliable
 	}
 

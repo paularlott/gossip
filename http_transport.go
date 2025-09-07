@@ -238,6 +238,13 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		// Update the URL with the service-selected port and hostname for SNI
 		host := net.JoinHostPort(u.Hostname(), strconv.Itoa(int(srv[0].Port)))
 		u.Host = host
+
+		if ht.config.BindAddr == "" {
+			u.Path = "/"
+		} else {
+			u.Path = ht.config.BindAddr
+		}
+
 		uri = u.String()
 	}
 

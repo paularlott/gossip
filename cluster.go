@@ -63,6 +63,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("missing MsgCodec")
 	}
 
+	// Check we have a transport
+	if config.Transport == nil {
+		return nil, fmt.Errorf("missing Transport")
+	}
+
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	if len(config.EncryptionKey) != 0 && len(config.EncryptionKey) != 16 && len(config.EncryptionKey) != 24 && len(config.EncryptionKey) != 32 {
 		return nil, fmt.Errorf("invalid encrypt key length: must be 0, 16, 24, or 32 bytes")
@@ -121,11 +126,6 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
-
-	// If using websockets then see if we should disable compression
-	if cluster.config.WebsocketProvider != nil && cluster.config.WebsocketProvider.CompressionEnabled() {
-		cluster.config.Compressor = nil
-	}
 
 	return cluster, nil
 }

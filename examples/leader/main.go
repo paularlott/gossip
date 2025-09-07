@@ -17,7 +17,6 @@ import (
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/examples/common"
 	"github.com/paularlott/gossip/leader"
-	"github.com/paularlott/gossip/websocket"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -46,16 +45,19 @@ func main() {
 
 	// Create the advertise address
 	advertiseAddr := ""
+	bindAddr := ""
 	if *port > 0 {
 		advertiseAddr = fmt.Sprintf("127.0.0.1:%d", *port)
+		bindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	} else if *webPort > 0 {
-		advertiseAddr = fmt.Sprintf("ws://127.0.0.1:%d", *webPort)
+		advertiseAddr = fmt.Sprintf("http://127.0.0.1:%d", *webPort)
+		bindAddr = "/"
 	}
 
 	// Build configuration
 	config := gossip.DefaultConfig()
 	config.NodeID = *nodeID
-	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
+	config.BindAddr = bindAddr
 	config.AdvertiseAddr = advertiseAddr
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
@@ -67,7 +69,6 @@ func main() {
 	if *webPort > 0 {
 		httpTransport = gossip.NewHTTPTransport(config)
 		config.Transport = httpTransport
-		config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
 	}
 
 	cluster, err := gossip.NewCluster(config)

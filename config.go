@@ -6,17 +6,12 @@ import (
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
-	"github.com/paularlott/gossip/websocket"
 )
 
 type Config struct {
-	NodeID   string // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
-	BindAddr string // BindAddr is the address and port to bind to
-	// AdvertiseAddr is the address and port to advertise to other nodes, if this is given as a domain name
-	// it will be resolved to an IP address and used as the advertised address
-	// If this is prefixed with srv+ then a SRV record will be used to resolve the address to an IP and port
-	// If not given the BindAddr will be used.
-	AdvertiseAddr            string
+	NodeID                   string                  // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
+	BindAddr                 string                  // BindAddr is the address and port to bind to or the path for http transports
+	AdvertiseAddr            string                  // Advertised address and port or URL for the node
 	ApplicationVersion       string                  // ApplicationVersion is the version of the application, used for compatibility checks
 	DefaultPort              int                     // TODO REMOVE DefaultPort is the default port to use for the node
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
@@ -25,7 +20,6 @@ type Config struct {
 	MsgCodec                 codec.Serializer        // The codec to use for encoding and decoding messages
 	Compressor               compression.Compressor  // The compressor to use for compressing and decompressing messages, if not given messages will not be compressed
 	CompressMinSize          int                     // The minimum size of a message before attempting to compress it
-	WebsocketProvider        websocket.Provider      // The provider to use for WebSocket connections
 	BearerToken              string                  // Bearer token to use for authentication, if not given no authentication will be used
 	Cipher                   encryption.Cipher       // The cipher to use for encrypting and decrypting messages
 	ApplicationVersionCheck  ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
