@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/paularlott/gossip/hlc"
 )
 
 var (
@@ -34,6 +35,7 @@ type Cluster struct {
 	gossipTicker        *time.Ticker
 	gossipInterval      time.Duration
 	broadcastQItemPool  sync.Pool
+	peerList            []string
 }
 
 type broadcastQItem struct {
@@ -102,6 +104,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		gossipEventHandlers: NewEventHandlers[GossipHandler](),
 		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
 		transport:           config.Transport,
+		peerList:            make([]string, 0),
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -113,8 +116,15 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
 	}
 
-	// Add the local node to the node list
+	// Add the local node to the node list and setup handlers
 	cluster.nodes.addOrUpdate(cluster.localNode)
+	cluster.localNode.metadata.SetOnLocalChange(func(ts hlc.Timestamp, data map[string]interface{}) {
+		// Handle the meta data change locally
+		cluster.nodes.notifyMetadataChanged(cluster.localNode)
+
+		// Send to the cluster
+		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{MetadataTimestamp: ts, Metadata: data})
+	})
 
 	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
 
@@ -143,11 +153,11 @@ func (c *Cluster) Start() {
 	// Register the system message handlers
 	c.registerSystemHandlers()
 
-	// Start periodic state synchronization
-	// TODO	c.periodicStateSync()
+	// State sync
+	c.HandleGossipFunc(c.periodicStateSync)
 
 	// Start the gossip notification manager
-	// TODO	c.gossipManager()
+	c.gossipManager()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
@@ -204,7 +214,8 @@ func (c *Cluster) Join(peers []string) error {
 
 	wg.Wait()
 
-	// TODO Maintain a list of peers we're using as seeds so they can be used for recovery
+	// Remember the peers so we can use them for recovery
+	c.peerList = append(c.peerList, peers...)
 
 	return nil
 }
@@ -243,7 +254,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
 	if c.nodes.addOrUpdate(node) {
 		c.config.Logger.Debugf("gossip: Joined peer: %s", peerAddr)
-		err = c.exchangeState(node, []NodeID{c.localNode.ID})
+		err = c.exchangeState([]*Node{node}, []NodeID{c.localNode.ID})
 		if err != nil {
 			c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
 		}
@@ -393,13 +404,13 @@ func (c *Cluster) getMaxTTL() uint8 {
 	return uint8(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
-// Exchange the state of a random subset of nodes with the given node
-func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
+// Exchange the state of a random subset of nodes with the given nodes
+func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) error {
 
 	// Get a random selection of nodes, excluding specified nodes
 	randomNodes := c.nodes.getRandomNodesInStates(
 		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
-		[]NodeState{NodeAlive, NodeSuspect},
+		[]NodeState{NodeAlive, NodeSuspect, NodeSuspect, NodeDead},
 		exclude,
 	)
 
@@ -421,18 +432,51 @@ func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
 		return nil
 	}
 
-	// Exchange state with the peer
-	err := c.sendToWithResponse(
-		node,
-		pushPullStateMsg,
-		&peerStates,
-		&peerStates)
-	if err != nil {
-		return err
+	for _, node := range nodes {
+		var peerResponseStates []exchangeNodeState
+
+		// Exchange state with the peer
+		err := c.sendToWithResponse(
+			node,
+			pushPullStateMsg,
+			&peerStates,
+			&peerResponseStates,
+		)
+		if err != nil {
+			if len(nodes) == 1 {
+				return err
+			}
+			continue // multiple nodes so skip failed
+		}
+
+		c.combineStates(peerResponseStates)
 	}
 
-	// TODO Process the received states, combine with ours
 	return nil
+}
+
+// Combine the received states with our own to form a complete view of the cluster state
+func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
+	for _, state := range remoteStates {
+		// Skip us
+		if state.ID == c.localNode.ID {
+			continue
+		}
+
+		localNode := c.nodes.get(state.ID)
+		if localNode == nil {
+			localNode = newNode(state.ID, state.AdvertiseAddr)
+			localNode.state = state.State
+			localNode.stateChangeTime = state.StateChangeTime
+			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, true)
+			c.nodes.add(localNode, true)
+		} else {
+			if state.State != localNode.state {
+				c.nodes.updateState(localNode.ID, state.State)
+			}
+			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, false)
+		}
+	}
 }
 
 // Enqueue a packet for broadcasting to peers.
@@ -494,41 +538,7 @@ func (c *Cluster) broadcastWorker() {
 // Start periodic state synchronization with random peers
 func (c *Cluster) periodicStateSync() {
 	go func() {
-		// Add jitter to prevent all nodes syncing at the same time
-		jitter := time.Duration(rand.Int63n(int64(c.config.StateSyncInterval / 4)))
-		time.Sleep(jitter)
-
-		ticker := time.NewTicker(c.config.StateSyncInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// Calculate appropriate number of peers based on cluster size
-				peerCount := c.CalcFanOut()
-				if peerCount == 0 {
-					continue
-				}
-
-				// Get random subset, excluding ourselves
-				peers := c.nodes.getRandomNodes(peerCount, []NodeID{c.localNode.ID})
-
-				// Perform state exchange with selected peers
-				for _, peer := range peers {
-					go func(p *Node) {
-						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
-						if err != nil {
-							c.config.Logger.Err(err).Field("peer", p.ID.String()).Tracef("gossip: Periodic state exchange failed")
-						} else {
-							c.config.Logger.Field("peer", p.ID.String()).Tracef("gossip: Completed periodic state exchange")
-						}
-					}(peer)
-				}
-
-			case <-c.shutdownContext.Done():
-				return
-			}
-		}
+		c.exchangeState(c.GetCandidates(), []NodeID{c.localNode.ID})
 	}()
 }
 
@@ -638,12 +648,6 @@ func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
 	return c.gossipEventHandlers.Remove(id)
 }
 
-func (c *Cluster) notifyDoGossip() {
-	c.gossipEventHandlers.ForEach(func(handler GossipHandler) {
-		handler()
-	})
-}
-
 func (c *Cluster) gossipManager() {
 	go func() {
 		// Add jitter to prevent all nodes syncing at the same time
@@ -657,7 +661,9 @@ func (c *Cluster) gossipManager() {
 			select {
 			case <-c.gossipTicker.C:
 				start := time.Now()
-				c.notifyDoGossip()
+				c.gossipEventHandlers.ForEach(func(handler GossipHandler) {
+					handler()
+				})
 				elapsed := time.Since(start)
 
 				c.adjustGossipInterval(elapsed)

@@ -149,7 +149,7 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 	if nl.isLocalNode(nodeID) {
 		return false
 	}
-	
+
 	shard := nl.getShard(nodeID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()

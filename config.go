@@ -9,10 +9,10 @@ import (
 )
 
 type Config struct {
-	NodeID                   string                  // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
-	BindAddr                 string                  // BindAddr is the address and port to bind to or the path for http transports
-	AdvertiseAddr            string                  // Advertised address and port or URL for the node
-	ApplicationVersion       string                  // ApplicationVersion is the version of the application, used for compatibility checks
+	NodeID             string // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
+	BindAddr           string // BindAddr is the address and port to bind to or the path for http transports
+	AdvertiseAddr      string // Advertised address and port or URL for the node
+	ApplicationVersion string // ApplicationVersion is the version of the application, used for compatibility checks
 
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                Transport               // Transport layer to communicate over UDP or TCP
@@ -39,7 +39,6 @@ type Config struct {
 	NumIncomingWorkers       int                     // The number of workers to use for processing incoming messages
 	IncomingPacketQueueDepth int                     // Depth of the queue for incoming packets
 	PingTimeout              time.Duration           // Timeout for ping operations, should be less than HealthCheckInterval
-	StateSyncInterval        time.Duration           // How often to perform state synchronization with peers
 	FanOutMultiplier         float64                 // Scale of peer count for broadcast messages
 	StateExchangeMultiplier  float64                 // Scale of peer sampling for state exchange messages
 	TTLMultiplier            float64                 // Multiplier for TTL, used to determine how many hops a message can take
@@ -50,8 +49,8 @@ type Config struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		BindAddr:                 "127.0.0.1:8000",
-		AdvertiseAddr:            "",
+		BindAddr:      "127.0.0.1:8000",
+		AdvertiseAddr: "",
 
 		CompressMinSize:          256,
 		BearerToken:              "",
@@ -71,7 +70,6 @@ func DefaultConfig() *Config {
 		NumIncomingWorkers:       8,
 		IncomingPacketQueueDepth: 512,
 		PingTimeout:              500 * time.Millisecond,
-		StateSyncInterval:        5 * time.Second,
 		FanOutMultiplier:         1,
 		StateExchangeMultiplier:  0.8,
 		TTLMultiplier:            1.0,

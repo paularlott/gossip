@@ -48,8 +48,9 @@ type LocalMetadata interface {
 
 // Metadata holds node metadata with type-safe accessors
 type Metadata struct {
-	data         atomic.Pointer[map[string]interface{}]
-	lastModified atomic.Uint64 // Last modification timestamp in nanoseconds
+	data          atomic.Pointer[map[string]interface{}]
+	lastModified  atomic.Uint64                               // Last modification timestamp in nanoseconds
+	onLocalChange func(hlc.Timestamp, map[string]interface{}) // Callback on local changes: (ts, snapshot)
 }
 
 // Ensure interfaces are implemented
@@ -62,6 +63,7 @@ func NewMetadata() *Metadata {
 	initialMap := make(map[string]interface{})
 	md.data.Store(&initialMap)
 	md.lastModified.Store(0)
+	md.onLocalChange = func(hlc.Timestamp, map[string]interface{}) {}
 	return md
 }
 
@@ -92,6 +94,7 @@ func (md *Metadata) set(key string, value interface{}) *Metadata {
 	ts := hlc.Now()
 	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
+	md.onLocalChange(ts, newData)
 
 	return md
 }
@@ -467,6 +470,7 @@ func (md *Metadata) Delete(key string) {
 	ts := hlc.Now()
 	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
+	md.onLocalChange(ts, newData)
 }
 
 // Exists returns true if the key exists in the metadata
@@ -545,5 +549,16 @@ func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp,
 
 	md.data.Store(&dataCopy)
 	md.lastModified.Store(uint64(timestamp))
+	md.onLocalChange(timestamp, dataCopy)
 	return true
+}
+
+// SetOnLocalChange sets a callback that is invoked whenever local setters (Set*/Delete)
+// modify the metadata. Remote updates via update() do not trigger this callback.
+func (md *Metadata) SetOnLocalChange(cb func(hlc.Timestamp, map[string]interface{})) {
+	if cb == nil {
+		md.onLocalChange = func(hlc.Timestamp, map[string]interface{}) {}
+	} else {
+		md.onLocalChange = cb
+	}
 }

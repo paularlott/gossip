@@ -83,13 +83,13 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 		return nil, err
 	}
 
-	// TODO Merge the remote states with our local states
+	c.combineStates(peerStates)
 
 	// Get a random selection of nodes
 	nodes := c.nodes.getRandomNodesInStates(
 		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
-		[]NodeState{NodeAlive, NodeSuspect},
-		[]NodeID{},
+		[]NodeState{NodeAlive, NodeSuspect, NodeSuspect, NodeDead},
+		[]NodeID{sender.ID},
 	)
 
 	var localStates []exchangeNodeState
@@ -116,22 +116,17 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		return err
 	}
 
-	node := c.nodes.get(sender.ID)
-	if node == nil {
-		return fmt.Errorf("unknown sender")
-	}
-
-	if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
-		c.nodes.notifyMetadataChanged(node)
+	if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
+		c.nodes.notifyMetadataChanged(sender)
 	} else {
 		// If the timestamp is not newer but the data differs, accept the update when it
 		// comes directly from the node itself (authoritative source). This heals cases
 		// where clocks or prior incorrect timestamps prevented convergence.
-		current := node.metadata.GetAll()
+		current := sender.metadata.GetAll()
 		if !reflect.DeepEqual(current, metadataUpdate.Metadata) {
 			// Force-apply the update
-			if node.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, true) {
-				c.nodes.notifyMetadataChanged(node)
+			if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, true) {
+				c.nodes.notifyMetadataChanged(sender)
 			}
 		}
 	}
