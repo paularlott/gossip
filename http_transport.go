@@ -5,7 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -213,7 +216,36 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		return fmt.Errorf("no advertise address available")
 	}
 
-	*node.Address() = Address{URL: node.AdvertiseAddr()}
+	uri := node.AdvertiseAddr()
+
+	// If url starts with srv+ then remove it and resolve the actual url
+	if strings.HasPrefix(uri, "srv+") || strings.HasPrefix(uri, "SRV+") {
+		// Parse the url excluding the srv+ prefix
+		u, err := url.Parse(uri[4:])
+		if err != nil {
+			return fmt.Errorf("failed to parse SRV URL %s: %v", uri[4:], err)
+		}
+
+		srv, err := ht.config.Resolver.LookupSRV(u.Host)
+		if err != nil {
+			return fmt.Errorf("failed to lookup SRV record for %s: %v", u.Host, err)
+		}
+
+		if len(srv) == 0 {
+			return fmt.Errorf("no SRV records found for %s", u.Host)
+		}
+
+		// Update the URL with the service-selected port and hostname for SNI
+		host := net.JoinHostPort(u.Hostname(), strconv.Itoa(int(srv[0].Port)))
+		u.Host = host
+		uri = u.String()
+	}
+
+	if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		uri = "https://" + uri
+	}
+
+	*node.Address() = Address{URL: uri}
 	return nil
 }
 
