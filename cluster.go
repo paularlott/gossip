@@ -465,6 +465,11 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 		localNode := c.nodes.get(state.ID)
 		if localNode == nil {
+			// Skip dead or leaving nodes
+			if state.State == NodeDead || state.State == NodeLeaving {
+				continue
+			}
+
 			localNode = newNode(state.ID, state.AdvertiseAddr)
 			localNode.state = state.State
 			localNode.stateChangeTime = state.StateChangeTime
@@ -472,6 +477,9 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			c.nodes.add(localNode, true)
 		} else {
 			if state.State != localNode.state {
+
+				// TODO Be smarter about accepting states
+
 				c.nodes.updateState(localNode.ID, state.State)
 			}
 			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, false)
