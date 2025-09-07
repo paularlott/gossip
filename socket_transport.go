@@ -118,7 +118,7 @@ func (st *SocketTransport) PacketChannel() chan *Packet {
 }
 
 func (st *SocketTransport) Send(transportType TransportType, node *Node, packet *Packet) error {
-	rawPacket, err := st.packetToBuffer(packet)
+	rawPacket, err := st.packetToBuffer(packet, false)
 	if err != nil {
 		return err
 	}
@@ -152,12 +152,12 @@ func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, e
 	}
 	defer conn.Close()
 
-	if err := st.writePacket(conn, packet); err != nil {
+	if err := st.writePacket(conn, packet, true); err != nil {
 		node.Address().Clear()
 		return nil, err
 	}
 
-	replyPacket, err := st.readPacket(conn)
+	replyPacket, _, err := st.readPacket(conn)
 	if err != nil {
 		node.Address().Clear()
 		return nil, err
@@ -203,7 +203,7 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 			copy(packetData, buf[:n])
 
 			go func() {
-				packet, err := st.packetFromBuffer(packetData)
+				packet, _, err := st.packetFromBuffer(packetData)
 				if err != nil {
 					st.config.Logger.Err(err).Errorf("Failed to decode UDP packet")
 					return
@@ -220,36 +220,35 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
-	packet, err := st.readPacket(conn)
+	packet, replyExpected, err := st.readPacket(conn)
 	if err != nil {
 		st.config.Logger.Err(err).Errorf("transport: Failed to read packet")
 		conn.Close()
 		return
 	}
 
-	// TODO only create the channel for TCP as UDP doesn't allow replies
-
 	packet.SetConn(conn)
-	replyChan := make(chan *Packet, 1)
-	packet.SetReplyChan(replyChan)
 
-	go func() {
-		defer close(replyChan) // This will close the channel when the goroutine exits
+	if replyExpected {
+		replyChan := make(chan *Packet, 1)
+		packet.SetReplyChan(replyChan)
 
-		select {
-		case replyPacket := <-replyChan:
-			if replyPacket != nil {
-				if err := st.writePacket(conn, replyPacket); err != nil {
-					st.config.Logger.Err(err).Errorf("Failed to write reply packet")
+		go func() {
+			defer close(replyChan)
+
+			select {
+			case replyPacket := <-replyChan:
+				if replyPacket != nil {
+					if err := st.writePacket(conn, replyPacket, false); err != nil {
+						st.config.Logger.Err(err).Errorf("Failed to write reply packet")
+					}
+					replyPacket.Release()
 				}
-				replyPacket.Release()
+			case <-time.After(st.config.TCPDeadline):
+			case <-ctx.Done():
 			}
-		case <-time.After(st.config.TCPDeadline):
-			// Timeout - connection will be closed by defer in parent function
-		case <-ctx.Done():
-			// Context cancelled - connection will be closed by defer in parent function
-		}
-	}()
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -479,13 +478,22 @@ func (st *SocketTransport) lookupIP(host string, defaultPort int) ([]Address, er
 	return addresses, nil
 }
 
-func (st *SocketTransport) packetToBuffer(packet *Packet) ([]byte, error) {
+const (
+	compressionFlag = 0x8000
+)
+
+func (st *SocketTransport) packetToBuffer(packet *Packet, replyExpected bool) ([]byte, error) {
 	headerBytes, err := st.config.MsgCodec.Marshal(packet)
 	if err != nil {
 		return nil, err
 	}
 
 	headerSize := uint16(len(headerBytes))
+
+	// Set reply expected flag if requested
+	if replyExpected {
+		headerSize |= replyExpectedFlag
+	}
 
 	var compressedData []byte
 	isCompressed := false
@@ -497,7 +505,7 @@ func (st *SocketTransport) packetToBuffer(packet *Packet) ([]byte, error) {
 
 		if len(compressedData) < len(packet.Payload()) {
 			isCompressed = true
-			headerSize |= 0x8000
+			headerSize |= compressionFlag
 		}
 	}
 
@@ -540,14 +548,15 @@ func (st *SocketTransport) packetToBuffer(packet *Packet) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, error) {
+func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) {
 	if len(data) < 2 {
-		return nil, fmt.Errorf("packet too small")
+		return nil, false, fmt.Errorf("packet too small")
 	}
 
 	flags := binary.BigEndian.Uint16(data[:2])
-	isCompressed := flags&0x8000 != 0
-	headerSize := flags & 0x7FFF
+	isCompressed := flags&compressionFlag != 0
+	replyExpected := flags&replyExpectedFlag != 0
+	headerSize := flags & headerSizeMask
 
 	encryptedPortion := data[2:]
 
@@ -555,18 +564,18 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, error) {
 		var err error
 		encryptedPortion, err = st.config.Cipher.Decrypt(st.config.EncryptionKey, encryptedPortion)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt packet: %w", err)
+			return nil, false, fmt.Errorf("failed to decrypt packet: %w", err)
 		}
 	}
 
 	if len(encryptedPortion) < int(headerSize) {
-		return nil, fmt.Errorf("decrypted packet too small for header")
+		return nil, false, fmt.Errorf("decrypted packet too small for header")
 	}
 
 	packet := NewPacket()
 	err := st.config.MsgCodec.Unmarshal(encryptedPortion[:headerSize], &packet)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	packet.SetCodec(st.config.MsgCodec)
@@ -574,18 +583,18 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, error) {
 	if st.config.Compressor != nil && isCompressed {
 		payload, err := st.config.Compressor.Decompress(encryptedPortion[headerSize:])
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		packet.SetPayload(payload)
 	} else {
 		packet.SetPayload(encryptedPortion[headerSize:])
 	}
 
-	return packet, nil
+	return packet, replyExpected, nil
 }
 
-func (st *SocketTransport) writePacket(conn net.Conn, packet *Packet) error {
-	buf, err := st.packetToBuffer(packet)
+func (st *SocketTransport) writePacket(conn net.Conn, packet *Packet, replyExpected bool) error {
+	buf, err := st.packetToBuffer(packet, replyExpected)
 	if err != nil {
 		return err
 	}
@@ -622,10 +631,10 @@ func (st *SocketTransport) writeRawPacket(conn net.Conn, rawPacket []byte) error
 	return nil
 }
 
-func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, error) {
+func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, bool, error) {
 	err := conn.SetReadDeadline(time.Now().Add(st.config.TCPDeadline))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	bufferedReader := bufio.NewReader(conn)
@@ -633,19 +642,19 @@ func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, error) {
 	lengthBytes := make([]byte, 4)
 	_, err = io.ReadFull(bufferedReader, lengthBytes)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	dataLen := binary.BigEndian.Uint32(lengthBytes)
 
 	if dataLen > uint32(st.config.TCPMaxPacketSize) {
-		return nil, fmt.Errorf("packet size too large: %d bytes", dataLen)
+		return nil, false, fmt.Errorf("packet size too large: %d bytes", dataLen)
 	}
 
 	receivedData := make([]byte, dataLen)
 	_, err = io.ReadFull(bufferedReader, receivedData)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	return st.packetFromBuffer(receivedData)

@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	replyExpectedFlag    = 0x4000
+	headerSizeMask       = 0x3FFF
+	transportMaxWaitTime = 5 * time.Second
+)
+
 type HTTPTransport struct {
 	config        *Config
 	packetChannel chan *Packet
@@ -21,7 +27,7 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 		config:        config,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: transportMaxWaitTime,
 		},
 	}
 }
@@ -31,7 +37,7 @@ func (ht *HTTPTransport) PacketChannel() chan *Packet {
 }
 
 func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *Packet) error {
-	rawPacket, err := ht.packetToBuffer(packet)
+	rawPacket, err := ht.packetToBuffer(packet, false)
 	if err != nil {
 		return err
 	}
@@ -50,7 +56,6 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		// Add bearer token if configured
 		if ht.config.BearerToken != "" {
 			req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
 		}
@@ -71,7 +76,7 @@ func (ht *HTTPTransport) Name() string {
 }
 
 func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) {
-	rawPacket, err := ht.packetToBuffer(packet)
+	rawPacket, err := ht.packetToBuffer(packet, true)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,6 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 
 	req.Header.Set("Content-Type", "application/octet-stream")
 
-	// Add bearer token if configured
 	if ht.config.BearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
 	}
@@ -117,7 +121,6 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 }
 
 func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Request) {
-	// Validate bearer token if configured
 	if ht.config.BearerToken != "" {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -156,45 +159,55 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	replyChan := make(chan *Packet, 1)
-	packet.SetReplyChan(replyChan)
+	flags := binary.BigEndian.Uint16(body[:2])
+	replyExpected := flags&replyExpectedFlag != 0
 
-	select {
-	case ht.packetChannel <- packet:
+	if replyExpected {
+		replyChan := make(chan *Packet, 1)
+		packet.SetReplyChan(replyChan)
+
 		select {
-		case replyPacket := <-replyChan:
-			replyData, err := ht.packetToBuffer(replyPacket)
-			if err != nil {
-				http.Error(w, "Failed to encode reply", http.StatusInternalServerError)
+		case ht.packetChannel <- packet:
+			select {
+			case replyPacket := <-replyChan:
+				replyData, err := ht.packetToBuffer(replyPacket, false)
+				if err != nil {
+					http.Error(w, "Failed to encode reply", http.StatusInternalServerError)
+					replyPacket.Release()
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.WriteHeader(http.StatusOK)
+				w.Write(replyData)
 				replyPacket.Release()
+
+			case <-time.After(transportMaxWaitTime):
+				w.WriteHeader(http.StatusNoContent)
+
+			case <-r.Context().Done():
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.WriteHeader(http.StatusOK)
-			w.Write(replyData)
-			replyPacket.Release()
-
-		case <-time.After(30 * time.Second):
-			w.WriteHeader(http.StatusNoContent)
-
-		case <-r.Context().Done():
-			return
+		default:
+			http.Error(w, "Server busy", http.StatusServiceUnavailable)
 		}
 
-	default:
-		http.Error(w, "Server busy", http.StatusServiceUnavailable)
+		close(replyChan)
+	} else {
+		select {
+		case ht.packetChannel <- packet:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "Server busy", http.StatusServiceUnavailable)
+		}
 	}
-
-	close(replyChan)
 }
 
 func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 	if !node.Address().IsEmpty() {
 		return nil
 	}
-
-	// TODO handle srv+ records and append the config path to the gossip handler
 
 	if node.AdvertiseAddr() == "" {
 		return fmt.Errorf("no advertise address available")
@@ -204,27 +217,33 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 	return nil
 }
 
-func (ht *HTTPTransport) packetToBuffer(packet *Packet) ([]byte, error) {
+func (ht *HTTPTransport) packetToBuffer(packet *Packet, replyExpected bool) ([]byte, error) {
 	headerBytes, err := ht.config.MsgCodec.Marshal(packet)
 	if err != nil {
 		return nil, err
 	}
 
 	headerSize := uint16(len(headerBytes))
+	if replyExpected {
+		headerSize |= replyExpectedFlag
+	}
 
 	var buf bytes.Buffer
 
-	// Write header size first (2 bytes, big endian)
 	err = binary.Write(&buf, binary.BigEndian, headerSize)
 	if err != nil {
 		return nil, err
 	}
 
-	// Write header
-	buf.Write(headerBytes)
+	_, err = buf.Write(headerBytes)
+	if err != nil {
+		return nil, err
+	}
 
-	// Write payload
-	buf.Write(packet.Payload())
+	_, err = buf.Write(packet.Payload())
+	if err != nil {
+		return nil, err
+	}
 
 	return buf.Bytes(), nil
 }
@@ -234,14 +253,13 @@ func (ht *HTTPTransport) packetFromBuffer(data []byte) (*Packet, error) {
 		return nil, fmt.Errorf("packet too small")
 	}
 
-	// Read the header size (first 2 bytes)
-	headerSize := binary.BigEndian.Uint16(data[:2])
+	flags := binary.BigEndian.Uint16(data[:2])
+	headerSize := flags & headerSizeMask
 
 	if len(data) < int(headerSize)+2 {
 		return nil, fmt.Errorf("packet too small for header")
 	}
 
-	// Create new packet and unmarshal just the header portion
 	packet := NewPacket()
 	err := ht.config.MsgCodec.Unmarshal(data[2:2+headerSize], &packet)
 	if err != nil {
@@ -250,7 +268,6 @@ func (ht *HTTPTransport) packetFromBuffer(data []byte) (*Packet, error) {
 
 	packet.SetCodec(ht.config.MsgCodec)
 
-	// Set the payload (everything after the header)
 	if len(data) > int(headerSize)+2 {
 		packet.SetPayload(data[2+headerSize:])
 	}
