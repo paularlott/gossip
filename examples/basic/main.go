@@ -54,7 +54,7 @@ func main() {
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
 	config.Logger = common.NewZerologLogger(log.Logger)
-	config.MsgCodec = codec.NewJsonCodec() // TODO codec.NewShamatonMsgpackCodec()
+	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
 
 	var httpTransport *gossip.HTTPTransport

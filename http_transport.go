@@ -148,6 +148,8 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		return nil
 	}
 
+	// TODO handle srv+ records and append the config path to the gossip handler
+
 	if node.AdvertiseAddr() == "" {
 		return fmt.Errorf("no advertise address available")
 	}

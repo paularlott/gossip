@@ -251,7 +251,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	}
 }
 
-// MMarks the local node as leaving and broadcasts this state to the cluster
+// Marks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
 	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
 

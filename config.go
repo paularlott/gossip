@@ -18,7 +18,7 @@ type Config struct {
 	// If not given the BindAddr will be used.
 	AdvertiseAddr            string
 	ApplicationVersion       string                  // ApplicationVersion is the version of the application, used for compatibility checks
-	DefaultPort              int                     // DefaultPort is the default port to use for the node
+	DefaultPort              int                     // TODO REMOVE DefaultPort is the default port to use for the node
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                Transport               // Transport layer to communicate over UDP or TCP
 	Logger                   Logger                  // Logger is the logger to use for logging messages
