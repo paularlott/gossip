@@ -262,11 +262,6 @@ func (ng *NodeGroup) SendToPeers(msgType MessageType, data interface{}) error {
 		return err
 	}
 
-	if ng.cluster.CalcFanOut() > len(zoneNodes)+1 {
-		zoneNodes = append(zoneNodes, ng.cluster.localNode)
-		return ng.cluster.SendExcluding(msgType, data, ng.cluster.NodesToIDs(zoneNodes))
-	}
-
 	return nil
 }
 
@@ -281,11 +276,6 @@ func (ng *NodeGroup) SendToPeersReliable(msgType MessageType, data interface{}) 
 	err := ng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
 	if err != nil {
 		return err
-	}
-
-	if ng.cluster.CalcFanOut() > len(zoneNodes)+1 {
-		zoneNodes = append(zoneNodes, ng.cluster.localNode)
-		return ng.cluster.SendReliableExcluding(msgType, data, ng.cluster.NodesToIDs(zoneNodes))
 	}
 
 	return nil

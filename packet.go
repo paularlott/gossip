@@ -17,6 +17,7 @@ const (
 	// Message types
 	replyMsg          MessageType = iota // Reply to a message
 	nodeJoinMsg                          // Sent by peers when they are joining the network, as doing a push / pull state transfer
+	nodeLeaveMsg                         // Sent by peers when they are leaving the network
 	pushPullStateMsg                     // Sent by peers when pushing / pulling state
 	metadataUpdateMsg                    // Update the metadata of a node
 	ReservedMsgsStart MessageType = 64   // Reserved for future use
@@ -144,6 +145,10 @@ type joinReplyMessage struct {
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
+}
+
+type leaveMessage struct {
+	ID NodeID `msgpack:"id" json:"id"`
 }
 
 type exchangeNodeState struct {

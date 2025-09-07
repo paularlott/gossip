@@ -7,11 +7,14 @@ import (
 
 func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandlerWithReply(nodeJoinMsg, c.handleJoin)
+	c.handlers.registerHandler(nodeLeaveMsg, c.handleNodeLeave)
 	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
-	c.handlers.registerHandler(metadataUpdateMsg, true, c.handleMetadataUpdate)
+	c.handlers.registerHandler(metadataUpdateMsg, c.handleMetadataUpdate)
 }
 
 func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
+	c.config.Logger.Tracef("gossip: handleJoin")
+
 	var joinMsg joinMessage
 
 	err := packet.Unmarshal(&joinMsg)
@@ -54,10 +57,25 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 	}, nil
 }
 
-func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
-	if sender == nil {
-		return nil, fmt.Errorf("unknown sender")
+func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
+	c.config.Logger.Tracef("gossip: handleNodeLeave")
+
+	var msg leaveMessage
+	err := packet.Unmarshal(&msg)
+	if err != nil {
+		return err
 	}
+
+	// Update the node's state to leaving
+	if c.nodes.updateState(msg.ID, NodeLeaving) {
+		c.config.Logger.Field("nodeId", msg.ID.String()).Debugf("gossip: Node is leaving the cluster")
+	}
+
+	return nil
+}
+
+func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
+	c.config.Logger.Tracef("gossip: handlePushPullState")
 
 	var peerStates []exchangeNodeState
 	err := packet.Unmarshal(&peerStates)
@@ -90,10 +108,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 }
 
 func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
-	if sender == nil {
-		// Nothing to do as we don't know the node at this point
-		return nil
-	}
+	c.config.Logger.Tracef("gossip: handleMetadataUpdate")
 
 	var metadataUpdate metadataUpdateMessage
 	err := packet.Unmarshal(&metadataUpdate)

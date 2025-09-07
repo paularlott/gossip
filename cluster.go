@@ -153,6 +153,8 @@ func (c *Cluster) Start() {
 }
 
 func (c *Cluster) Stop() {
+	c.config.Logger.Infof("gossip: Starting cluster shutdown")
+
 	if c.localNode.state != NodeLeaving {
 		c.Leave()
 	}
@@ -252,7 +254,21 @@ func (c *Cluster) joinPeer(peerAddr string) {
 func (c *Cluster) Leave() {
 	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
 
-	// TODO Mark our local node as leaving?
+	// Update our local node state to leaving
+	c.nodes.updateState(c.localNode.ID, NodeLeaving)
+
+	// Create a leaving message to broadcast to all peers
+	leaveMsg := &leaveMessage{
+		ID: c.localNode.ID,
+	}
+
+	// Broadcast the leaving message
+	c.sendMessage(nil, TransportBestEffort, c.getMaxTTL(), nodeLeaveMsg, leaveMsg)
+
+	// Give some time for the leave messages to be sent before shutting down
+	time.Sleep(100 * time.Millisecond)
+
+	c.config.Logger.Debugf("gossip: Leave message broadcast completed")
 }
 
 func (c *Cluster) acceptPackets() {
@@ -302,6 +318,12 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			transportType = TransportBestEffort
 		}
 		c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+	}
+
+	// If we don't know the sender then unless it's a join message ignore it
+	if senderNode == nil && packet.MessageType != nodeJoinMsg {
+		packet.Release()
+		return
 	}
 
 	// Run the message handler
@@ -563,16 +585,7 @@ func (c *Cluster) HandleFunc(msgType MessageType, handler Handler) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	c.handlers.registerHandler(msgType, true, handler)
-	return nil
-}
-
-// Registers a handler to accept a message without automatically forwarding it to other nodes
-func (c *Cluster) HandleFuncNoForward(msgType MessageType, handler Handler) error {
-	if msgType < ReservedMsgsStart {
-		return fmt.Errorf("invalid message type")
-	}
-	c.handlers.registerHandler(msgType, false, handler)
+	c.handlers.registerHandler(msgType, handler)
 	return nil
 }
 

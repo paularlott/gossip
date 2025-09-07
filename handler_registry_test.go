@@ -76,7 +76,7 @@ func TestHandlerRegistryRegisterHandler(t *testing.T) {
 	}
 
 	// Register handler
-	hr.registerHandler(UserMsg, true, handler)
+	hr.registerHandler(UserMsg, handler)
 
 	// Verify handler is registered
 	h := hr.getHandler(UserMsg)
@@ -124,7 +124,7 @@ func TestHandlerRegistryDuplicateRegistration(t *testing.T) {
 	handler := func(*Node, *Packet) error { return nil }
 
 	// Register first handler
-	hr.registerHandler(UserMsg, false, handler)
+	hr.registerHandler(UserMsg, handler)
 
 	// Attempt to register duplicate should panic
 	defer func() {
@@ -133,14 +133,14 @@ func TestHandlerRegistryDuplicateRegistration(t *testing.T) {
 		}
 	}()
 
-	hr.registerHandler(UserMsg, false, handler)
+	hr.registerHandler(UserMsg, handler)
 }
 
 func TestHandlerRegistryUnregister(t *testing.T) {
 	hr := newHandlerRegistry()
 
 	handler := func(*Node, *Packet) error { return nil }
-	hr.registerHandler(UserMsg, false, handler)
+	hr.registerHandler(UserMsg, handler)
 
 	// Verify handler exists
 	if hr.getHandler(UserMsg) == nil {
@@ -335,8 +335,8 @@ func TestHandlerRegistryMultipleHandlers(t *testing.T) {
 	handler2 := func(*Node, *Packet) error { return nil }
 	replyHandler := func(*Node, *Packet) (interface{}, error) { return nil, nil }
 
-	hr.registerHandler(UserMsg, false, handler1)
-	hr.registerHandler(UserMsg+1, true, handler2)
+	hr.registerHandler(UserMsg, handler1)
+	hr.registerHandler(UserMsg+1, handler2)
 	hr.registerHandlerWithReply(UserMsg+2, replyHandler)
 
 	// Verify all handlers are registered
@@ -370,7 +370,7 @@ func TestHandlerRegistryConcurrentAccess(t *testing.T) {
 			for j := 0; j < numOperations; j++ {
 				msgType := MessageType(int(UserMsg) + goroutineID*numOperations + j)
 				handler := func(*Node, *Packet) error { return nil }
-				hr.registerHandler(msgType, false, handler)
+				hr.registerHandler(msgType, handler)
 				registeredCount.Add(1)
 			}
 		}(i)
@@ -405,7 +405,7 @@ func TestHandlerRegistryConcurrentUnregister(t *testing.T) {
 	for i := 0; i < numHandlers; i++ {
 		msgType := MessageType(int(UserMsg) + i)
 		handler := func(*Node, *Packet) error { return nil }
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 
 	var wg sync.WaitGroup
@@ -464,7 +464,7 @@ func BenchmarkHandlerRegistryRegister(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 }
 
@@ -475,7 +475,7 @@ func BenchmarkHandlerRegistryGetHandler(b *testing.B) {
 	// Pre-populate with handlers
 	for i := 0; i < 1000; i++ {
 		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 
 	b.ResetTimer()
@@ -492,7 +492,7 @@ func BenchmarkHandlerRegistryUnregister(b *testing.B) {
 	// Pre-populate with handlers
 	for i := 0; i < b.N; i++ {
 		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 
 	b.ResetTimer()
@@ -549,7 +549,7 @@ func BenchmarkHandlerRegistryConcurrentRead(b *testing.B) {
 	// Pre-populate with handlers
 	for i := 0; i < 1000; i++ {
 		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 
 	b.ResetTimer()
@@ -570,7 +570,7 @@ func BenchmarkHandlerRegistryConcurrentWrite(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			msgType := MessageType(int(UserMsg) + i)
-			hr.registerHandler(msgType, false, handler)
+			hr.registerHandler(msgType, handler)
 			i++
 		}
 	})
@@ -583,7 +583,7 @@ func BenchmarkHandlerRegistryMixed(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 100; i++ {
 		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, false, handler)
+		hr.registerHandler(msgType, handler)
 	}
 
 	b.ResetTimer()
@@ -591,7 +591,7 @@ func BenchmarkHandlerRegistryMixed(b *testing.B) {
 		switch i % 3 {
 		case 0:
 			msgType := MessageType(int(UserMsg) + 1000 + i)
-			hr.registerHandler(msgType, false, handler)
+			hr.registerHandler(msgType, handler)
 		case 1:
 			msgType := MessageType(int(UserMsg) + (i % 100))
 			hr.getHandler(msgType)

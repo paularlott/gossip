@@ -118,7 +118,7 @@ func (hr *handlerRegistry) unregister(msgType MessageType) bool {
 	return true
 }
 
-func (hr *handlerRegistry) registerHandler(msgType MessageType, forward bool, handler Handler) {
+func (hr *handlerRegistry) registerHandler(msgType MessageType, handler Handler) {
 	hr.register(msgType, msgHandler{
 		handler: handler,
 	})
