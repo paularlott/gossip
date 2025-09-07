@@ -84,10 +84,6 @@ func TestHandlerRegistryRegisterHandler(t *testing.T) {
 		t.Fatal("Handler not registered")
 	}
 
-	if !h.forward {
-		t.Fatal("Forward flag not set correctly")
-	}
-
 	if h.handler == nil {
 		t.Fatal("Handler function not set")
 	}
@@ -111,10 +107,6 @@ func TestHandlerRegistryRegisterHandlerWithReply(t *testing.T) {
 	h := hr.getHandler(UserMsg + 1)
 	if h == nil {
 		t.Fatal("Reply handler not registered")
-	}
-
-	if h.forward {
-		t.Fatal("Forward flag should be false for reply handlers")
 	}
 
 	if h.handler != nil {
@@ -354,10 +346,6 @@ func TestHandlerRegistryMultipleHandlers(t *testing.T) {
 
 	if h1 == nil || h2 == nil || h3 == nil {
 		t.Fatal("Not all handlers registered")
-	}
-
-	if h1.forward || !h2.forward || h3.forward {
-		t.Fatal("Forward flags not set correctly")
 	}
 
 	if h1.handler == nil || h2.handler == nil || h3.replyHandler == nil {

@@ -15,7 +15,6 @@ type Handler func(*Node, *Packet) error
 type ReplyHandler func(*Node, *Packet) (interface{}, error)
 
 type msgHandler struct {
-	forward      bool
 	handler      Handler
 	replyHandler ReplyHandler
 }
@@ -121,14 +120,12 @@ func (hr *handlerRegistry) unregister(msgType MessageType) bool {
 
 func (hr *handlerRegistry) registerHandler(msgType MessageType, forward bool, handler Handler) {
 	hr.register(msgType, msgHandler{
-		forward: forward,
 		handler: handler,
 	})
 }
 
 func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler ReplyHandler) {
 	hr.register(msgType, msgHandler{
-		forward:      false,
 		replyHandler: handler,
 	})
 }

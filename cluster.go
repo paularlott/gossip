@@ -293,31 +293,24 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		}
 	}
 
-	// Run the message handler
-	h := c.handlers.getHandler(packet.MessageType)
-	if h != nil {
-		if h.forward {
-			var transportType TransportType
-			if packet.conn != nil {
-				transportType = TransportReliable
-			} else {
-				transportType = TransportBestEffort
-			}
-			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
-		}
-
-		err := h.dispatch(c, senderNode, packet)
-		if err != nil {
-			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
-		}
-	} else {
+	// Forward packets
+	if !packet.CanReply() {
 		var transportType TransportType
 		if packet.conn != nil {
 			transportType = TransportReliable
 		} else {
 			transportType = TransportBestEffort
 		}
-		c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+		c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+	}
+
+	// Run the message handler
+	h := c.handlers.getHandler(packet.MessageType)
+	if h != nil {
+		err := h.dispatch(c, senderNode, packet)
+		if err != nil {
+			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
+		}
 	}
 }
 
@@ -333,7 +326,7 @@ func (c *Cluster) CalcFanOut() int {
 	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.FanOutMultiplier)
 	cap := 10.0
 
-	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
+	return int(math.Min(totalNodes, math.Max(3, math.Min(basePeerCount, cap))))
 }
 
 // CalcPayloadSize determines how many items should be included
@@ -347,12 +340,25 @@ func (c *Cluster) CalcPayloadSize(totalItems int) int {
 		return 0
 	}
 
-	basePeerCount := math.Ceil(math.Log2(float64(totalItems))*c.config.StateExchangeMultiplier) + 2
+	basePayloadSize := math.Ceil(math.Log2(float64(totalItems))*c.config.StateExchangeMultiplier) + 2
 	cap := 16.0
 
-	return int(math.Min(float64(totalItems), math.Max(1, math.Min(basePeerCount, cap))))
+	return int(math.Min(float64(totalItems), math.Max(3, math.Min(basePayloadSize, cap))))
 }
 
+// getMaxTTL calculates the maximum Time-To-Live (hop count) for gossip messages
+// based on the current cluster size. TTL determines how many times a message
+// can be forwarded before being dropped, preventing infinite message loops
+// while ensuring adequate propagation coverage.
+//
+// The TTL is calculated using logarithmic scaling to balance message reach
+// with network overhead:
+// - Small clusters (2-4 nodes): TTL of 3-4 hops
+// - Medium clusters (16-32 nodes): TTL of 5-6 hops
+// - Large clusters (100+ nodes): TTL of 7-8 hops (capped)
+//
+// Returns 0 if no alive nodes exist, ensuring messages don't propagate
+// in empty clusters.
 func (c *Cluster) getMaxTTL() uint8 {
 	totalNodes := c.nodes.getAliveCount()
 	if totalNodes <= 0 {
