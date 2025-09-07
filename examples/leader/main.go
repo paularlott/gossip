@@ -63,12 +63,11 @@ func main() {
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
 
-	if *port == 0 {
-		config.SocketTransportEnabled = false
-	}
+	var httpTransport *gossip.HTTPTransport
 	if *webPort > 0 {
+		httpTransport = gossip.NewHTTPTransport(config)
+		config.Transport = httpTransport
 		config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
-		config.AllowInsecureWebsockets = true
 	}
 
 	cluster, err := gossip.NewCluster(config)
@@ -144,7 +143,7 @@ func main() {
 	// If web port is specified then start a web server to handle websocket traffic
 	var httpServer *http.Server
 	if *webPort > 0 {
-		http.HandleFunc("/", cluster.WebsocketHandler)
+		http.HandleFunc("/", httpTransport.HandleGossipRequest)
 		httpServer = &http.Server{Addr: fmt.Sprintf(":%d", *webPort)}
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

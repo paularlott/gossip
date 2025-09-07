@@ -19,6 +19,7 @@ type nodeListShard struct {
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
+	cluster    *Cluster // Reference to parent cluster
 	shardCount int
 	shardMask  uint32
 	shards     []*nodeListShard
@@ -63,6 +64,7 @@ func stateSetToKey(states []NodeState) string {
 // NewNodeList creates a new node list
 func newNodeList(c *Cluster) *nodeList {
 	nl := &nodeList{
+		cluster:                c,
 		shardCount:             c.config.NodeShardCount,
 		shardMask:              uint32(c.config.NodeShardCount - 1),
 		stateCache:             make(map[string][]*Node),
@@ -134,10 +136,20 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
+	// Cannot remove local node - this would be a programming error
+	// The local node should never be removed from the node list
+	if nl.isLocalNode(nodeID) {
+		return
+	}
 	nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
+	// Cannot remove local node
+	if nl.isLocalNode(nodeID) {
+		return false
+	}
+	
 	shard := nl.getShard(nodeID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()
@@ -394,4 +406,9 @@ func (nl *nodeList) notifyMetadataChanged(node *Node) {
 	nl.metadataChangeHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
 		go handler(node)
 	})
+}
+
+// isLocalNode checks if the given node ID is the local node
+func (nl *nodeList) isLocalNode(nodeID NodeID) bool {
+	return nl.cluster != nil && nl.cluster.localNode != nil && nl.cluster.localNode.ID == nodeID
 }

@@ -27,8 +27,6 @@ type Config struct {
 	CompressMinSize          int                     // The minimum size of a message before attempting to compress it
 	WebsocketProvider        websocket.Provider      // The provider to use for WebSocket connections
 	BearerToken              string                  // Bearer token to use for authentication, if not given no authentication will be used
-	AllowInsecureWebsockets  bool                    // Whether to allow insecure WebSocket connections (ws://)
-	SocketTransportEnabled   bool                    // Whether to use the socket transport layer (TCP/UDP)
 	Cipher                   encryption.Cipher       // The cipher to use for encrypting and decrypting messages
 	ApplicationVersionCheck  ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
 	GossipInterval           time.Duration           // How often to send gossip messages
@@ -62,9 +60,7 @@ func DefaultConfig() *Config {
 		AdvertiseAddr:            "",
 		DefaultPort:              3500,
 		CompressMinSize:          256,
-		SocketTransportEnabled:   true,
 		BearerToken:              "",
-		AllowInsecureWebsockets:  false,
 		GossipInterval:           5 * time.Second,
 		GossipMaxInterval:        20 * time.Second,
 		TCPDialTimeout:           2 * time.Second,

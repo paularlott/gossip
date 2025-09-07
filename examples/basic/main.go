@@ -24,7 +24,7 @@ import (
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
 
 	port := flag.Int("port", 0, "Port to listen on")
 	webPort := flag.Int("web-port", 0, "Web port")
@@ -54,15 +54,14 @@ func main() {
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
 	config.Logger = common.NewZerologLogger(log.Logger)
-	config.MsgCodec = codec.NewShamatonMsgpackCodec()
+	config.MsgCodec = codec.NewJsonCodec() // TODO codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
 
-	if *port == 0 {
-		config.SocketTransportEnabled = false
-	}
+	var httpTransport *gossip.HTTPTransport
 	if *webPort > 0 {
+		httpTransport = gossip.NewHTTPTransport(config)
+		config.Transport = httpTransport
 		config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
-		config.AllowInsecureWebsockets = true
 	}
 
 	config.ApplicationVersion = "0.0.1"
@@ -90,7 +89,7 @@ func main() {
 	// If web port is specified then start a web server to handle websocket traffic
 	var httpServer *http.Server
 	if *webPort > 0 {
-		http.HandleFunc("/", cluster.WebsocketHandler)
+		http.HandleFunc("/", httpTransport.HandleGossipRequest)
 		httpServer = &http.Server{Addr: fmt.Sprintf(":%d", *webPort)}
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -100,3 +100,18 @@ func (node *Node) Alive() bool {
 func (node *Node) Suspect() bool {
 	return node.state == NodeSuspect
 }
+
+// Address returns a pointer to the node's resolved address
+func (node *Node) Address() *Address {
+	return &node.address
+}
+
+// AdvertiseAddr returns the node's advertise address string
+func (node *Node) AdvertiseAddr() string {
+	return node.advertiseAddr
+}
+
+// SetAdvertiseAddr sets the node's advertise address
+func (node *Node) SetAdvertiseAddr(addr string) {
+	node.advertiseAddr = addr
+}

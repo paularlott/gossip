@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
 // Message handler for fire and forget messages
@@ -24,23 +26,29 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 		return fmt.Errorf("packet is nil")
 	}
 
-	// Ensure the packet is released and connection closed after processing
+	// Ensure the packet is released after processing
 	defer packet.Release()
 
-	if packet.conn != nil && mh.replyHandler != nil {
+	if mh.replyHandler != nil {
 		replyData, err := mh.replyHandler(node, packet)
 		if err != nil {
 			return err
 		}
 
-		if replyData != nil && c != nil {
-			replyPacket, err := c.createPacket(c.localNode.ID, replyMsg, 1, replyData)
+		if replyData != nil && c != nil && packet.replyChan != nil {
+			// Update the packet with the reply data
+			packet.AddRef()
+			packet.MessageType = replyMsg
+			packet.SenderID = c.localNode.ID
+			packet.MessageID = MessageID(hlc.Now())
+			packet.TTL = 1
+			packet.payload, err = packet.codec.Marshal(replyData)
 			if err != nil {
+				packet.Release()
 				return err
 			}
-			defer replyPacket.Release()
 
-			return c.transport.WritePacket(packet.conn, replyPacket)
+			return packet.SendReply()
 		}
 		return nil
 	} else if mh.handler != nil {

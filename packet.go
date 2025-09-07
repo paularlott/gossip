@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -39,8 +40,14 @@ type Packet struct {
 	TTL         uint8       `msgpack:"ttl" json:"ttl"`
 	payload     []byte
 	codec       codec.Serializer
-	conn        net.Conn
-	refCount    atomic.Int32
+
+	// Connection for connection-based transports (TCP/WebSocket)
+	conn net.Conn
+
+	// Reply channel for async replies (works for all transports)
+	replyChan chan<- *Packet
+
+	refCount atomic.Int32
 }
 
 func NewPacket() *Packet {
@@ -62,6 +69,7 @@ func (p *Packet) Release() {
 
 		p.conn = nil
 		p.payload = nil
+		p.replyChan = nil
 
 		packetPool.Put(p)
 	}
@@ -73,6 +81,49 @@ func (p *Packet) Unmarshal(v interface{}) error {
 
 func (p *Packet) Codec() codec.Serializer {
 	return p.codec
+}
+
+// CanReply returns true if the packet can send a reply
+func (p *Packet) CanReply() bool {
+	return p.conn != nil || p.replyChan != nil
+}
+
+// SendReply sends a reply packet using the available reply mechanism
+func (p *Packet) SendReply() error {
+	if p.replyChan != nil {
+		select {
+		case p.replyChan <- p:
+			return nil
+		default:
+			return fmt.Errorf("reply channel full or closed")
+		}
+	}
+	return fmt.Errorf("no reply mechanism available")
+}
+
+// SetReplyChan sets the reply channel for this packet
+func (p *Packet) SetReplyChan(ch chan<- *Packet) {
+	p.replyChan = ch
+}
+
+// SetConn sets the connection for this packet
+func (p *Packet) SetConn(conn net.Conn) {
+	p.conn = conn
+}
+
+// Payload returns the packet payload
+func (p *Packet) Payload() []byte {
+	return p.payload
+}
+
+// SetPayload sets the packet payload
+func (p *Packet) SetPayload(payload []byte) {
+	p.payload = payload
+}
+
+// SetCodec sets the packet codec
+func (p *Packet) SetCodec(codec codec.Serializer) {
+	p.codec = codec
 }
 
 type joinMessage struct {

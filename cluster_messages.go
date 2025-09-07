@@ -95,7 +95,7 @@ func (c *Cluster) sendMessageTo(transportType TransportType, dstNode *Node, ttl 
 	}
 	defer packet.Release()
 
-	return c.transport.SendPacket(transportType, []*Node{dstNode}, packet)
+	return c.transport.Send(transportType, dstNode, packet)
 }
 
 func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {
@@ -127,7 +127,6 @@ func (c *Cluster) SendToPeersReliable(dstNodes []*Node, msgType MessageType, dat
 }
 
 // Send a message to the peer then accept a response message.
-// Uses a TCP connection to send the packet and receive the response.
 func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
 	packet, err := c.createPacket(c.localNode.ID, msgType, 1, payload)
 	if err != nil {
@@ -135,23 +134,9 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	}
 	defer packet.Release()
 
-	conn, err := c.transport.DialPeer(dstNode)
+	responsePacket, err := c.transport.SendWithReply(dstNode, packet)
 	if err != nil {
-		dstNode.address.Clear()
-		return err
-	}
-	defer conn.Close()
-
-	// Write the packet to the connection
-	err = c.transport.WritePacket(conn, packet)
-	if err != nil {
-		dstNode.address.Clear()
-		return err
-	}
-
-	responsePacket, err := c.transport.ReadPacket(conn)
-	if err != nil {
-		dstNode.address.Clear()
+		dstNode.Address().Clear()
 		return err
 	}
 	defer responsePacket.Release()
@@ -160,7 +145,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	if responsePayload != nil {
 		err = responsePacket.Unmarshal(responsePayload)
 		if err != nil {
-			dstNode.address.Clear()
+			dstNode.Address().Clear()
 			return err
 		}
 	}

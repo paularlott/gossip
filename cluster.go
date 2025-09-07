@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -65,11 +63,6 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("missing MsgCodec")
 	}
 
-	// If both socket and websocket transports are enabled then block this
-	if config.SocketTransportEnabled && config.WebsocketProvider != nil {
-		return nil, fmt.Errorf("both socket and websocket transports are enabled")
-	}
-
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	if len(config.EncryptionKey) != 0 && len(config.EncryptionKey) != 16 && len(config.EncryptionKey) != 24 && len(config.EncryptionKey) != 32 {
 		return nil, fmt.Errorf("invalid encrypt key length: must be 0, 16, 24, or 32 bytes")
@@ -117,34 +110,17 @@ func NewCluster(config *Config) (*Cluster, error) {
 	// Add the local node to the node list
 	cluster.nodes.addOrUpdate(cluster.localNode)
 
-	// Create transport first so we can use it for address resolution
-	if config.Transport == nil {
-		// For bind address, we need to resolve it to create the transport
-		var bindAddresses []Address
-		if config.SocketTransportEnabled {
-			// Create a temporary transport to resolve bind address
-			tempTransport := &transport{config: config}
-			bindAddresses, err = tempTransport.ResolveAddress(config.BindAddr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve bind address: %v", err)
-			}
-		} else {
-			// For WebSocket-only mode, we don't need a bind address with IP/Port
-			bindAddresses = []Address{{}} // Empty address for WebSocket-only
-		}
-
-		// Check we have a bind port or are using WebSocket-only mode
-		if config.SocketTransportEnabled && (len(bindAddresses) == 0 || bindAddresses[0].Port == 0) {
-			return nil, fmt.Errorf("no bind port specified for socket transport")
-		}
-
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, bindAddresses[0])
+	// Create transport
+	if config.Transport != nil {
+		cluster.transport = config.Transport
+	} else {
+		cluster.transport, err = NewSocketTransport(ctx, &cluster.shutdownWg, config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %v", err)
 		}
-	} else {
-		cluster.transport = config.Transport
 	}
+
+	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
 
 	// If using websockets then see if we should disable compression
 	if cluster.config.WebsocketProvider != nil && cluster.config.WebsocketProvider.CompressionEnabled() {
@@ -171,10 +147,10 @@ func (c *Cluster) Start() {
 	c.registerSystemHandlers()
 
 	// Start periodic state synchronization
-	c.periodicStateSync()
+	// TODO	c.periodicStateSync()
 
 	// Start the gossip notification manager
-	c.gossipManager()
+	// TODO	c.gossipManager()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
@@ -196,29 +172,6 @@ func (c *Cluster) Stop() {
 	c.shutdownWg.Wait()
 
 	c.config.Logger.Infof("gossip: Cluster stopped")
-}
-
-// Handler for incoming WebSocket connections when gossiping over web sockets
-func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
-	if c.config.BearerToken != "" {
-		authHeader := r.Header.Get("Authorization")
-		const bearerPrefix = "Bearer "
-
-		if !strings.HasPrefix(authHeader, bearerPrefix) {
-			c.config.Logger.Debugf("gossip: Missing or invalid Authorization header format")
-			http.Error(w, "Invalid authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		bearer := strings.TrimSpace(authHeader[len(bearerPrefix):])
-		if bearer != c.config.BearerToken {
-			c.config.Logger.Debugf("gossip: Invalid bearer token")
-			http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	c.transport.WebsocketHandler(c.shutdownContext, w, r)
 }
 
 func (c *Cluster) Join(peers []string) error {
@@ -267,43 +220,33 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		ApplicationVersion: c.config.ApplicationVersion,
 	}
 
-	addresses, err := c.transport.ResolveAddress(peerAddr)
+	// Create a node for the peer
+	node := newNode(c.localNode.ID, peerAddr)
+	joinReply := &joinReplyMessage{}
+
+	// Attempt to join the peer
+	err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 	if err != nil {
-		c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
+		c.config.Logger.Err(err).Warnf("Failed to join peer: %s", peerAddr)
 		return
 	}
 
-	// Create a node which we'll use for connection attempts
-	node := newNode(c.localNode.ID, peerAddr)
+	if !joinReply.Accepted {
+		c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
+		return
+	}
 
-	for _, addr := range addresses {
-		joinReply := &joinReplyMessage{}
-
-		// Apply address to node and attempt to join
-		node.address = addr
-		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
+	// Update the node with the peer's information
+	node.ID = joinReply.ID
+	node.SetAdvertiseAddr(joinReply.AdvertiseAddr)
+	node.ProtocolVersion = joinReply.ProtocolVersion
+	node.ApplicationVersion = joinReply.ApplicationVersion
+	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
+	if c.nodes.addOrUpdate(node) {
+		c.config.Logger.Debugf("gossip: Joined peer: %s", peerAddr)
+		err = c.exchangeState(node, []NodeID{c.localNode.ID})
 		if err != nil {
-			continue
-		}
-
-		if !joinReply.Accepted {
-			c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
-			continue
-		}
-
-		// Update the node with the peer's information
-		node.ID = joinReply.ID
-		node.advertiseAddr = joinReply.AdvertiseAddr // Use the address the node advertises
-		node.ProtocolVersion = joinReply.ProtocolVersion
-		node.ApplicationVersion = joinReply.ApplicationVersion
-		node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-		if c.nodes.addOrUpdate(node) {
-			c.config.Logger.Debugf("gossip: Joined peer: %s", addr.String())
-			err = c.exchangeState(node, []NodeID{c.localNode.ID})
-			if err != nil {
-				c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
-			}
-			break
+			c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
 		}
 	}
 }
@@ -506,8 +449,10 @@ func (c *Cluster) broadcastWorker() {
 				item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
 			}
 
-			if err := c.transport.SendPacket(item.transportType, item.peers, item.packet); err != nil {
-				c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
+			for _, node := range item.peers {
+				if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
+					c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
+				}
 			}
 
 			// Release the broadcast item back to the pool

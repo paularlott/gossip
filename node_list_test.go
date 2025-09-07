@@ -15,7 +15,6 @@ func newTestCluster(t *testing.T) *Cluster {
 	config := DefaultConfig()
 	config.NodeShardCount = 4
 	config.MsgCodec = codec.NewJsonCodec()
-	config.SocketTransportEnabled = false // Disable network binding for tests using only in-memory structures
 	// Minimal transport / codec placeholders for tests
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -85,12 +84,6 @@ func TestNodeListRemoveIfInState(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
 // --- Benchmarks ---
 
 // helper to populate a cluster with N nodes
@@ -144,10 +137,6 @@ func BenchmarkNodeListGetRandomNodes(b *testing.B) {
 		_ = c.nodes.getRandomNodes(32, nil)
 	}
 }
-
-
-
-
 
 func BenchmarkNodeListConcurrentRandom(b *testing.B) {
 	c, _ := populateCluster(b, 40_000)
