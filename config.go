@@ -13,7 +13,7 @@ type Config struct {
 	BindAddr                 string                  // BindAddr is the address and port to bind to or the path for http transports
 	AdvertiseAddr            string                  // Advertised address and port or URL for the node
 	ApplicationVersion       string                  // ApplicationVersion is the version of the application, used for compatibility checks
-	DefaultPort              int                     // TODO REMOVE DefaultPort is the default port to use for the node
+
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                Transport               // Transport layer to communicate over UDP or TCP
 	Logger                   Logger                  // Logger is the logger to use for logging messages
@@ -52,7 +52,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		BindAddr:                 "127.0.0.1:8000",
 		AdvertiseAddr:            "",
-		DefaultPort:              3500,
+
 		CompressMinSize:          256,
 		BearerToken:              "",
 		GossipInterval:           5 * time.Second,

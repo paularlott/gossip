@@ -56,26 +56,24 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 	}
 
 	// Fire and forget HTTP POST
-	go func(n *Node) {
-		req, err := http.NewRequest(http.MethodPost, n.Address().URL, bytes.NewReader(rawPacket))
-		if err != nil {
-			n.Address().Clear()
-			return
-		}
+	req, err := http.NewRequest(http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	if err != nil {
+		node.Address().Clear()
+		return err
+	}
 
-		req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Type", "application/octet-stream")
 
-		if ht.config.BearerToken != "" {
-			req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
-		}
+	if ht.config.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
+	}
 
-		resp, err := ht.client.Do(req)
-		if err != nil {
-			n.Address().Clear()
-			return
-		}
-		resp.Body.Close()
-	}(node)
+	resp, err := ht.client.Do(req)
+	if err != nil {
+		node.Address().Clear()
+		return err
+	}
+	resp.Body.Close()
 
 	return nil
 }

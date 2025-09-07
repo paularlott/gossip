@@ -369,7 +369,7 @@ func (st *SocketTransport) resolveAddress(addressStr string) ([]Address, error) 
 		serviceName := addressStr[4:]
 		return st.lookupSRV(serviceName, true)
 	} else {
-		return st.lookupIP(addressStr, st.config.DefaultPort)
+		return st.lookupIP(addressStr)
 	}
 }
 
@@ -416,15 +416,17 @@ func (st *SocketTransport) lookupSRV(serviceName string, resolveToIPs bool) ([]A
 	return addresses, nil
 }
 
-func (st *SocketTransport) lookupIP(host string, defaultPort int) ([]Address, error) {
+func (st *SocketTransport) lookupIP(host string) ([]Address, error) {
 	addresses := make([]Address, 0)
 
+	// Handle port-only format like ":8080"
 	if _, err := strconv.Atoi(host); err == nil {
 		host = ":" + host
 	}
 
+	// Require port to be specified for advertise addresses
 	if !strings.Contains(host, ":") {
-		host = fmt.Sprintf("%s:%d", host, defaultPort)
+		return addresses, fmt.Errorf("port must be specified in address: %s", host)
 	}
 
 	hostStr, portStr, err := net.SplitHostPort(host)
@@ -436,12 +438,9 @@ func (st *SocketTransport) lookupIP(host string, defaultPort int) ([]Address, er
 		hostStr = "127.0.0.1"
 	}
 
-	var port int
-	portVal, err := strconv.ParseUint(portStr, 10, 16)
-	if err == nil {
-		port = int(portVal)
-	} else {
-		port = defaultPort
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return addresses, fmt.Errorf("invalid port: %s", portStr)
 	}
 
 	var ip net.IP
@@ -472,10 +471,10 @@ func (st *SocketTransport) lookupIP(host string, defaultPort int) ([]Address, er
 		}
 
 		for _, ip := range ordered {
-			addresses = append(addresses, Address{IP: ip, Port: port})
+			addresses = append(addresses, Address{IP: ip, Port: int(port)})
 		}
 	} else {
-		addresses = append(addresses, Address{IP: ip, Port: port})
+		addresses = append(addresses, Address{IP: ip, Port: int(port)})
 	}
 
 	return addresses, nil
