@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -41,7 +42,20 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 
 	// Fire and forget HTTP POST
 	go func(n *Node) {
-		resp, err := ht.client.Post(n.Address().URL, "application/octet-stream", bytes.NewReader(rawPacket))
+		req, err := http.NewRequest(http.MethodPost, n.Address().URL, bytes.NewReader(rawPacket))
+		if err != nil {
+			n.Address().Clear()
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		// Add bearer token if configured
+		if ht.config.BearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
+		}
+
+		resp, err := ht.client.Do(req)
 		if err != nil {
 			n.Address().Clear()
 			return
@@ -66,7 +80,20 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
 
-	resp, err := ht.client.Post(node.Address().URL, "application/octet-stream", bytes.NewReader(rawPacket))
+	req, err := http.NewRequest(http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	if err != nil {
+		node.Address().Clear()
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// Add bearer token if configured
+	if ht.config.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
+	}
+
+	resp, err := ht.client.Do(req)
 	if err != nil {
 		node.Address().Clear()
 		return nil, err
@@ -90,7 +117,26 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 }
 
 func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Request) {
-	// TODO Need to validate bearer token against the configured bearer token
+	// Validate bearer token if configured
+	if ht.config.BearerToken != "" {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+			return
+		}
+
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
+			return
+		}
+
+		token := authHeader[len(bearerPrefix):]
+		if token != ht.config.BearerToken {
+			http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
+			return
+		}
+	}
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

@@ -51,6 +51,7 @@ func main() {
 	config.NodeID = *nodeID
 	config.BindAddr = fmt.Sprintf("127.0.0.1:%d", *port)
 	config.AdvertiseAddr = advertiseAddr
+	config.BearerToken = "my-secret-token"
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
 	config.Logger = common.NewZerologLogger(log.Logger)
