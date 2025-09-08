@@ -70,7 +70,7 @@ func (hm *HealthMonitor) scanner() {
 }
 
 func (hm *HealthMonitor) scanNodes() {
-	now := hlc.Now()
+	now := hlc.Now().Time()
 	suspectThreshold := time.Duration(hm.cluster.config.SuspectTimeout)
 
 	aliveNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeAlive})
@@ -79,7 +79,7 @@ func (hm *HealthMonitor) scanNodes() {
 			continue
 		}
 
-		timeSinceLastMessage := now.Time().Sub(node.getLastActivity().Time())
+		timeSinceLastMessage := now.Sub(node.getLastActivity().Time())
 		if timeSinceLastMessage > suspectThreshold {
 			hm.enqueueHealthCheck(node.ID, DirectPing)
 		}

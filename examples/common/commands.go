@@ -63,6 +63,9 @@ func HandleCLIInput(c *gossip.Cluster) {
 		case "whoami":
 			fmt.Printf("Local node ID: %s (%s)\n", c.LocalNode().ID.String(), c.LocalNode().AdvertiseAddr())
 
+		case "exit":
+			os.Exit(0)
+
 		case "":
 			// Do nothing for empty input
 

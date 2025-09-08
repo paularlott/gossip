@@ -471,26 +471,57 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 		localNode := c.nodes.get(state.ID)
 		if localNode == nil {
-			// Skip dead or leaving nodes
+			// Skip dead or leaving nodes when creating new nodes
 			if state.State == NodeDead || state.State == NodeLeaving {
 				continue
 			}
 
+			// Create new node with remote state
 			localNode = newNode(state.ID, state.AdvertiseAddr)
 			localNode.state = state.State
 			localNode.stateChangeTime = state.StateChangeTime
 			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, true)
 			c.nodes.add(localNode, true)
+			c.config.Logger.Debugf("gossip: Added new node from remote state: %s", state.ID.String())
 		} else {
-			if state.State != localNode.state {
+			// Node exists locally, need to merge states intelligently
 
-				// TODO Be smarter about accepting states
-
-				c.nodes.updateState(localNode.ID, state.State)
+			// Only accept state changes if remote timestamp is newer
+			if state.StateChangeTime.After(localNode.stateChangeTime) {
+				if state.State != localNode.state {
+					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (remote timestamp newer)",
+						localNode.ID.String(), localNode.state, state.State)
+					c.nodes.updateState(localNode.ID, state.State)
+					localNode.stateChangeTime = state.StateChangeTime
+				}
+			} else if state.StateChangeTime.Equal(localNode.stateChangeTime) {
+				// Same timestamp - use deterministic tie-breaking
+				// Prefer more "severe" states: Dead > Leaving > Suspect > Alive
+				if c.shouldPreferRemoteState(localNode.state, state.State) {
+					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (tie-breaking)",
+						localNode.ID.String(), localNode.state, state.State)
+					c.nodes.updateState(localNode.ID, state.State)
+				}
 			}
+			// If local timestamp is newer, keep local state
+
+			// Always try to update metadata (it has its own timestamp checking)
 			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, false)
 		}
 	}
+}
+
+// Helper function for deterministic state preference during tie-breaking
+func (c *Cluster) shouldPreferRemoteState(localState, remoteState NodeState) bool {
+	// Define state severity order (higher number = more severe)
+	severity := map[NodeState]int{
+		NodeAlive:   0,
+		NodeSuspect: 1,
+		NodeLeaving: 2,
+		NodeDead:    3,
+	}
+
+	return severity[remoteState] > severity[localState]
 }
 
 // Enqueue a packet for broadcasting to peers.
