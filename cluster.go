@@ -127,7 +127,12 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cluster.nodes.notifyMetadataChanged(cluster.localNode)
 
 		// Send to the cluster
-		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{MetadataTimestamp: ts, Metadata: data})
+		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{
+			MetadataTimestamp: ts,
+			Metadata:          data,
+			NodeState:         cluster.localNode.state,
+			StateChangeTime:   cluster.localNode.stateChangeTime,
+		})
 	})
 
 	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
@@ -271,7 +276,7 @@ func (c *Cluster) Leave() {
 	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
 
 	// Update our local node state to leaving
-	c.nodes.updateState(c.localNode.ID, NodeLeaving)
+	c.nodes.updateState(c.localNode.ID, NodeLeaving, nil)
 
 	// Broadcast the leaving message
 	c.sendMessage(nil, TransportBestEffort, c.getMaxTTL(), nodeLeaveMsg, nil)
@@ -318,12 +323,6 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	senderNode := c.nodes.get(packet.SenderID)
 	if senderNode != nil {
 		senderNode.updateLastActivity()
-
-		// If not marked alive then we need to recover it to alive unless it's leaving
-		if senderNode.state != NodeAlive && senderNode.state != NodeLeaving {
-			c.config.Logger.Tracef("gossip: Recovering node via message: %s", senderNode.ID.String())
-			c.nodes.updateState(senderNode.ID, NodeAlive)
-		}
 	}
 
 	// Forward packets
@@ -338,7 +337,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	}
 
 	// If we don't know the sender then unless it's a join message ignore it
-	if senderNode == nil && packet.MessageType != nodeJoinMsg {
+	if senderNode == nil && packet.MessageType != nodeJoinMsg && packet.MessageType != pingMsg {
 		packet.Release()
 		return
 	}
@@ -491,7 +490,7 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 				if state.State != localNode.state {
 					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (remote timestamp newer)",
 						localNode.ID.String(), localNode.state, state.State)
-					c.nodes.updateState(localNode.ID, state.State)
+					c.nodes.updateState(localNode.ID, state.State, &state.StateChangeTime)
 					localNode.stateChangeTime = state.StateChangeTime
 				}
 			} else if state.StateChangeTime.Equal(localNode.stateChangeTime) {
@@ -500,7 +499,7 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 				if c.shouldPreferRemoteState(localNode.state, state.State) {
 					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (tie-breaking)",
 						localNode.ID.String(), localNode.state, state.State)
-					c.nodes.updateState(localNode.ID, state.State)
+					c.nodes.updateState(localNode.ID, state.State, &state.StateChangeTime)
 				}
 			}
 			// If local timestamp is newer, keep local state
@@ -809,6 +808,8 @@ func (c *Cluster) gossipMetadata() {
 		metadataUpdateMessage{
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 			Metadata:          c.localNode.metadata.GetAll(),
+			NodeState:         c.localNode.state,
+			StateChangeTime:   c.localNode.stateChangeTime,
 		},
 	)
 }
@@ -855,7 +856,7 @@ func (c *Cluster) cleanupNodes() {
 	// Move old leaving nodes to dead
 	for _, node := range leavingNodes {
 		if now.Sub(node.getStateChangeTimestamp().Time()) > c.config.LeavingNodeTimeout {
-			c.nodes.updateState(node.ID, NodeDead)
+			c.nodes.updateState(node.ID, NodeDead, nil)
 			c.config.Logger.Debugf("gossip: Moved leaving node to dead: %s", node.ID.String())
 		}
 	}

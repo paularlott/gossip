@@ -175,7 +175,7 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 }
 
 // UpdateState updates the state of a node using a local timestamp
-func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
+func (nl *nodeList) updateState(nodeID NodeID, newState NodeState, ts *hlc.Timestamp) bool {
 	shard := nl.getShard(nodeID)
 	shard.mutex.Lock()
 	defer shard.mutex.Unlock()
@@ -186,7 +186,11 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 			return true
 		}
 		node.state = newState
-		node.stateChangeTime = hlc.Now()
+		if ts != nil {
+			node.stateChangeTime = *ts
+		} else {
+			node.stateChangeTime = hlc.Now()
+		}
 		nl.updateCountersForStateChange(oldState, newState)
 		nl.notifyNodeStateChanged(node, oldState)
 		if newState != NodeAlive { // Clear cached resolved address to force re-resolution later

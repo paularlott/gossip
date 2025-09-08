@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"fmt"
-	"reflect"
 )
 
 func (c *Cluster) registerSystemHandlers() {
@@ -14,14 +13,14 @@ func (c *Cluster) registerSystemHandlers() {
 }
 
 func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
-	c.config.Logger.Tracef("gossip: handleJoin")
-
 	var joinMsg joinMessage
 
 	err := packet.Unmarshal(&joinMsg)
 	if err != nil {
 		return nil, err
 	}
+
+	c.config.Logger.Field("sender_id", joinMsg.ID.String()).Tracef("gossip: handleJoin")
 
 	// Check the protocol version and application version, reject if not compatible
 	accepted := true
@@ -59,10 +58,10 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 }
 
 func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
-	c.config.Logger.Tracef("gossip: handleNodeLeave")
+	c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handleNodeLeave")
 
 	// Update the node's state to leaving
-	if c.nodes.updateState(sender.ID, NodeLeaving) {
+	if c.nodes.updateState(sender.ID, NodeLeaving, nil) {
 		c.config.Logger.Field("nodeId", sender.ID.String()).Debugf("gossip: Node is leaving the cluster")
 	}
 
@@ -70,7 +69,7 @@ func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
 }
 
 func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
-	c.config.Logger.Tracef("gossip: handlePushPullState")
+	c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handlePushPullState")
 
 	var peerStates []exchangeNodeState
 	err := packet.Unmarshal(&peerStates)
@@ -103,7 +102,7 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 }
 
 func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
-	c.config.Logger.Tracef("gossip: handleMetadataUpdate")
+	//c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handleMetadataUpdate")
 
 	var metadataUpdate metadataUpdateMessage
 	err := packet.Unmarshal(&metadataUpdate)
@@ -113,16 +112,13 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 
 	if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
 		c.nodes.notifyMetadataChanged(sender)
-	} else {
-		// If the timestamp is not newer but the data differs, accept the update when it
-		// comes directly from the node itself (authoritative source). This heals cases
-		// where clocks or prior incorrect timestamps prevented convergence.
-		current := sender.metadata.GetAll()
-		if !reflect.DeepEqual(current, metadataUpdate.Metadata) {
-			// Force-apply the update
-			if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, true) {
-				c.nodes.notifyMetadataChanged(sender)
-			}
+	}
+
+	if metadataUpdate.StateChangeTime.After(sender.stateChangeTime) {
+		if metadataUpdate.NodeState != sender.state {
+			c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata",
+				sender.ID.String(), sender.state, metadataUpdate.NodeState)
+			c.nodes.updateState(sender.ID, metadataUpdate.NodeState, &metadataUpdate.StateChangeTime)
 		}
 	}
 
@@ -130,20 +126,24 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 }
 
 func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) {
-	c.config.Logger.Tracef("gossip: handlePing")
-
 	var pingMsg pingMessage
 	err := packet.Unmarshal(&pingMsg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify the ping is intended for us
-	if pingMsg.TargetNodeID != c.localNode.ID {
-		return nil, fmt.Errorf("ping not intended for this node")
+	c.config.Logger.Field("sender_id", pingMsg.SenderID.String()).Tracef("gossip: handlePing")
+
+	// If we don't know the sender, add them to our cluster view
+	if sender == nil {
+		newNode := newNode(pingMsg.SenderID, pingMsg.AdvertiseAddr)
+		if c.nodes.addOrUpdate(newNode) {
+			c.config.Logger.Tracef("gossip: Added unknown node from ping: %s", pingMsg.SenderID.String())
+		}
 	}
 
 	return &pongMessage{
-		NodeID: c.localNode.ID,
+		NodeID:        c.localNode.ID,
+		AdvertiseAddr: c.localNode.advertiseAddr,
 	}, nil
 }

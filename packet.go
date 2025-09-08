@@ -21,7 +21,6 @@ const (
 	pushPullStateMsg                     // Sent by peers when pushing / pulling state
 	metadataUpdateMsg                    // Update the metadata of a node
 	pingMsg                              // Health check ping
-	pongMsg                              // Health check pong response
 	ReservedMsgsStart MessageType = 64   // Reserved for future use
 	_                                    // skip to 128
 	UserMsg           MessageType = 128  // User messages start here
@@ -162,12 +161,16 @@ type exchangeNodeState struct {
 type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	NodeState         NodeState              `msgpack:"state" json:"state"`
+	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
 }
 
 type pingMessage struct {
-	TargetNodeID NodeID `msgpack:"tid" json:"tid"`
+	SenderID      NodeID `msgpack:"sid" json:"sid"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr"`
 }
 
 type pongMessage struct {
-	NodeID NodeID `msgpack:"nid" json:"nid"`
+	NodeID        NodeID `msgpack:"nid" json:"nid"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr"`
 }

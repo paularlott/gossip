@@ -183,21 +183,21 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 			node.updateLastActivity()
 		} else {
 			// No response, mark as suspect
-			hm.cluster.nodes.updateState(node.ID, NodeSuspect)
+			hm.cluster.nodes.updateState(node.ID, NodeSuspect, nil)
 			hm.cluster.config.Logger.Debugf("gossip: Marked node as suspect: %s", node.ID.String())
 		}
 
 	case SuspectRetry:
 		if success {
 			// Node recovered, mark as alive
-			hm.cluster.nodes.updateState(node.ID, NodeAlive)
+			hm.cluster.nodes.updateState(node.ID, NodeAlive, nil)
 			node.updateLastActivity()
 			hm.cluster.config.Logger.Debugf("gossip: Node recovered from suspect: %s", node.ID.String())
 		} else {
 			// Still no response, check if should mark as dead
 			timeSinceSuspect := hlc.Now().Time().Sub(node.getStateChangeTimestamp().Time())
 			if timeSinceSuspect > hm.cluster.config.DeadNodeTimeout {
-				hm.cluster.nodes.updateState(node.ID, NodeDead)
+				hm.cluster.nodes.updateState(node.ID, NodeDead, nil)
 				hm.cluster.config.Logger.Debugf("gossip: Marked suspect node as dead: %s", node.ID.String())
 			}
 		}
@@ -205,7 +205,7 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 	case DeadNodeRetry:
 		if success {
 			// Dead node came back to life!
-			hm.cluster.nodes.updateState(node.ID, NodeAlive)
+			hm.cluster.nodes.updateState(node.ID, NodeAlive, nil)
 			node.updateLastActivity()
 			hm.cluster.config.Logger.Infof("gossip: Dead node recovered: %s", node.ID.String())
 		}
@@ -214,11 +214,25 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 }
 
 func (hm *HealthMonitor) pingNode(node *Node) bool {
+	node.Address().Clear() // Force re-resolution
+
 	pingMessage := &pingMessage{
-		TargetNodeID: node.ID,
+		SenderID:      hm.cluster.localNode.ID,
+		AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
 	}
 
 	pongMessage := &pongMessage{}
 	err := hm.cluster.sendToWithResponse(node, pingMsg, pingMessage, pongMessage)
+	if err != nil {
+		return false
+	}
+
+	// If we got a response, update our view of the node's address if needed
+	if pongMessage.AdvertiseAddr != "" && pongMessage.AdvertiseAddr != node.advertiseAddr {
+		node.advertiseAddr = pongMessage.AdvertiseAddr
+		node.Address().Clear() // Force re-resolution
+		hm.cluster.config.Logger.Tracef("gossip: Updated node address: %s -> %s", node.ID.String(), pongMessage.AdvertiseAddr)
+	}
+
 	return err == nil
 }

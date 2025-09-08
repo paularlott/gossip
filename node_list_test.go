@@ -53,13 +53,13 @@ func TestNodeListStateTransitions(t *testing.T) {
 	n := newNode(id, "127.0.0.1:2000")
 	nl.addIfNotExists(n)
 
-	if !nl.updateState(id, NodeSuspect) {
+	if !nl.updateState(id, NodeSuspect, nil) {
 		t.Fatalf("failed to mark suspect")
 	}
 	if nl.getSuspectCount() != 1 {
 		t.Fatalf("suspect count mismatch")
 	}
-	if !nl.updateState(id, NodeDead) {
+	if !nl.updateState(id, NodeDead, nil) {
 		t.Fatalf("failed to mark dead")
 	}
 	if nl.getDeadCount() != 1 {
@@ -117,16 +117,16 @@ func BenchmarkNodeListUpdateState(b *testing.B) {
 	c, ids := populateCluster(b, 10_000)
 	// Ensure all start Alive
 	for _, id := range ids {
-		_ = c.nodes.updateState(id, NodeAlive)
+		_ = c.nodes.updateState(id, NodeAlive, nil)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		id := ids[i%len(ids)]
 		// Toggle Alive/Suspect to exercise counter changes
 		if i%2 == 0 {
-			c.nodes.updateState(id, NodeSuspect)
+			c.nodes.updateState(id, NodeSuspect, nil)
 		} else {
-			c.nodes.updateState(id, NodeAlive)
+			c.nodes.updateState(id, NodeAlive, nil)
 		}
 	}
 }
@@ -415,7 +415,7 @@ func TestNodeListEventHandlers(t *testing.T) {
 	nl.addIfNotExists(n)
 
 	// Update state to trigger handler
-	nl.updateState(id, NodeSuspect)
+	nl.updateState(id, NodeSuspect, nil)
 
 	// Trigger metadata change
 	nl.notifyMetadataChanged(n)
@@ -474,7 +474,7 @@ func TestNodeListStateCache(t *testing.T) {
 
 	// Modify state to invalidate cache
 	if len(nodes1) > 0 {
-		nl.updateState(nodes1[0].ID, NodeSuspect)
+		nl.updateState(nodes1[0].ID, NodeSuspect, nil)
 	}
 
 	// Cache should be invalidated
@@ -604,7 +604,7 @@ func BenchmarkNodeListConcurrentStateUpdates(b *testing.B) {
 		for pb.Next() {
 			id := ids[rand.Intn(len(ids))]
 			state := []NodeState{NodeAlive, NodeSuspect, NodeDead}[rand.Intn(3)]
-			nl.updateState(id, state)
+			nl.updateState(id, state, nil)
 		}
 	})
 }

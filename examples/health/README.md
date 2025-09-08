@@ -72,5 +72,7 @@ The health monitoring system uses:
 
 - **Worker Pool**: Configurable number of workers handle health checks concurrently
 - **Task Queue**: Health check tasks are queued to prevent blocking
-- **Direct Pings**: Active health checks using ping/pong messages with target node validation
-- **State Transitions**: Automatic progression from Alive → Suspect → Dead based on timeouts
+- **Node Discovery**: Ping messages include sender info, allowing unknown nodes to be discovered
+- **Address Updates**: Nodes can update their view of other nodes' addresses via pong responses
+- **Direct Pings**: Active health checks using ping/pong messages for node discovery and health
+- **State Transitions**: Automatic progression from Alive → Suspect → Dead → retry based on timeouts
