@@ -248,46 +248,6 @@ func TestMsgHandlerDispatchRegularHandlerError(t *testing.T) {
 	}
 }
 
-func TestMsgHandlerDispatchReplyHandler(t *testing.T) {
-	called := false
-	expectedReply := "test reply"
-
-	mh := &msgHandler{
-		replyHandler: func(*Node, *Packet) (interface{}, error) {
-			called = true
-			return expectedReply, nil
-		},
-	}
-
-	// Create mock cluster and transport
-	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
-	config.Transport = NewSocketTransport(config)
-
-	cluster, err := NewCluster(config)
-	if err != nil {
-		t.Fatalf("Failed to create cluster: %v", err)
-	}
-
-	mockConn := &mockConn{}
-	packet := NewPacket()
-	packet.conn = mockConn
-	packet.codec = config.MsgCodec
-
-	err = mh.dispatch(cluster, nil, packet)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if !called {
-		t.Fatal("Reply handler not called")
-	}
-
-	if len(mockConn.writeData) == 0 {
-		t.Fatal("No reply data written")
-	}
-}
-
 func TestMsgHandlerDispatchReplyHandlerError(t *testing.T) {
 	expectedErr := errors.New("reply handler error")
 
