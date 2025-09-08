@@ -45,16 +45,30 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		}
 	}
 
-	return &joinReplyMessage{
-		Accepted:           accepted,
-		RejectReason:       rejectReason,
-		ID:                 c.localNode.ID,
-		AdvertiseAddr:      c.localNode.advertiseAddr,
-		MetadataTimestamp:  c.localNode.Metadata.GetTimestamp(),
-		Metadata:           c.localNode.Metadata.GetAll(),
-		ProtocolVersion:    c.localNode.ProtocolVersion,
-		ApplicationVersion: c.localNode.ApplicationVersion,
-	}, nil
+	reply := &joinReplyMessage{
+		Accepted:     accepted,
+		RejectReason: rejectReason,
+		Nodes:        []exchangeNodeState{},
+	}
+
+	// Get a random selection of nodes
+	nodes := c.nodes.getAllInStates([]NodeState{NodeAlive})
+	for _, n := range nodes {
+		if n.ID == joinMsg.ID {
+			continue
+		}
+
+		reply.Nodes = append(reply.Nodes, exchangeNodeState{
+			ID:                n.ID,
+			AdvertiseAddr:     n.advertiseAddr,
+			State:             n.state,
+			StateChangeTime:   n.stateChangeTime,
+			MetadataTimestamp: n.metadata.GetTimestamp(),
+			Metadata:          n.metadata.GetAll(),
+		})
+	}
+
+	return reply, nil
 }
 
 func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {

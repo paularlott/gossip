@@ -256,19 +256,8 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		return
 	}
 
-	// Update the node with the peer's information
-	node.ID = joinReply.ID
-	node.advertiseAddr = joinReply.AdvertiseAddr
-	node.ProtocolVersion = joinReply.ProtocolVersion
-	node.ApplicationVersion = joinReply.ApplicationVersion
-	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-	if c.nodes.addOrUpdate(node) {
-		c.config.Logger.Debugf("gossip: Joined peer: %s", peerAddr)
-		err = c.exchangeState([]*Node{node}, []NodeID{c.localNode.ID})
-		if err != nil {
-			c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
-		}
-	}
+	// Combine the states from the join reply with our own
+	c.combineStates(joinReply.Nodes)
 }
 
 // Marks the local node as leaving and broadcasts this state to the cluster

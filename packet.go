@@ -139,14 +139,9 @@ type joinMessage struct {
 }
 
 type joinReplyMessage struct {
-	Accepted           bool                   `msgpack:"acc" json:"acc"`
-	RejectReason       string                 `msgpack:"rr" json:"rr"`
-	ID                 NodeID                 `msgpack:"id" json:"id"`
-	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
-	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
-	ApplicationVersion string                 `msgpack:"av" json:"av"`
-	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
-	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
+	Accepted     bool                `msgpack:"acc" json:"acc"`
+	RejectReason string              `msgpack:"rr" json:"rr"`
+	Nodes        []exchangeNodeState `msgpack:"nodes" json:"nodes"`
 }
 
 type exchangeNodeState struct {
