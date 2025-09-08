@@ -7,9 +7,14 @@ import (
 )
 
 func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
+	return c.createPacketWithTarget(sender, nil, msgType, ttl, payload)
+}
+
+func (c *Cluster) createPacketWithTarget(sender NodeID, target *NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
 	packet := NewPacket()
 	packet.MessageType = msgType
 	packet.SenderID = sender
+	packet.TargetNodeID = target
 	packet.MessageID = MessageID(hlc.Now())
 	packet.TTL = ttl
 	packet.codec = c.config.MsgCodec
@@ -26,7 +31,11 @@ func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, pa
 }
 
 func (c *Cluster) sendMessage(peers []*Node, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
-	packet, err := c.createPacket(c.localNode.ID, msgType, ttl, data)
+	return c.sendMessageWithTarget(peers, nil, transportType, ttl, msgType, data)
+}
+
+func (c *Cluster) sendMessageWithTarget(peers []*Node, target *NodeID, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
+	packet, err := c.createPacketWithTarget(c.localNode.ID, target, msgType, ttl, data)
 	if err != nil {
 		return err
 	}
@@ -54,14 +63,14 @@ func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) e
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessage([]*Node{dstNode}, TransportBestEffort, 1, msgType, data)
+	return c.sendMessageWithTarget([]*Node{dstNode}, &dstNode.ID, TransportBestEffort, 1, msgType, data)
 }
 
 func (c *Cluster) SendToReliable(dstNode *Node, msgType MessageType, data interface{}) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	return c.sendMessage([]*Node{dstNode}, TransportReliable, 1, msgType, data)
+	return c.sendMessageWithTarget([]*Node{dstNode}, &dstNode.ID, TransportReliable, 1, msgType, data)
 }
 
 func (c *Cluster) SendToPeers(dstNodes []*Node, msgType MessageType, data interface{}) error {
@@ -80,7 +89,7 @@ func (c *Cluster) SendToPeersReliable(dstNodes []*Node, msgType MessageType, dat
 
 // Send a message to the peer then accept a response message.
 func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
-	packet, err := c.createPacket(c.localNode.ID, msgType, 1, payload)
+	packet, err := c.createPacketWithTarget(c.localNode.ID, &dstNode.ID, msgType, 1, payload)
 	if err != nil {
 		return err
 	}

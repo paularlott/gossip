@@ -50,6 +50,12 @@ type Config struct {
 	NodeCleanupInterval      time.Duration           // How often to run node cleanup
 	NodeRetentionTime        time.Duration           // How long to keep dead nodes before removal
 	LeavingNodeTimeout       time.Duration           // How long to wait before moving leaving nodes to dead
+	HealthCheckInterval      time.Duration           // How often to check node health (e.g., 2s)
+	SuspectTimeout           time.Duration           // Time before marking node suspect (e.g., 1.5s)
+	SuspectRetryInterval     time.Duration           // How often to retry suspect nodes (e.g., 1s)
+	DeadNodeTimeout          time.Duration           // Time before marking suspect node as dead (e.g., 15s)
+	HealthWorkerPoolSize     int                     // Number of workers for health checks (e.g., 4)
+	HealthCheckQueueDepth    int                     // Queue depth for health check tasks (e.g., 256)
 }
 
 func DefaultConfig() *Config {
@@ -85,5 +91,11 @@ func DefaultConfig() *Config {
 		NodeCleanupInterval:      20 * time.Second,
 		NodeRetentionTime:        1 * time.Hour,
 		LeavingNodeTimeout:       30 * time.Second,
+		HealthCheckInterval:      2 * time.Second,
+		SuspectTimeout:           1500 * time.Millisecond,
+		SuspectRetryInterval:     1 * time.Second,
+		DeadNodeTimeout:          15 * time.Second,
+		HealthWorkerPoolSize:     4,
+		HealthCheckQueueDepth:    256,
 	}
 }

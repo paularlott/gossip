@@ -10,6 +10,7 @@ func (c *Cluster) registerSystemHandlers() {
 	c.handlers.registerHandler(nodeLeaveMsg, c.handleNodeLeave)
 	c.handlers.registerHandlerWithReply(pushPullStateMsg, c.handlePushPullState)
 	c.handlers.registerHandler(metadataUpdateMsg, c.handleMetadataUpdate)
+	c.handlers.registerHandlerWithReply(pingMsg, c.handlePing)
 }
 
 func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
@@ -126,4 +127,23 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	}
 
 	return nil
+}
+
+func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) {
+	c.config.Logger.Tracef("gossip: handlePing")
+
+	var pingMsg pingMessage
+	err := packet.Unmarshal(&pingMsg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify the ping is intended for us
+	if pingMsg.TargetNodeID != c.localNode.ID {
+		return nil, fmt.Errorf("ping not intended for this node")
+	}
+
+	return &pongMessage{
+		NodeID: c.localNode.ID,
+	}, nil
 }

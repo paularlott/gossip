@@ -38,6 +38,7 @@ type Cluster struct {
 	gossipInterval       time.Duration
 	broadcastQItemPool   sync.Pool
 	peerList             []string
+	healthMonitor        *HealthMonitor
 }
 
 type broadcastQItem struct {
@@ -110,6 +111,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	cluster.nodes = newNodeList(cluster)
+	cluster.healthMonitor = newHealthMonitor(cluster)
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
@@ -160,6 +162,7 @@ func (c *Cluster) Start() {
 	c.stateGossipManager()
 	c.gossipManager()
 	c.nodeCleanupManager()
+	c.healthMonitor.start()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
@@ -298,6 +301,12 @@ func (c *Cluster) acceptPackets() {
 func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// If the sender is us or already seen then ignore the message
 	if packet.SenderID == c.localNode.ID || c.msgHistory.contains(packet.SenderID, packet.MessageID) {
+		packet.Release()
+		return
+	}
+
+	// If message has a target node ID and it's not us, ignore it
+	if packet.MessageType != nodeJoinMsg && packet.TargetNodeID != nil && *packet.TargetNodeID != c.localNode.ID {
 		packet.Release()
 		return
 	}

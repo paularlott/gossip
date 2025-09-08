@@ -102,6 +102,8 @@ func main() {
 		}()
 	}
 
+	os.Exit(1)
+
 	// Wait for termination signal
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

@@ -20,6 +20,8 @@ const (
 	nodeLeaveMsg                         // Sent by peers when they are leaving the network
 	pushPullStateMsg                     // Sent by peers when pushing / pulling state
 	metadataUpdateMsg                    // Update the metadata of a node
+	pingMsg                              // Health check ping
+	pongMsg                              // Health check pong response
 	ReservedMsgsStart MessageType = 64   // Reserved for future use
 	_                                    // skip to 128
 	UserMsg           MessageType = 128  // User messages start here
@@ -35,12 +37,13 @@ var (
 
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
-	MessageType MessageType `msgpack:"mt" json:"mt"`
-	SenderID    NodeID      `msgpack:"si" json:"si"`
-	MessageID   MessageID   `msgpack:"mi" json:"mi"`
-	TTL         uint8       `msgpack:"ttl" json:"ttl"`
-	payload     []byte
-	codec       codec.Serializer
+	MessageType  MessageType `msgpack:"mt" json:"mt"`
+	SenderID     NodeID      `msgpack:"si" json:"si"`
+	TargetNodeID *NodeID     `msgpack:"ti,omitempty" json:"ti,omitempty"` // Optional: for direct messages
+	MessageID    MessageID   `msgpack:"mi" json:"mi"`
+	TTL          uint8       `msgpack:"ttl" json:"ttl"`
+	payload      []byte
+	codec        codec.Serializer
 
 	// Connection for connection-based transports (TCP/WebSocket)
 	conn net.Conn
@@ -159,4 +162,12 @@ type exchangeNodeState struct {
 type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+}
+
+type pingMessage struct {
+	TargetNodeID NodeID `msgpack:"tid" json:"tid"`
+}
+
+type pongMessage struct {
+	NodeID NodeID `msgpack:"nid" json:"nid"`
 }
