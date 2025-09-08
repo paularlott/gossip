@@ -54,6 +54,8 @@ type Config struct {
 	SuspectTimeout           time.Duration           // Time before marking node suspect (e.g., 1.5s)
 	SuspectRetryInterval     time.Duration           // How often to retry suspect nodes (e.g., 1s)
 	DeadNodeTimeout          time.Duration           // Time before marking suspect node as dead (e.g., 15s)
+	DeadNodeRetryInterval    time.Duration           // How often to retry dead nodes
+	MaxDeadNodeRetryTime     time.Duration           // Stop retrying dead nodes after this time
 	HealthWorkerPoolSize     int                     // Number of workers for health checks (e.g., 4)
 	HealthCheckQueueDepth    int                     // Queue depth for health check tasks (e.g., 256)
 }
@@ -95,6 +97,8 @@ func DefaultConfig() *Config {
 		SuspectTimeout:           1500 * time.Millisecond,
 		SuspectRetryInterval:     1 * time.Second,
 		DeadNodeTimeout:          15 * time.Second,
+		DeadNodeRetryInterval:    30 * time.Second, // Retry dead nodes every 30s
+		MaxDeadNodeRetryTime:     10 * time.Minute, // Stop trying after 10 minutes
 		HealthWorkerPoolSize:     4,
 		HealthCheckQueueDepth:    256,
 	}

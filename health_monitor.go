@@ -13,6 +13,7 @@ type HealthCheckType int
 const (
 	DirectPing HealthCheckType = iota
 	SuspectRetry
+	DeadNodeRetry
 )
 
 type HealthCheckTask struct {
@@ -51,6 +52,10 @@ func (hm *HealthMonitor) start() {
 	// Start suspect retry scheduler
 	hm.wg.Add(1)
 	go hm.suspectRetryScheduler()
+
+	// Start dead node retry scheduler
+	hm.wg.Add(1)
+	go hm.deadNodeRetryScheduler()
 }
 
 func (hm *HealthMonitor) scanner() {
@@ -106,6 +111,33 @@ func (hm *HealthMonitor) retrySuspectNodes() {
 	suspectNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeSuspect})
 	for _, node := range suspectNodes {
 		hm.enqueueHealthCheck(node.ID, SuspectRetry)
+	}
+}
+
+func (hm *HealthMonitor) deadNodeRetryScheduler() {
+	defer hm.wg.Done()
+
+	ticker := time.NewTicker(hm.cluster.config.DeadNodeRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			hm.retryDeadNodes()
+		case <-hm.ctx.Done():
+			return
+		}
+	}
+}
+
+func (hm *HealthMonitor) retryDeadNodes() {
+	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead})
+	for _, node := range deadNodes {
+		// Only retry dead nodes that haven't been dead too long
+		timeSinceDead := hlc.Now().Time().Sub(node.getStateChangeTimestamp().Time())
+		if timeSinceDead < hm.cluster.config.MaxDeadNodeRetryTime {
+			hm.enqueueHealthCheck(node.ID, DeadNodeRetry)
+		}
 	}
 }
 
@@ -169,6 +201,15 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 				hm.cluster.config.Logger.Debugf("gossip: Marked suspect node as dead: %s", node.ID.String())
 			}
 		}
+
+	case DeadNodeRetry:
+		if success {
+			// Dead node came back to life!
+			hm.cluster.nodes.updateState(node.ID, NodeAlive)
+			node.updateLastActivity()
+			hm.cluster.config.Logger.Infof("gossip: Dead node recovered: %s", node.ID.String())
+		}
+		// If still dead, just leave it as dead - we'll retry again later
 	}
 }
 
