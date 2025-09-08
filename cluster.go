@@ -310,8 +310,8 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	if senderNode != nil {
 		senderNode.updateLastActivity()
 
-		// If not marked alive then we need to recover it to alive
-		if senderNode.state != NodeAlive {
+		// If not marked alive then we need to recover it to alive unless it's leaving
+		if senderNode.state != NodeAlive && senderNode.state != NodeLeaving {
 			c.config.Logger.Tracef("gossip: Recovering node via message: %s", senderNode.ID.String())
 			c.nodes.updateState(senderNode.ID, NodeAlive)
 		}
