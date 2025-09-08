@@ -159,6 +159,7 @@ func (c *Cluster) Start() {
 	c.metadataGossipManager()
 	c.stateGossipManager()
 	c.gossipManager()
+	c.nodeCleanupManager()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
@@ -269,13 +270,8 @@ func (c *Cluster) Leave() {
 	// Update our local node state to leaving
 	c.nodes.updateState(c.localNode.ID, NodeLeaving)
 
-	// Create a leaving message to broadcast to all peers
-	leaveMsg := &leaveMessage{
-		ID: c.localNode.ID,
-	}
-
 	// Broadcast the leaving message
-	c.sendMessage(nil, TransportBestEffort, c.getMaxTTL(), nodeLeaveMsg, leaveMsg)
+	c.sendMessage(nil, TransportBestEffort, c.getMaxTTL(), nodeLeaveMsg, nil)
 
 	// Give some time for the leave messages to be sent before shutting down
 	time.Sleep(100 * time.Millisecond)
@@ -787,4 +783,48 @@ func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
 		ids = append(ids, node.ID)
 	}
 	return ids
+}
+
+func (c *Cluster) nodeCleanupManager() {
+	go func() {
+		// Add jitter to prevent all nodes cleaning up at the same time
+		jitter := time.Duration(rand.Int63n(int64(c.config.NodeCleanupInterval / 4)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.NodeCleanupInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.cleanupNodes()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) cleanupNodes() {
+	now := time.Now()
+
+	// Get all leaving and dead nodes
+	leavingNodes := c.nodes.getAllInStates([]NodeState{NodeLeaving})
+	deadNodes := c.nodes.getAllInStates([]NodeState{NodeDead})
+
+	// Move old leaving nodes to dead
+	for _, node := range leavingNodes {
+		if now.Sub(node.getStateChangeTimestamp().Time()) > c.config.LeavingNodeTimeout {
+			c.nodes.updateState(node.ID, NodeDead)
+			c.config.Logger.Debugf("gossip: Moved leaving node to dead: %s", node.ID.String())
+		}
+	}
+
+	// Remove old dead nodes
+	for _, node := range deadNodes {
+		if now.Sub(node.getStateChangeTimestamp().Time()) > c.config.NodeRetentionTime {
+			c.nodes.remove(node.ID)
+			c.config.Logger.Debugf("gossip: Removed dead node: %s", node.ID.String())
+		}
+	}
 }

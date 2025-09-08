@@ -262,6 +262,7 @@ func TestMsgHandlerDispatchReplyHandler(t *testing.T) {
 	// Create mock cluster and transport
 	config := DefaultConfig()
 	config.MsgCodec = codec.NewJsonCodec()
+	config.Transport = NewSocketTransport(config)
 
 	cluster, err := NewCluster(config)
 	if err != nil {

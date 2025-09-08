@@ -44,6 +44,7 @@ type Node struct {
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
+	Remove             bool // Flag indicating node should be removed from cluster
 }
 
 func newNode(id NodeID, advertiseAddr string) *Node {

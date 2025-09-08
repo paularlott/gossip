@@ -136,11 +136,6 @@ func (nl *nodeList) addOrUpdate(node *Node) bool {
 
 // Remove removes a node from the list
 func (nl *nodeList) remove(nodeID NodeID) {
-	// Cannot remove local node - this would be a programming error
-	// The local node should never be removed from the node list
-	if nl.isLocalNode(nodeID) {
-		return
-	}
 	nl.removeIfInState(nodeID, []NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
@@ -159,6 +154,9 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 			if node.state == s {
 				delete(shard.nodes, nodeID)
 				nl.updateCountersForStateChange(node.state, NodeUnknown)
+
+				node.Remove = true
+				nl.notifyNodeStateChanged(node, s)
 				return true
 			}
 		}

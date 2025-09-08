@@ -34,7 +34,7 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			return err
 		}
 
-		if replyData != nil && c != nil && packet.replyChan != nil {
+		if replyData != nil && c != nil && packet.CanReply() {
 			// Update the packet with the reply data
 			packet.AddRef()
 			packet.MessageType = replyMsg

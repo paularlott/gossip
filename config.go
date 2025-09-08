@@ -47,6 +47,9 @@ type Config struct {
 	ForceReliableTransport   bool                    // Force all messages to use reliable transport (TCP/WebSocket)
 	Resolver                 Resolver                // DNS resolver to use for address resolution, if not set uses default resolver
 	PreferIPv6               bool                    // Prefer IPv6 addresses when resolving hostnames (default false = prefer IPv4)
+	NodeCleanupInterval      time.Duration           // How often to run node cleanup
+	NodeRetentionTime        time.Duration           // How long to keep dead nodes before removal
+	LeavingNodeTimeout       time.Duration           // How long to wait before moving leaving nodes to dead
 }
 
 func DefaultConfig() *Config {
@@ -79,5 +82,8 @@ func DefaultConfig() *Config {
 		TTLMultiplier:            1.0,
 		ForceReliableTransport:   false,
 		PreferIPv6:               false,
+		NodeCleanupInterval:      20 * time.Second,
+		NodeRetentionTime:        1 * time.Hour,
+		LeavingNodeTimeout:       30 * time.Second,
 	}
 }

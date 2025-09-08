@@ -15,6 +15,7 @@ func newTestCluster(t *testing.T) *Cluster {
 	config := DefaultConfig()
 	config.NodeShardCount = 4
 	config.MsgCodec = codec.NewJsonCodec()
+	config.Transport = &mockTransport{}
 	// Minimal transport / codec placeholders for tests
 	cluster, err := NewCluster(config)
 	if err != nil {

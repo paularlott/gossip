@@ -60,15 +60,9 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
 	c.config.Logger.Tracef("gossip: handleNodeLeave")
 
-	var msg leaveMessage
-	err := packet.Unmarshal(&msg)
-	if err != nil {
-		return err
-	}
-
 	// Update the node's state to leaving
-	if c.nodes.updateState(msg.ID, NodeLeaving) {
-		c.config.Logger.Field("nodeId", msg.ID.String()).Debugf("gossip: Node is leaving the cluster")
+	if c.nodes.updateState(sender.ID, NodeLeaving) {
+		c.config.Logger.Field("nodeId", sender.ID.String()).Debugf("gossip: Node is leaving the cluster")
 	}
 
 	return nil

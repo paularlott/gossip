@@ -147,10 +147,6 @@ type joinReplyMessage struct {
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
-type leaveMessage struct {
-	ID NodeID `msgpack:"id" json:"id"`
-}
-
 type exchangeNodeState struct {
 	ID                NodeID                 `msgpack:"id" json:"id"`
 	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
