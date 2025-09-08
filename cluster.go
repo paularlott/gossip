@@ -21,21 +21,23 @@ const (
 )
 
 type Cluster struct {
-	config              *Config
-	shutdownContext     context.Context
-	cancelFunc          context.CancelFunc
-	shutdownWg          sync.WaitGroup
-	msgHistory          *messageHistory
-	transport           Transport
-	nodes               *nodeList
-	localNode           *Node
-	handlers            *handlerRegistry
-	broadcastQueue      chan *broadcastQItem
-	gossipEventHandlers *EventHandlers[GossipHandler]
-	gossipTicker        *time.Ticker
-	gossipInterval      time.Duration
-	broadcastQItemPool  sync.Pool
-	peerList            []string
+	config               *Config
+	shutdownContext      context.Context
+	cancelFunc           context.CancelFunc
+	shutdownWg           sync.WaitGroup
+	msgHistory           *messageHistory
+	transport            Transport
+	nodes                *nodeList
+	localNode            *Node
+	handlers             *handlerRegistry
+	broadcastQueue       chan *broadcastQItem
+	metadataGossipTicker *time.Ticker
+	stateGossipTicker    *time.Ticker
+	gossipEventHandlers  *EventHandlers[GossipHandler]
+	gossipTicker         *time.Ticker
+	gossipInterval       time.Duration
+	broadcastQItemPool   sync.Pool
+	peerList             []string
 }
 
 type broadcastQItem struct {
@@ -153,10 +155,9 @@ func (c *Cluster) Start() {
 	// Register the system message handlers
 	c.registerSystemHandlers()
 
-	// State sync
-	c.HandleGossipFunc(c.periodicStateSync)
-
-	// Start the gossip notification manager
+	// Start the gossip runners
+	c.metadataGossipManager()
+	c.stateGossipManager()
 	c.gossipManager()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
@@ -656,6 +657,46 @@ func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
 	return c.gossipEventHandlers.Remove(id)
 }
 
+func (c *Cluster) metadataGossipManager() {
+	go func() {
+		// Small jitter
+		jitter := time.Duration(rand.Int63n(int64(c.config.MetadataGossipInterval / 4)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.MetadataGossipInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.gossipMetadata()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) stateGossipManager() {
+	go func() {
+		// Larger jitter for state sync
+		jitter := time.Duration(rand.Int63n(int64(c.config.StateGossipInterval / 2)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.StateGossipInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.periodicStateSync()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
 func (c *Cluster) gossipManager() {
 	go func() {
 		// Add jitter to prevent all nodes syncing at the same time
@@ -712,6 +753,28 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		c.gossipTicker.Reset(c.gossipInterval)
 		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("gossip: interval decreased")
 	}
+}
+
+func (c *Cluster) gossipMetadata() {
+	// Only send periodic metadata if we haven't sent any metadata updates recently
+	// This avoids redundant traffic when metadata is actively changing
+	lastUpdate := c.localNode.metadata.GetTimestamp().Time()
+	if time.Since(lastUpdate) <= c.config.MetadataGossipInterval/2 {
+		return
+	}
+
+	// Send lightweight metadata updates to a small subset of nodes
+	candidates := c.nodes.getRandomNodes(3, []NodeID{c.localNode.ID})
+	c.sendMessage(
+		candidates,
+		TransportBestEffort,
+		2,
+		metadataUpdateMsg,
+		metadataUpdateMessage{
+			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+			Metadata:          c.localNode.metadata.GetAll(),
+		},
+	)
 }
 
 func (c *Cluster) Logger() Logger {

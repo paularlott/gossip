@@ -25,6 +25,8 @@ type Config struct {
 	ApplicationVersionCheck  ApplicationVersionCheck // The application version check to use for checking compatibility with other nodes
 	GossipInterval           time.Duration           // How often to send gossip messages
 	GossipMaxInterval        time.Duration           // Maximum interval between gossip messages
+	MetadataGossipInterval   time.Duration           // Fast metadata gossip (~500ms)
+	StateGossipInterval      time.Duration           // Medium state sync (~30-60s)
 	TCPDialTimeout           time.Duration           // TCPDialTimeout is the duration to wait for a TCP connection to be established
 	TCPDeadline              time.Duration           // TCPDeadline is the duration to wait for a TCP operation to complete
 	UDPDeadline              time.Duration           // UDPDeadline is the duration to wait for a UDP operation to complete
@@ -56,6 +58,8 @@ func DefaultConfig() *Config {
 		BearerToken:              "",
 		GossipInterval:           5 * time.Second,
 		GossipMaxInterval:        20 * time.Second,
+		MetadataGossipInterval:   500 * time.Millisecond,
+		StateGossipInterval:      45 * time.Second,
 		TCPDialTimeout:           2 * time.Second,
 		TCPDeadline:              2 * time.Second,
 		UDPDeadline:              2 * time.Second,
