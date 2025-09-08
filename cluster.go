@@ -469,13 +469,25 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			localNode.state = state.State
 			localNode.stateChangeTime = state.StateChangeTime
 			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, true)
-			c.nodes.add(localNode, true)
-			c.config.Logger.Debugf("gossip: Added new node from remote state: %s", state.ID.String())
+			if c.nodes.add(localNode, true) {
+				c.config.Logger.Debugf("gossip: Added new node from remote state: %s", state.ID.String())
 
-			// Ping the node to ensure it knows about us
-			go c.healthMonitor.pingNode(localNode)
+				// Ping the node to ensure it knows about us
+				go c.healthMonitor.pingNode(localNode)
+			} else {
+				c.config.Logger.Warnf("gossip: Failed to add node from remote state: %s", state.ID.String())
+			}
 		} else {
 			// Node exists locally, need to merge states intelligently
+			c.config.Logger.Tracef("gossip: Merging state for existing node: %s", state.ID.String())
+
+			// Update advertise address if it has changed (but log it)
+			if localNode.advertiseAddr != state.AdvertiseAddr {
+				c.config.Logger.Debugf("gossip: Node %s advertise address changed: %s -> %s",
+					state.ID.String(), localNode.advertiseAddr, state.AdvertiseAddr)
+				localNode.advertiseAddr = state.AdvertiseAddr
+				localNode.address.Clear() // Force re-resolution
+			}
 
 			// Only accept state changes if remote timestamp is newer
 			if state.StateChangeTime.After(localNode.stateChangeTime) {
@@ -483,11 +495,9 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (remote timestamp newer)",
 						localNode.ID.String(), localNode.state, state.State)
 					c.nodes.updateState(localNode.ID, state.State, &state.StateChangeTime)
-					localNode.stateChangeTime = state.StateChangeTime
 				}
 			} else if state.StateChangeTime.Equal(localNode.stateChangeTime) {
 				// Same timestamp - use deterministic tie-breaking
-				// Prefer more "severe" states: Dead > Leaving > Suspect > Alive
 				if c.shouldPreferRemoteState(localNode.state, state.State) {
 					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (tie-breaking)",
 						localNode.ID.String(), localNode.state, state.State)
