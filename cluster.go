@@ -482,6 +482,9 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, true)
 			c.nodes.add(localNode, true)
 			c.config.Logger.Debugf("gossip: Added new node from remote state: %s", state.ID.String())
+
+			// Ping the node to ensure it knows about us
+			go c.healthMonitor.pingNode(localNode)
 		} else {
 			// Node exists locally, need to merge states intelligently
 
