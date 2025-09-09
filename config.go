@@ -60,6 +60,7 @@ type Config struct {
 	HealthCheckQueueDepth    int                     // Queue depth for health check tasks (e.g., 256)
 	JoinQueueSize            int                     // Queue depth for joining tasks (e.g., 100)
 	NumJoinWorkers           int                     // Number of workers for joining tasks (e.g., 2 - 3)
+	PeerRecoveryInterval     time.Duration           // How often to check peer connectivity (default: 30s)
 }
 
 func DefaultConfig() *Config {
@@ -105,5 +106,6 @@ func DefaultConfig() *Config {
 		HealthCheckQueueDepth:    256,
 		JoinQueueSize:            100,
 		NumJoinWorkers:           3,
+		PeerRecoveryInterval:     30 * time.Second,
 	}
 }

@@ -37,7 +37,9 @@ type Cluster struct {
 	gossipTicker         *time.Ticker
 	gossipInterval       time.Duration
 	broadcastQItemPool   sync.Pool
-	peerList             []string
+	seedPeers            []string
+	lastPeerRecovery     time.Time
+	peerRecoveryTicker   *time.Ticker
 	healthMonitor        *HealthMonitor
 	joinQueue            chan *joinRequest
 }
@@ -112,7 +114,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		gossipEventHandlers: NewEventHandlers[GossipHandler](),
 		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
 		transport:           config.Transport,
-		peerList:            make([]string, 0),
+		seedPeers:           make([]string, 0),
 		joinQueue:           make(chan *joinRequest, config.JoinQueueSize),
 	}
 
@@ -180,6 +182,7 @@ func (c *Cluster) Start() {
 	c.stateGossipManager()
 	c.gossipManager()
 	c.nodeCleanupManager()
+	c.peerRecoveryManager()
 	c.healthMonitor.start()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
@@ -251,7 +254,7 @@ func (c *Cluster) Join(peers []string) error {
 	wg.Wait()
 
 	// Remember the peers so we can use them for recovery
-	c.peerList = append(c.peerList, peers...)
+	c.seedPeers = append(c.seedPeers, peers...)
 
 	return nil
 }
@@ -305,6 +308,68 @@ func (c *Cluster) joinPeer(peerAddr string) {
 				c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
 			}
 		}
+	}
+}
+
+func (c *Cluster) peerRecoveryManager() {
+	go func() {
+		// Initial delay with jitter
+		jitter := time.Duration(rand.Int63n(int64(c.config.PeerRecoveryInterval / 4)))
+		time.Sleep(jitter)
+
+		c.peerRecoveryTicker = time.NewTicker(c.config.PeerRecoveryInterval)
+		defer c.peerRecoveryTicker.Stop()
+
+		for {
+			select {
+			case <-c.peerRecoveryTicker.C:
+				c.checkPeerConnectivity()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) checkPeerConnectivity() {
+	// Skip if no seed peers configured
+	if len(c.seedPeers) == 0 {
+		return
+	}
+
+	// Skip if we recently attempted recovery (prevent spam)
+	if time.Since(c.lastPeerRecovery) < c.config.PeerRecoveryInterval/2 {
+		return
+	}
+
+	aliveCount := c.nodes.getAliveCount()
+	seedPeerCount := len(c.seedPeers)
+
+	// Calculate the threshold (50% of seed peers)
+	threshold := seedPeerCount / 2
+	if seedPeerCount%2 == 1 {
+		threshold++ // Round up for odd numbers
+	}
+
+	// Trigger recovery if alive nodes <= 50% of seed peers
+	if aliveCount <= threshold {
+		reason := fmt.Sprintf("alive nodes (%d) <= 50%% of seed peers (%d/%d)", aliveCount, threshold, seedPeerCount)
+		c.config.Logger.Warnf("gossip: Triggering peer recovery - %s", reason)
+		c.lastPeerRecovery = time.Now()
+
+		for _, peer := range c.seedPeers {
+			req := &joinRequest{
+				nodeAddr: peer,
+			}
+
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("address", peer).Warnf("gossip: Join queue full, dropping join request for node")
+			}
+		}
+	} else {
+		c.config.Logger.Tracef("gossip: Cluster health good: %d alive nodes > %d threshold (50%% of %d seed peers)", aliveCount, threshold, seedPeerCount)
 	}
 }
 
