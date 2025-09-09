@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"fmt"
+	"math"
 )
 
 func (c *Cluster) registerSystemHandlers() {
@@ -13,6 +14,7 @@ func (c *Cluster) registerSystemHandlers() {
 }
 
 func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) {
+	var node *Node
 	var joinMsg joinMessage
 
 	err := packet.Unmarshal(&joinMsg)
@@ -34,41 +36,56 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 	} else if c.config.ApplicationVersionCheck != nil && !c.config.ApplicationVersionCheck(joinMsg.ApplicationVersion) {
 		accepted = false
 		rejectReason = fmt.Sprintf("incompatible application version: %s", joinMsg.ApplicationVersion)
-	} else {
+	} else if sender == nil {
 		// Check add the peer to our list of known peers unless it already exists
-		node := newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
+		node = newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
+		node.state = joinMsg.State
 
-		if c.nodes.addOrUpdate(node) {
-			node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, true)
-		}
+		node = c.nodes.addIfNotExists(node)
+	} else {
+		node = sender
+		c.nodes.updateState(node.ID, joinMsg.State, nil)
 	}
+
+	node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false)
 
 	reply := &joinReplyMessage{
-		Accepted:     accepted,
-		RejectReason: rejectReason,
-		Nodes:        []exchangeNodeState{},
+		Accepted:          accepted,
+		RejectReason:      rejectReason,
+		NodeID:            c.localNode.ID,
+		AdvertiseAddr:     c.localNode.advertiseAddr,
+		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+		Metadata:          c.localNode.metadata.GetAll(),
+		Nodes:             []joinNode{},
 	}
 
-	// Get a random selection of nodes
-	nodes := c.nodes.getAllInStates([]NodeState{NodeAlive})
-	for _, n := range nodes {
-		if n.ID == joinMsg.ID {
-			continue
+	if accepted {
+		// Get a random selection of nodes
+		nodes := c.nodes.getRandomNodesInStates(c.calculateJoinResponseSize(c.nodes.getAliveCount()), []NodeState{NodeAlive}, []NodeID{c.localNode.ID, joinMsg.ID})
+		for _, n := range nodes {
+			reply.Nodes = append(reply.Nodes, joinNode{
+				ID:            n.ID,
+				AdvertiseAddr: n.advertiseAddr,
+			})
 		}
-
-		reply.Nodes = append(reply.Nodes, exchangeNodeState{
-			ID:                n.ID,
-			AdvertiseAddr:     n.advertiseAddr,
-			State:             n.state,
-			StateChangeTime:   n.stateChangeTime,
-			MetadataTimestamp: n.metadata.GetTimestamp(),
-			Metadata:          n.metadata.GetAll(),
-		})
 	}
 
 	return reply, nil
+}
+
+func (c *Cluster) calculateJoinResponseSize(totalAlive int) int {
+	switch {
+	case totalAlive <= 5:
+		return totalAlive // Return all nodes in tiny clusters
+	case totalAlive <= 20:
+		return int(math.Ceil(float64(totalAlive) * 0.8)) // 80% of nodes
+	case totalAlive <= 100:
+		return 20 // Cap at 20 for medium clusters
+	default:
+		return 25 // Cap at 25 for large clusters
+	}
 }
 
 func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
@@ -103,12 +120,10 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
-			ID:                n.ID,
-			AdvertiseAddr:     n.advertiseAddr,
-			State:             n.state,
-			StateChangeTime:   n.stateChangeTime,
-			MetadataTimestamp: n.metadata.GetTimestamp(),
-			Metadata:          n.metadata.GetAll(),
+			ID:              n.ID,
+			AdvertiseAddr:   n.advertiseAddr,
+			State:           n.state,
+			StateChangeTime: n.stateChangeTime,
 		})
 	}
 
@@ -150,9 +165,15 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 
 	// If we don't know the sender, add them to our cluster view
 	if sender == nil {
-		newNode := newNode(pingMsg.SenderID, pingMsg.AdvertiseAddr)
-		if c.nodes.addOrUpdate(newNode) {
+		req := &joinRequest{
+			nodeAddr: pingMsg.AdvertiseAddr,
+		}
+
+		select {
+		case c.joinQueue <- req:
 			c.config.Logger.Tracef("gossip: Added unknown node from ping: %s", pingMsg.SenderID.String())
+		default:
+			c.config.Logger.Field("peer_id", pingMsg.SenderID.String()).Field("address", pingMsg.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
 		}
 	}
 

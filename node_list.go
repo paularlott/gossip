@@ -103,13 +103,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 			shard.mutex.Unlock()
 			return false
 		}
-		// Preserve certain runtime timestamps if newer than incoming (defensive)
-		if existing.lastMessageTime.After(node.lastMessageTime) {
-			node.lastMessageTime = existing.lastMessageTime
-		}
-		if existing.lastMetadataTime.After(node.lastMetadataTime) {
-			node.lastMetadataTime = existing.lastMetadataTime
-		}
+
 		oldState := existing.state
 		shard.nodes[node.ID] = node
 
@@ -132,8 +126,31 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 	return true
 }
 
-func (nl *nodeList) addIfNotExists(node *Node) bool {
-	return nl.add(node, false)
+/**
+ * Add the node if it doesn't exist, if adding a node then it returns the added node; else the existing node.
+ */
+func (nl *nodeList) addIfNotExists(node *Node) *Node {
+	shard := nl.getShard(node.ID)
+	shard.mutex.Lock()
+
+	if existing, exists := shard.nodes[node.ID]; exists {
+		oldState := existing.state
+		shard.mutex.Unlock()
+
+		if oldState != node.state {
+			nl.updateCountersForStateChange(oldState, node.state)
+			nl.notifyNodeStateChanged(existing, oldState)
+		}
+		return existing
+	}
+
+	shard.nodes[node.ID] = node
+	shard.mutex.Unlock()
+
+	nl.updateCountersForStateChange(NodeUnknown, node.state)
+	nl.notifyNodeStateChanged(node, NodeUnknown)
+
+	return node
 }
 
 func (nl *nodeList) addOrUpdate(node *Node) bool {

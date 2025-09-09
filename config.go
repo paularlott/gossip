@@ -58,6 +58,8 @@ type Config struct {
 	MaxDeadNodeRetryTime     time.Duration           // Stop retrying dead nodes after this time
 	HealthWorkerPoolSize     int                     // Number of workers for health checks (e.g., 4)
 	HealthCheckQueueDepth    int                     // Queue depth for health check tasks (e.g., 256)
+	JoinQueueSize            int                     // Queue depth for joining tasks (e.g., 100)
+	NumJoinWorkers           int                     // Number of workers for joining tasks (e.g., 2 - 3)
 }
 
 func DefaultConfig() *Config {
@@ -101,5 +103,7 @@ func DefaultConfig() *Config {
 		MaxDeadNodeRetryTime:     10 * time.Minute, // Stop trying after 10 minutes
 		HealthWorkerPoolSize:     4,
 		HealthCheckQueueDepth:    256,
+		JoinQueueSize:            100,
+		NumJoinWorkers:           3,
 	}
 }

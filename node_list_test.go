@@ -11,12 +11,15 @@ import (
 	"github.com/paularlott/gossip/hlc"
 )
 
-func newTestCluster(t *testing.T) *Cluster {
+type testingInterface interface {
+	Fatalf(format string, args ...interface{})
+}
+
+func newTestCluster(t testingInterface) *Cluster {
 	config := DefaultConfig()
 	config.NodeShardCount = 4
 	config.MsgCodec = codec.NewJsonCodec()
 	config.Transport = &mockTransport{}
-	// Minimal transport / codec placeholders for tests
 	cluster, err := NewCluster(config)
 	if err != nil {
 		t.Fatalf("failed to create cluster: %v", err)
@@ -32,11 +35,13 @@ func TestNodeListAddAndGet(t *testing.T) {
 
 	id := NodeID(uuid.New())
 	n := newNode(id, "127.0.0.1:1000")
-	if !nl.addIfNotExists(n) {
-		t.Fatal("expected addIfNotExists true")
+	addedNode := nl.addIfNotExists(n)
+	if addedNode != n {
+		t.Fatal("expected addIfNotExists to return the added node")
 	}
-	if nl.addIfNotExists(n) {
-		t.Fatal("expected second addIfNotExists false")
+	existingNode := nl.addIfNotExists(n)
+	if existingNode != addedNode {
+		t.Fatal("expected second addIfNotExists to return existing node")
 	}
 
 	g := nl.get(id)
@@ -89,7 +94,7 @@ func TestNodeListRemoveIfInState(t *testing.T) {
 
 // helper to populate a cluster with N nodes
 func populateCluster(t testing.TB, count int) (*Cluster, []NodeID) {
-	c := newTestCluster(&testing.T{})
+	c := newTestCluster(t)
 	ids := make([]NodeID, 0, count)
 	for i := 0; i < count; i++ {
 		id := NodeID(uuid.New())
@@ -103,7 +108,7 @@ func populateCluster(t testing.TB, count int) (*Cluster, []NodeID) {
 }
 
 func BenchmarkNodeListAdd(b *testing.B) {
-	c := newTestCluster(&testing.T{})
+	c := newTestCluster(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -540,7 +545,7 @@ func TestNodeListUpdateCountersForStateChange(t *testing.T) {
 // Additional benchmarks for comprehensive coverage
 
 func BenchmarkNodeListGetShard(b *testing.B) {
-	c := newTestCluster(&testing.T{})
+	c := newTestCluster(b)
 	nl := c.nodes
 	id := NodeID(uuid.New())
 

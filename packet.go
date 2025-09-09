@@ -73,6 +73,8 @@ func (p *Packet) Release() {
 		p.conn = nil
 		p.payload = nil
 		p.replyChan = nil
+		p.SenderID = EmptyNodeID
+		p.TargetNodeID = nil
 
 		packetPool.Put(p)
 	}
@@ -134,23 +136,31 @@ type joinMessage struct {
 	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
+	State              NodeState              `msgpack:"s" json:"s"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type joinReplyMessage struct {
-	Accepted     bool                `msgpack:"acc" json:"acc"`
-	RejectReason string              `msgpack:"rr" json:"rr"`
-	Nodes        []exchangeNodeState `msgpack:"nodes" json:"nodes"`
+	Accepted          bool                   `msgpack:"acc" json:"acc"`
+	RejectReason      string                 `msgpack:"rr" json:"rr"`
+	NodeID            NodeID                 `msgpack:"id" json:"id"`
+	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
+	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	Nodes             []joinNode             `msgpack:"nodes" json:"nodes"`
+}
+
+type joinNode struct {
+	ID            NodeID `msgpack:"id" json:"id"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr"`
 }
 
 type exchangeNodeState struct {
-	ID                NodeID                 `msgpack:"id" json:"id"`
-	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
-	State             NodeState              `msgpack:"s" json:"s"`
-	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
-	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
-	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	ID              NodeID        `msgpack:"id" json:"id"`
+	AdvertiseAddr   string        `msgpack:"addr" json:"addr"`
+	State           NodeState     `msgpack:"s" json:"s"`
+	StateChangeTime hlc.Timestamp `msgpack:"sct" json:"sct"`
 }
 
 type metadataUpdateMessage struct {

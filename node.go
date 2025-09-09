@@ -39,7 +39,6 @@ type Node struct {
 	state              NodeState
 	stateChangeTime    hlc.Timestamp // When the node state last changed (HLC)
 	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)
-	lastMetadataTime   hlc.Timestamp // Timestamp of last metadata update we accepted (mirrors Metadata.GetTimestamp())
 	Metadata           MetadataReader
 	metadata           *Metadata
 	ProtocolVersion    uint16
@@ -52,15 +51,14 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 
 	now := hlc.Now()
 	n := &Node{
-		ID:               id,
-		advertiseAddr:    advertiseAddr,
-		address:          Address{}, // Empty until resolved
-		stateChangeTime:  now,
-		lastMessageTime:  now,
-		lastMetadataTime: 0, // Will be set when metadata is first updated / on join
-		state:            NodeAlive,
-		Metadata:         metadata,
-		metadata:         metadata,
+		ID:              id,
+		advertiseAddr:   advertiseAddr,
+		address:         Address{}, // Empty until resolved
+		stateChangeTime: now,
+		lastMessageTime: now,
+		state:           NodeAlive,
+		Metadata:        metadata,
+		metadata:        metadata,
 	}
 
 	return n
@@ -75,7 +73,7 @@ func (n *Node) getLastActivity() hlc.Timestamp {
 }
 
 func (n *Node) getLastMetadataTimestamp() hlc.Timestamp {
-	return n.lastMetadataTime
+	return n.metadata.GetTimestamp()
 }
 
 func (n *Node) getStateChangeTimestamp() hlc.Timestamp {

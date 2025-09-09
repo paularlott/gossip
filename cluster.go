@@ -39,6 +39,7 @@ type Cluster struct {
 	broadcastQItemPool   sync.Pool
 	peerList             []string
 	healthMonitor        *HealthMonitor
+	joinQueue            chan *joinRequest
 }
 
 type broadcastQItem struct {
@@ -46,6 +47,10 @@ type broadcastQItem struct {
 	transportType TransportType
 	excludePeers  []NodeID
 	peers         []*Node
+}
+
+type joinRequest struct {
+	nodeAddr string
 }
 
 func NewCluster(config *Config) (*Cluster, error) {
@@ -108,6 +113,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
 		transport:           config.Transport,
 		peerList:            make([]string, 0),
+		joinQueue:           make(chan *joinRequest, config.JoinQueueSize),
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -115,6 +121,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
+	cluster.localNode.metadata.update(make(map[string]interface{}, 0), hlc.Now(), true)
 
 	if len(cluster.config.EncryptionKey) == 0 && cluster.config.Cipher != nil {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
@@ -159,6 +166,12 @@ func (c *Cluster) Start() {
 		go c.acceptPackets()
 	}
 
+	// Start join workers
+	for range c.config.NumJoinWorkers {
+		c.shutdownWg.Add(1)
+		go c.joinWorker()
+	}
+
 	// Register the system message handlers
 	c.registerSystemHandlers()
 
@@ -191,6 +204,19 @@ func (c *Cluster) Stop() {
 	c.shutdownWg.Wait()
 
 	c.config.Logger.Infof("gossip: Cluster stopped")
+}
+
+func (c *Cluster) joinWorker() {
+	defer c.shutdownWg.Done()
+
+	for {
+		select {
+		case req := <-c.joinQueue:
+			c.joinPeer(req.nodeAddr)
+		case <-c.shutdownContext.Done():
+			return
+		}
+	}
 }
 
 func (c *Cluster) Join(peers []string) error {
@@ -234,6 +260,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	joinMsg := &joinMessage{
 		ID:                 c.localNode.ID,
 		AdvertiseAddr:      c.localNode.advertiseAddr,
+		State:              c.localNode.state,
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
@@ -241,10 +268,10 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	}
 
 	// Create a node for the peer
-	node := newNode(c.localNode.ID, peerAddr)
-	joinReply := &joinReplyMessage{}
+	node := newNode(EmptyNodeID, peerAddr)
 
 	// Attempt to join the peer
+	joinReply := &joinReplyMessage{}
 	err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 	if err != nil {
 		c.config.Logger.Err(err).Warnf("Failed to join peer: %s", peerAddr)
@@ -252,12 +279,33 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	}
 
 	if !joinReply.Accepted {
-		c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
+		c.config.Logger.Field("address", peerAddr).Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
 		return
 	}
 
-	// Combine the states from the join reply with our own
-	c.combineStates(joinReply.Nodes)
+	node.ID = joinReply.NodeID
+	node.advertiseAddr = joinReply.AdvertiseAddr
+	node = c.nodes.addIfNotExists(node)
+
+	// Update the copy of the nodes metadata
+	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, false)
+
+	// Run the list of nodes that we've been given and attempt to join with any we don't know
+	for _, peer := range joinReply.Nodes {
+		if existing := c.nodes.get(peer.ID); existing == nil {
+			c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Tracef("gossip: Joining unknown peer")
+
+			req := &joinRequest{
+				nodeAddr: peer.AdvertiseAddr,
+			}
+
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+			}
+		}
+	}
 }
 
 // Marks the local node as leaving and broadcasts this state to the cluster
@@ -399,7 +447,7 @@ func (c *Cluster) getMaxTTL() uint8 {
 }
 
 // Exchange the state of a random subset of nodes with the given nodes
-func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) error {
+func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 
 	// Get a random selection of nodes, excluding specified nodes
 	randomNodes := c.nodes.getRandomNodesInStates(
@@ -408,22 +456,20 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) error {
 		exclude,
 	)
 
+	// No nodes to exchange, this is fine
+	if len(randomNodes) == 0 {
+		return
+	}
+
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
-			ID:                n.ID,
-			AdvertiseAddr:     n.advertiseAddr,
-			State:             n.state,
-			StateChangeTime:   n.stateChangeTime,
-			MetadataTimestamp: n.metadata.GetTimestamp(),
-			Metadata:          n.metadata.GetAll(),
+			ID:              n.ID,
+			AdvertiseAddr:   n.advertiseAddr,
+			State:           n.state,
+			StateChangeTime: n.stateChangeTime,
 		})
-	}
-
-	// No nodes to exchange, this is fine
-	if len(peerStates) == 0 {
-		return nil
 	}
 
 	for _, node := range nodes {
@@ -436,17 +482,10 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) error {
 			&peerStates,
 			&peerResponseStates,
 		)
-		if err != nil {
-			if len(nodes) == 1 {
-				return err
-			}
-			continue // multiple nodes so skip failed
+		if err == nil {
+			c.combineStates(peerResponseStates)
 		}
-
-		c.combineStates(peerResponseStates)
 	}
-
-	return nil
 }
 
 // Combine the received states with our own to form a complete view of the cluster state
@@ -464,18 +503,14 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 				continue
 			}
 
-			// Create new node with remote state
-			localNode = newNode(state.ID, state.AdvertiseAddr)
-			localNode.state = state.State
-			localNode.stateChangeTime = state.StateChangeTime
-			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, true)
-			if c.nodes.add(localNode, true) {
-				c.config.Logger.Debugf("gossip: Added new node from remote state: %s", state.ID.String())
+			req := &joinRequest{
+				nodeAddr: state.AdvertiseAddr,
+			}
 
-				// Ping the node to ensure it knows about us
-				go c.healthMonitor.pingNode(localNode)
-			} else {
-				c.config.Logger.Warnf("gossip: Failed to add node from remote state: %s", state.ID.String())
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("peer_id", state.ID.String()).Field("address", state.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
 			}
 		} else {
 			// Node exists locally, need to merge states intelligently
@@ -505,9 +540,6 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 				}
 			}
 			// If local timestamp is newer, keep local state
-
-			// Always try to update metadata (it has its own timestamp checking)
-			localNode.metadata.update(state.Metadata, state.MetadataTimestamp, false)
 		}
 	}
 }
@@ -579,13 +611,6 @@ func (c *Cluster) broadcastWorker() {
 			return
 		}
 	}
-}
-
-// Start periodic state synchronization with random peers
-func (c *Cluster) periodicStateSync() {
-	go func() {
-		c.exchangeState(c.GetCandidates(), []NodeID{c.localNode.ID})
-	}()
 }
 
 func (c *Cluster) LocalNode() *Node {
@@ -726,7 +751,7 @@ func (c *Cluster) stateGossipManager() {
 		for {
 			select {
 			case <-ticker.C:
-				c.periodicStateSync()
+				c.exchangeState(c.GetCandidates(), []NodeID{c.localNode.ID})
 			case <-c.shutdownContext.Done():
 				return
 			}
@@ -800,12 +825,14 @@ func (c *Cluster) gossipMetadata() {
 		return
 	}
 
+	fmt.Println(c.localNode.metadata.GetTimestamp())
+
 	// Send lightweight metadata updates to a small subset of nodes
 	candidates := c.nodes.getRandomNodes(3, []NodeID{c.localNode.ID})
 	c.sendMessage(
 		candidates,
 		TransportBestEffort,
-		2,
+		c.getMaxTTL(),
 		metadataUpdateMsg,
 		metadataUpdateMessage{
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
