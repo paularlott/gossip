@@ -547,7 +547,16 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 			&peerStates,
 			&peerResponseStates,
 		)
-		if err == nil {
+		if err != nil {
+			c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Failed to exchange state with node")
+			c.nodes.updateState(node.ID, NodeSuspect, nil)
+		} else {
+			if node.state == NodeSuspect {
+				c.nodes.updateState(node.ID, NodeAlive, nil)
+				c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Node recovered from suspect")
+			}
+			node.updateLastActivity()
+
 			c.combineStates(peerResponseStates)
 		}
 	}
