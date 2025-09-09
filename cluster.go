@@ -825,8 +825,6 @@ func (c *Cluster) gossipMetadata() {
 		return
 	}
 
-	fmt.Println(c.localNode.metadata.GetTimestamp())
-
 	// Send lightweight metadata updates to a small subset of nodes
 	candidates := c.nodes.getRandomNodes(3, []NodeID{c.localNode.ID})
 	c.sendMessage(
