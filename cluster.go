@@ -139,8 +139,8 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{
 			MetadataTimestamp: ts,
 			Metadata:          data,
-			NodeState:         cluster.localNode.state,
-			StateChangeTime:   cluster.localNode.stateChangeTime,
+			NodeState:         cluster.localNode.localState,
+			StateChangeTime:   cluster.localNode.localStateTimestamp,
 		})
 	})
 
@@ -191,7 +191,7 @@ func (c *Cluster) Start() {
 func (c *Cluster) Stop() {
 	c.config.Logger.Infof("gossip: Starting cluster shutdown")
 
-	if c.localNode.state != NodeLeaving {
+	if c.localNode.localState != NodeLeaving {
 		c.Leave()
 	}
 
@@ -263,7 +263,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	joinMsg := &joinMessage{
 		ID:                 c.localNode.ID,
 		AdvertiseAddr:      c.localNode.advertiseAddr,
-		State:              c.localNode.state,
+		State:              c.localNode.localState,
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
@@ -530,10 +530,9 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 	var peerStates []exchangeNodeState
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
-			ID:              n.ID,
-			AdvertiseAddr:   n.advertiseAddr,
-			State:           n.state,
-			StateChangeTime: n.stateChangeTime,
+			ID:            n.ID,
+			AdvertiseAddr: n.advertiseAddr,
+			State:         n.localState,
 		})
 	}
 
@@ -551,7 +550,7 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 			c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Failed to exchange state with node")
 			c.nodes.updateState(node.ID, NodeSuspect, nil)
 		} else {
-			if node.state == NodeSuspect {
+			if node.localState == NodeSuspect {
 				c.nodes.updateState(node.ID, NodeAlive, nil)
 				c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Node recovered from suspect")
 			}
@@ -592,43 +591,12 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 			// Update advertise address if it has changed (but log it)
 			if localNode.advertiseAddr != state.AdvertiseAddr {
-				c.config.Logger.Debugf("gossip: Node %s advertise address changed: %s -> %s",
-					state.ID.String(), localNode.advertiseAddr, state.AdvertiseAddr)
+				c.config.Logger.Debugf("gossip: Node %s advertise address changed: %s -> %s", state.ID.String(), localNode.advertiseAddr, state.AdvertiseAddr)
 				localNode.advertiseAddr = state.AdvertiseAddr
 				localNode.address.Clear() // Force re-resolution
 			}
-
-			// Only accept state changes if remote timestamp is newer
-			if state.StateChangeTime.After(localNode.stateChangeTime) {
-				if state.State != localNode.state {
-					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (remote timestamp newer)",
-						localNode.ID.String(), localNode.state, state.State)
-					c.nodes.updateState(localNode.ID, state.State, &state.StateChangeTime)
-				}
-			} else if state.StateChangeTime.Equal(localNode.stateChangeTime) {
-				// Same timestamp - use deterministic tie-breaking
-				if c.shouldPreferRemoteState(localNode.state, state.State) {
-					c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v (tie-breaking)",
-						localNode.ID.String(), localNode.state, state.State)
-					c.nodes.updateState(localNode.ID, state.State, &state.StateChangeTime)
-				}
-			}
-			// If local timestamp is newer, keep local state
 		}
 	}
-}
-
-// Helper function for deterministic state preference during tie-breaking
-func (c *Cluster) shouldPreferRemoteState(localState, remoteState NodeState) bool {
-	// Define state severity order (higher number = more severe)
-	severity := map[NodeState]int{
-		NodeAlive:   0,
-		NodeSuspect: 1,
-		NodeLeaving: 2,
-		NodeDead:    3,
-	}
-
-	return severity[remoteState] > severity[localState]
 }
 
 // Enqueue a packet for broadcasting to peers.
@@ -909,8 +877,8 @@ func (c *Cluster) gossipMetadata() {
 		metadataUpdateMessage{
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 			Metadata:          c.localNode.metadata.GetAll(),
-			NodeState:         c.localNode.state,
-			StateChangeTime:   c.localNode.stateChangeTime,
+			NodeState:         c.localNode.localState,
+			StateChangeTime:   c.localNode.localStateTimestamp,
 		},
 	)
 }
@@ -956,7 +924,7 @@ func (c *Cluster) cleanupNodes() {
 
 	// Move old leaving nodes to dead
 	for _, node := range leavingNodes {
-		if now.Sub(node.getStateChangeTimestamp().Time()) > c.config.LeavingNodeTimeout {
+		if now.Sub(node.localStateTimestamp.Time()) > c.config.LeavingNodeTimeout {
 			c.nodes.updateState(node.ID, NodeDead, nil)
 			c.config.Logger.Debugf("gossip: Moved leaving node to dead: %s", node.ID.String())
 		}
@@ -964,7 +932,7 @@ func (c *Cluster) cleanupNodes() {
 
 	// Remove old dead nodes
 	for _, node := range deadNodes {
-		if now.Sub(node.getStateChangeTimestamp().Time()) > c.config.NodeRetentionTime {
+		if now.Sub(node.localStateTimestamp.Time()) > c.config.NodeRetentionTime {
 			c.nodes.remove(node.ID)
 			c.config.Logger.Debugf("gossip: Removed dead node: %s", node.ID.String())
 		}

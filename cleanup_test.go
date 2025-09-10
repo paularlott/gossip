@@ -45,11 +45,11 @@ func TestNodeCleanup(t *testing.T) {
 
 	// Create test nodes
 	leavingNode := newNode(NodeID(uuid.New()), "127.0.0.1:8001")
-	leavingNode.state = NodeLeaving
+	leavingNode.localState = NodeLeaving
 	cluster.nodes.addOrUpdate(leavingNode)
 
 	deadNode := newNode(NodeID(uuid.New()), "127.0.0.1:8002")
-	deadNode.state = NodeDead
+	deadNode.localState = NodeDead
 	cluster.nodes.addOrUpdate(deadNode)
 
 	// Verify nodes exist

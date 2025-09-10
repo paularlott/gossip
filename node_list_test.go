@@ -182,7 +182,7 @@ func TestNodeListAddOrUpdate(t *testing.T) {
 
 	id := NodeID(uuid.New())
 	n1 := newNode(id, "addr1")
-	n1.state = NodeAlive
+	n1.localState = NodeAlive
 
 	// First add
 	if !nl.addOrUpdate(n1) {
@@ -191,15 +191,15 @@ func TestNodeListAddOrUpdate(t *testing.T) {
 
 	// Update existing
 	n2 := newNode(id, "addr2")
-	n2.state = NodeSuspect
+	n2.localState = NodeSuspect
 	if !nl.addOrUpdate(n2) {
 		t.Fatal("addOrUpdate should return true for existing node")
 	}
 
 	// Verify state was updated
 	node := nl.get(id)
-	if node.state != NodeSuspect {
-		t.Fatalf("Expected NodeSuspect, got %v", node.state)
+	if node.localState != NodeSuspect {
+		t.Fatalf("Expected NodeSuspect, got %v", node.localState)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestNodeListGetRandomNodesInStates(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeAlive
+		n.localState = NodeAlive
 		nl.addIfNotExists(n)
 		aliveNodes[i] = id
 	}
@@ -244,7 +244,7 @@ func TestNodeListGetRandomNodesInStates(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeSuspect
+		n.localState = NodeSuspect
 		nl.addIfNotExists(n)
 		suspectNodes[i] = id
 	}
@@ -256,8 +256,8 @@ func TestNodeListGetRandomNodesInStates(t *testing.T) {
 	}
 
 	for _, node := range nodes {
-		if node.state != NodeAlive {
-			t.Fatalf("Expected NodeAlive, got %v", node.state)
+		if node.localState != NodeAlive {
+			t.Fatalf("Expected NodeAlive, got %v", node.localState)
 		}
 	}
 
@@ -294,14 +294,14 @@ func TestNodeListForAllInStates(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeAlive
+		n.localState = NodeAlive
 		nl.addIfNotExists(n)
 	}
 
 	for i := 0; i < 2; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeSuspect
+		n.localState = NodeSuspect
 		nl.addIfNotExists(n)
 	}
 
@@ -336,14 +336,14 @@ func TestNodeListGetAllInStates(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeAlive
+		n.localState = NodeAlive
 		nl.addIfNotExists(n)
 	}
 
 	for i := 0; i < 2; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeDead
+		n.localState = NodeDead
 		nl.addIfNotExists(n)
 	}
 
@@ -375,14 +375,14 @@ func TestNodeListGetAll(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeAlive
+		n.localState = NodeAlive
 		nl.addIfNotExists(n)
 	}
 
 	for i := 0; i < 1; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeSuspect
+		n.localState = NodeSuspect
 		nl.addIfNotExists(n)
 	}
 
@@ -463,7 +463,7 @@ func TestNodeListStateCache(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		id := NodeID(uuid.New())
 		n := newNode(id, "addr")
-		n.state = NodeAlive
+		n.localState = NodeAlive
 		nl.addIfNotExists(n)
 	}
 

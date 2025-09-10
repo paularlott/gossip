@@ -157,10 +157,9 @@ type joinNode struct {
 }
 
 type exchangeNodeState struct {
-	ID              NodeID        `msgpack:"id" json:"id"`
-	AdvertiseAddr   string        `msgpack:"addr" json:"addr"`
-	State           NodeState     `msgpack:"s" json:"s"`
-	StateChangeTime hlc.Timestamp `msgpack:"sct" json:"sct"`
+	ID            NodeID    `msgpack:"id" json:"id"`
+	AdvertiseAddr string    `msgpack:"addr" json:"addr"`
+	State         NodeState `msgpack:"s" json:"s"`
 }
 
 type metadataUpdateMessage struct {

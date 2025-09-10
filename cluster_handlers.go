@@ -41,7 +41,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		node = newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
-		node.state = joinMsg.State
+		node.localState = joinMsg.State
 
 		node = c.nodes.addIfNotExists(node)
 	} else {
@@ -120,10 +120,9 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
-			ID:              n.ID,
-			AdvertiseAddr:   n.advertiseAddr,
-			State:           n.state,
-			StateChangeTime: n.stateChangeTime,
+			ID:            n.ID,
+			AdvertiseAddr: n.advertiseAddr,
+			State:         n.localState,
 		})
 	}
 
@@ -143,12 +142,9 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		c.nodes.notifyMetadataChanged(sender)
 	}
 
-	if metadataUpdate.StateChangeTime.After(sender.stateChangeTime) {
-		if metadataUpdate.NodeState != sender.state {
-			c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata",
-				sender.ID.String(), sender.state, metadataUpdate.NodeState)
-			c.nodes.updateState(sender.ID, metadataUpdate.NodeState, &metadataUpdate.StateChangeTime)
-		}
+	if metadataUpdate.StateChangeTime.After(sender.localStateTimestamp) && metadataUpdate.NodeState != sender.localState {
+		c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata", sender.ID.String(), sender.localState, metadataUpdate.NodeState)
+		c.nodes.updateState(sender.ID, metadataUpdate.NodeState, &metadataUpdate.StateChangeTime)
 	}
 
 	return nil

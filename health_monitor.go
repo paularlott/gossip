@@ -134,7 +134,7 @@ func (hm *HealthMonitor) retryDeadNodes() {
 	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead})
 	for _, node := range deadNodes {
 		// Only retry dead nodes that haven't been dead too long
-		timeSinceDead := hlc.Now().Time().Sub(node.getStateChangeTimestamp().Time())
+		timeSinceDead := hlc.Now().Time().Sub(node.localStateTimestamp.Time())
 		if timeSinceDead < hm.cluster.config.MaxDeadNodeRetryTime {
 			hm.enqueueHealthCheck(node.ID, DeadNodeRetry)
 		}
@@ -195,7 +195,7 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 			hm.cluster.config.Logger.Debugf("gossip: Node recovered from suspect: %s", node.ID.String())
 		} else {
 			// Still no response, check if should mark as dead
-			timeSinceSuspect := hlc.Now().Time().Sub(node.getStateChangeTimestamp().Time())
+			timeSinceSuspect := hlc.Now().Time().Sub(node.localStateTimestamp.Time())
 			if timeSinceSuspect > hm.cluster.config.DeadNodeTimeout {
 				hm.cluster.nodes.updateState(node.ID, NodeDead, nil)
 				hm.cluster.config.Logger.Debugf("gossip: Marked suspect node as dead: %s", node.ID.String())
