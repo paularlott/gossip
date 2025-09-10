@@ -119,8 +119,10 @@ func (ng *NodeGroup) handleNodeStateChange(node *Node, prevState NodeState) {
 		// Node is now alive, check if it matches criteria
 		if ng.nodeMatchesCriteria(node) {
 			ng.addNode(node)
+		} else {
+			ng.removeNode(node)
 		}
-	} else if prevState == NodeAlive || prevState == NodeSuspect {
+	} else {
 		// Node is no longer alive, remove it
 		ng.removeNode(node)
 	}

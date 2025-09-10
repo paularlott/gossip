@@ -129,8 +129,10 @@ func (dng *DataNodeGroup[T]) handleNodeStateChange(node *Node, prevState NodeSta
 		// Node is now alive, check if it matches criteria
 		if dng.nodeMatchesCriteria(node) {
 			dng.addNode(node)
+		} else {
+			dng.removeNode(node)
 		}
-	} else if prevState == NodeAlive || prevState == NodeSuspect {
+	} else {
 		// Node is no longer alive, remove it
 		dng.removeNode(node)
 	}
