@@ -194,12 +194,14 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 
 	// Remove the node
 	delete(shard.nodes, nodeID)
-	node.Remove = true
 
 	// Release lock before callbacks
 	shard.mutex.Unlock()
 
-	nl.updateCountersForStateChange(matchedState, NodeUnknown)
+	node.state = NodeRemoved
+	node.stateChangeTime = hlc.Now()
+
+	nl.updateCountersForStateChange(matchedState, NodeRemoved)
 	nl.notifyNodeStateChanged(node, matchedState)
 	return true
 }

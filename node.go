@@ -9,9 +9,10 @@ type NodeState uint8
 const (
 	NodeUnknown NodeState = iota
 	NodeAlive
-	NodeLeaving
-	NodeDead
 	NodeSuspect
+	NodeDead
+	NodeLeaving
+	NodeRemoved
 )
 
 func (ns NodeState) String() string {
@@ -20,12 +21,14 @@ func (ns NodeState) String() string {
 		return "Unknown"
 	case NodeAlive:
 		return "Alive"
-	case NodeLeaving:
-		return "Leaving"
-	case NodeDead:
-		return "Dead"
 	case NodeSuspect:
 		return "Suspect"
+	case NodeDead:
+		return "Dead"
+	case NodeLeaving:
+		return "Leaving"
+	case NodeRemoved:
+		return "Removed"
 	default:
 		return "Unknown"
 	}
@@ -43,7 +46,6 @@ type Node struct {
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
-	Remove             bool // Flag indicating node should be removed from cluster
 }
 
 func newNode(id NodeID, advertiseAddr string) *Node {
@@ -94,6 +96,10 @@ func (node *Node) Alive() bool {
 
 func (node *Node) Suspect() bool {
 	return node.state == NodeSuspect
+}
+
+func (node *Node) Removed() bool {
+	return node.state == NodeRemoved
 }
 
 // Address returns a pointer to the node's resolved address

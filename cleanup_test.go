@@ -15,17 +15,19 @@ type mockTransport struct {
 }
 
 func (m *mockTransport) Name() string { return "mock" }
-func (m *mockTransport) Start(ctx context.Context, wg *sync.WaitGroup) error { 
+func (m *mockTransport) Start(ctx context.Context, wg *sync.WaitGroup) error {
 	m.ch = make(chan *Packet)
-	return nil 
+	return nil
 }
-func (m *mockTransport) Send(transportType TransportType, node *Node, packet *Packet) error { return nil }
+func (m *mockTransport) Send(transportType TransportType, node *Node, packet *Packet) error {
+	return nil
+}
 func (m *mockTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) { return nil, nil }
-func (m *mockTransport) PacketChannel() chan *Packet { 
+func (m *mockTransport) PacketChannel() chan *Packet {
 	if m.ch == nil {
 		m.ch = make(chan *Packet)
 	}
-	return m.ch 
+	return m.ch
 }
 
 func TestNodeCleanup(t *testing.T) {
@@ -92,14 +94,14 @@ func TestNodeRemoveFlag(t *testing.T) {
 	// Track removal notifications
 	var removedNode *Node
 	cluster.HandleNodeStateChangeFunc(func(node *Node, prevState NodeState) {
-		if node.Remove {
+		if node.Removed() {
 			removedNode = node
 		}
 	})
 
 	// Create and add test node
 	testNode := newNode(NodeID(uuid.New()), "127.0.0.1:8001")
-	testNode.state = NodeDead
+	//testNode.state = NodeDead
 	cluster.nodes.addOrUpdate(testNode)
 
 	// Remove the node
@@ -112,7 +114,7 @@ func TestNodeRemoveFlag(t *testing.T) {
 	if removedNode == nil {
 		t.Error("Expected removal notification")
 	}
-	if removedNode != nil && !removedNode.Remove {
+	if removedNode != nil && !removedNode.Removed() {
 		t.Error("Expected Remove flag to be true")
 	}
 }
