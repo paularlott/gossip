@@ -104,13 +104,13 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 			return false
 		}
 
-		oldState := existing.localState
+		oldState := existing.observedState
 		shard.nodes[node.ID] = node
 
 		shard.mutex.Unlock()
 
-		if oldState != node.localState {
-			nl.updateCountersForStateChange(oldState, node.localState)
+		if oldState != node.observedState {
+			nl.updateCountersForStateChange(oldState, node.observedState)
 			nl.notifyNodeStateChanged(node, oldState)
 		}
 		return true
@@ -121,7 +121,7 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 
 	shard.mutex.Unlock()
 
-	nl.updateCountersForStateChange(NodeUnknown, node.localState)
+	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
 	nl.notifyNodeStateChanged(node, NodeUnknown)
 	return true
 }
@@ -134,11 +134,11 @@ func (nl *nodeList) addIfNotExists(node *Node) *Node {
 	shard.mutex.Lock()
 
 	if existing, exists := shard.nodes[node.ID]; exists {
-		oldState := existing.localState
+		oldState := existing.observedState
 		shard.mutex.Unlock()
 
-		if oldState != node.localState {
-			nl.updateCountersForStateChange(oldState, node.localState)
+		if oldState != node.observedState {
+			nl.updateCountersForStateChange(oldState, node.observedState)
 			nl.notifyNodeStateChanged(existing, oldState)
 		}
 		return existing
@@ -147,7 +147,7 @@ func (nl *nodeList) addIfNotExists(node *Node) *Node {
 	shard.nodes[node.ID] = node
 	shard.mutex.Unlock()
 
-	nl.updateCountersForStateChange(NodeUnknown, node.localState)
+	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
 	nl.notifyNodeStateChanged(node, NodeUnknown)
 
 	return node
@@ -180,7 +180,7 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 	var matchedState NodeState
 	var found bool
 	for _, s := range states {
-		if node.localState == s {
+		if node.observedState == s {
 			matchedState = s
 			found = true
 			break
@@ -198,8 +198,8 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 	// Release lock before callbacks
 	shard.mutex.Unlock()
 
-	node.localState = NodeRemoved
-	node.localStateTimestamp = hlc.Now()
+	node.observedState = NodeRemoved
+	node.observedStateTime = hlc.Now()
 
 	nl.updateCountersForStateChange(matchedState, NodeRemoved)
 	nl.notifyNodeStateChanged(node, matchedState)
@@ -217,7 +217,7 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 }
 
 // UpdateState updates the state of a node using a local timestamp
-func (nl *nodeList) updateState(nodeID NodeID, newState NodeState, ts *hlc.Timestamp) bool {
+func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 	shard := nl.getShard(nodeID)
 
 	shard.mutex.Lock()
@@ -227,24 +227,18 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState, ts *hlc.Times
 		return false
 	}
 
-	oldState := node.localState
+	oldState := node.observedState
 	if oldState == newState {
 		shard.mutex.Unlock()
 		return true
 	}
 
-	node.localState = newState
-	if ts != nil {
-		node.localStateTimestamp = *ts
-	} else {
-		node.localStateTimestamp = hlc.Now()
-	}
+	node.observedState = newState
+	node.observedStateTime = hlc.Now()
 	shard.mutex.Unlock()
 
-	if newState != NodeAlive {
-		// Clear cached resolved address to force re-resolution later
-		node.address.Clear()
-	}
+	// Clear cached resolved address to force re-resolution later
+	node.address.Clear()
 
 	nl.updateCountersForStateChange(oldState, newState)
 	nl.notifyNodeStateChanged(node, oldState)
@@ -328,7 +322,7 @@ func (nl *nodeList) getCachedNodesInStates(states []NodeState) []*Node {
 	for _, shard := range nl.shards {
 		shard.mutex.RLock()
 		for _, node := range shard.nodes {
-			if _, ok := stateSet[node.localState]; ok {
+			if _, ok := stateSet[node.observedState]; ok {
 				allNodes = append(allNodes, node)
 			}
 		}

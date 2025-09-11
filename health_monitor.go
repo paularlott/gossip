@@ -134,7 +134,7 @@ func (hm *HealthMonitor) retryDeadNodes() {
 	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead})
 	for _, node := range deadNodes {
 		// Only retry dead nodes that haven't been dead too long
-		timeSinceDead := hlc.Now().Time().Sub(node.localStateTimestamp.Time())
+		timeSinceDead := hlc.Now().Time().Sub(node.observedStateTime.Time())
 		if timeSinceDead < hm.cluster.config.MaxDeadNodeRetryTime {
 			hm.enqueueHealthCheck(node.ID, DeadNodeRetry)
 		}
@@ -183,21 +183,21 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 			node.updateLastActivity()
 		} else {
 			// No response, mark as suspect
-			hm.cluster.nodes.updateState(node.ID, NodeSuspect, nil)
+			hm.cluster.nodes.updateState(node.ID, NodeSuspect)
 			hm.cluster.config.Logger.Debugf("gossip: Marked node as suspect: %s", node.ID.String())
 		}
 
 	case SuspectRetry:
 		if success {
 			// Node recovered, mark as alive
-			hm.cluster.nodes.updateState(node.ID, NodeAlive, nil)
+			hm.cluster.nodes.updateState(node.ID, NodeAlive)
 			node.updateLastActivity()
 			hm.cluster.config.Logger.Debugf("gossip: Node recovered from suspect: %s", node.ID.String())
 		} else {
 			// Still no response, check if should mark as dead
-			timeSinceSuspect := hlc.Now().Time().Sub(node.localStateTimestamp.Time())
+			timeSinceSuspect := hlc.Now().Time().Sub(node.observedStateTime.Time())
 			if timeSinceSuspect > hm.cluster.config.DeadNodeTimeout {
-				hm.cluster.nodes.updateState(node.ID, NodeDead, nil)
+				hm.cluster.nodes.updateState(node.ID, NodeDead)
 				hm.cluster.config.Logger.Debugf("gossip: Marked suspect node as dead: %s", node.ID.String())
 			}
 		}
@@ -205,7 +205,7 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 	case DeadNodeRetry:
 		if success {
 			// Dead node came back to life!
-			hm.cluster.nodes.updateState(node.ID, NodeAlive, nil)
+			hm.cluster.nodes.updateState(node.ID, NodeAlive)
 			node.updateLastActivity()
 			hm.cluster.config.Logger.Infof("gossip: Dead node recovered: %s", node.ID.String())
 		}
@@ -234,5 +234,10 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 		hm.cluster.config.Logger.Tracef("gossip: Updated node address: %s -> %s", node.ID.String(), pongMessage.AdvertiseAddr)
 	}
 
-	return err == nil
+	// Update metadata
+	if node.metadata.update(pongMessage.Metadata, pongMessage.MetadataTimestamp, false) {
+		hm.cluster.nodes.notifyMetadataChanged(node)
+	}
+
+	return true
 }

@@ -198,7 +198,7 @@ func (le *LeaderElection) HasLeader() bool {
 
 	// Check if the leader node still exists and is eligible
 	leader := le.cluster.GetNode(le.leaderID)
-	if leader == nil || leader.GetState() != gossip.NodeAlive {
+	if leader == nil || leader.GetObservedState() != gossip.NodeAlive {
 		return false
 	}
 
@@ -436,7 +436,7 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	le.cluster.Logger().
 		Field("nodeId", node.ID.String()).
 		Field("prevState", prevState.String()).
-		Field("newState", node.GetState().String()).
+		Field("newState", node.GetObservedState().String()).
 		Debugf("Node state changed")
 
 	le.lock.RLock()
@@ -445,7 +445,7 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	le.lock.RUnlock()
 
 	// If the current leader has failed...
-	if isCurrentLeader && node.GetState() != gossip.NodeAlive {
+	if isCurrentLeader && node.GetObservedState() != gossip.NodeAlive {
 		le.cluster.Logger().
 			Field("leaderId", node.ID.String()).
 			Field("currentTerm", le.currentTerm).

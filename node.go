@@ -36,16 +36,16 @@ func (ns NodeState) String() string {
 
 // Struct to hold our view of the state of a node within the cluster
 type Node struct {
-	ID                  NodeID
-	advertiseAddr       string        // Raw advertise address (may contain SRV records, URLs, etc.)
-	address             Address       // Resolved address (IP/Port or WebSocket URL) - resolved locally when needed
-	localState          NodeState     // The local view of the node's state
-	localStateTimestamp hlc.Timestamp // Local timestamp for the node's state (updated by the node)
-	lastMessageTime     hlc.Timestamp // When we last received any message from this node (passive liveness check)
-	Metadata            MetadataReader
-	metadata            *Metadata
-	ProtocolVersion     uint16
-	ApplicationVersion  string
+	ID                 NodeID
+	advertiseAddr      string        // Raw advertise address (may contain SRV records, URLs, etc.)
+	address            Address       // Resolved address (IP/Port or WebSocket URL) - resolved locally when needed
+	observedState      NodeState     // The local view of the node's state
+	observedStateTime  hlc.Timestamp // Local timestamp for the node's state (updated by the node)
+	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)
+	Metadata           MetadataReader
+	metadata           *Metadata
+	ProtocolVersion    uint16
+	ApplicationVersion string
 }
 
 func newNode(id NodeID, advertiseAddr string) *Node {
@@ -53,14 +53,14 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 
 	now := hlc.Now()
 	n := &Node{
-		ID:                  id,
-		advertiseAddr:       advertiseAddr,
-		address:             Address{}, // Empty until resolved
-		localState:          NodeAlive,
-		localStateTimestamp: now,
-		lastMessageTime:     now,
-		Metadata:            metadata,
-		metadata:            metadata,
+		ID:                id,
+		advertiseAddr:     advertiseAddr,
+		address:           Address{}, // Empty until resolved
+		observedState:     NodeAlive,
+		observedStateTime: now,
+		lastMessageTime:   now,
+		Metadata:          metadata,
+		metadata:          metadata,
 	}
 
 	return n
@@ -74,24 +74,24 @@ func (n *Node) getLastActivity() hlc.Timestamp {
 	return n.lastMessageTime
 }
 
-func (node *Node) GetState() NodeState {
-	return node.localState
+func (node *Node) GetObservedState() NodeState {
+	return node.observedState
 }
 
 func (node *Node) DeadOrLeft() bool {
-	return node.localState == NodeDead || node.localState == NodeLeaving
+	return node.observedState == NodeDead || node.observedState == NodeLeaving
 }
 
 func (node *Node) Alive() bool {
-	return node.localState == NodeAlive
+	return node.observedState == NodeAlive
 }
 
 func (node *Node) Suspect() bool {
-	return node.localState == NodeSuspect
+	return node.observedState == NodeSuspect
 }
 
 func (node *Node) Removed() bool {
-	return node.localState == NodeRemoved
+	return node.observedState == NodeRemoved
 }
 
 // Address returns a pointer to the node's resolved address

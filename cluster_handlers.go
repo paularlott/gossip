@@ -41,12 +41,12 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		node = newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
-		node.localState = joinMsg.State
+		node.observedState = joinMsg.State
 
 		node = c.nodes.addIfNotExists(node)
 	} else {
 		node = sender
-		c.nodes.updateState(node.ID, joinMsg.State, nil)
+		c.nodes.updateState(node.ID, joinMsg.State)
 	}
 
 	node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false)
@@ -92,7 +92,7 @@ func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
 	c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handleNodeLeave")
 
 	// Update the node's state to leaving
-	if c.nodes.updateState(sender.ID, NodeLeaving, nil) {
+	if c.nodes.updateState(sender.ID, NodeLeaving) {
 		c.config.Logger.Field("nodeId", sender.ID.String()).Debugf("gossip: Node is leaving the cluster")
 	}
 
@@ -112,17 +112,18 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 
 	// Get a random selection of nodes
 	nodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeSuspect, NodeDead},
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
 		[]NodeID{sender.ID},
 	)
 
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
 		localStates = append(localStates, exchangeNodeState{
-			ID:            n.ID,
-			AdvertiseAddr: n.advertiseAddr,
-			State:         n.localState,
+			ID:             n.ID,
+			AdvertiseAddr:  n.advertiseAddr,
+			State:          n.observedState,
+			StateTimestamp: n.observedStateTime,
 		})
 	}
 
@@ -142,9 +143,9 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		c.nodes.notifyMetadataChanged(sender)
 	}
 
-	if metadataUpdate.StateChangeTime.After(sender.localStateTimestamp) && metadataUpdate.NodeState != sender.localState {
-		c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata", sender.ID.String(), sender.localState, metadataUpdate.NodeState)
-		c.nodes.updateState(sender.ID, metadataUpdate.NodeState, &metadataUpdate.StateChangeTime)
+	if metadataUpdate.NodeState != sender.observedState {
+		c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata", sender.ID.String(), sender.observedState, metadataUpdate.NodeState)
+		c.nodes.updateState(sender.ID, metadataUpdate.NodeState)
 	}
 
 	return nil
@@ -174,7 +175,10 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 	}
 
 	return &pongMessage{
-		NodeID:        c.localNode.ID,
-		AdvertiseAddr: c.localNode.advertiseAddr,
+		NodeID:            c.localNode.ID,
+		AdvertiseAddr:     c.localNode.advertiseAddr,
+		NodeState:         c.localNode.observedState,
+		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+		Metadata:          c.localNode.metadata.GetAll(),
 	}, nil
 }

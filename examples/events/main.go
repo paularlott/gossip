@@ -82,7 +82,7 @@ func main() {
 
 	// Register event listeners
 	cluster.HandleNodeStateChangeFunc(func(node *gossip.Node, prevState gossip.NodeState) {
-		log.Info().Msgf("Node %s state changed from %s to %s", node.ID, prevState.String(), node.GetState().String())
+		log.Info().Msgf("Node %s state changed from %s to %s", node.ID, prevState.String(), node.GetObservedState().String())
 	})
 	cluster.HandleNodeMetadataChangeFunc(func(node *gossip.Node) {
 		log.Info().Msgf("Node %s metadata changed", node.ID)

@@ -157,16 +157,16 @@ type joinNode struct {
 }
 
 type exchangeNodeState struct {
-	ID            NodeID    `msgpack:"id" json:"id"`
-	AdvertiseAddr string    `msgpack:"addr" json:"addr"`
-	State         NodeState `msgpack:"s" json:"s"`
+	ID             NodeID        `msgpack:"id" json:"id"`
+	AdvertiseAddr  string        `msgpack:"addr" json:"addr"`
+	State          NodeState     `msgpack:"s" json:"s"`
+	StateTimestamp hlc.Timestamp `msgpack:"sct" json:"sct"`
 }
 
 type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	NodeState         NodeState              `msgpack:"state" json:"state"`
-	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
 }
 
 type pingMessage struct {
@@ -175,6 +175,9 @@ type pingMessage struct {
 }
 
 type pongMessage struct {
-	NodeID        NodeID `msgpack:"nid" json:"nid"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr"`
+	NodeID            NodeID                 `msgpack:"nid" json:"nid"`
+	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
+	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	NodeState         NodeState              `msgpack:"state" json:"state"`
 }

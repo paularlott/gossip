@@ -87,7 +87,7 @@ func main() {
 					fmt.Printf("  Nodes:\n")
 					for _, node := range cluster.Nodes() {
 						if node.ID != cluster.LocalNode().ID {
-							fmt.Printf("    %s: %s\n", node.ID.String()[:8], node.GetState().String())
+							fmt.Printf("    %s: %s\n", node.ID.String()[:8], node.GetObservedState().String())
 						}
 					}
 				}

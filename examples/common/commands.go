@@ -136,7 +136,7 @@ func handlePeersCommand(c *gossip.Cluster) {
 			metaKV = append(metaKV, fmt.Sprintf("%s = %s", k, v))
 		}
 
-		data = append(data, []string{p.ID.String(), p.AdvertiseAddr(), p.GetState().String(), strings.Join(metaKV, ", ")})
+		data = append(data, []string{p.ID.String(), p.AdvertiseAddr(), p.GetObservedState().String(), strings.Join(metaKV, ", ")})
 	}
 
 	PrintTable(data)
