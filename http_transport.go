@@ -222,10 +222,13 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 
 	uri := node.AdvertiseAddr()
 
+	var err error
+	var u *url.URL
+
 	// If url starts with srv+ then remove it and resolve the actual url
 	if strings.HasPrefix(uri, "srv+") || strings.HasPrefix(uri, "SRV+") {
 		// Parse the url excluding the srv+ prefix
-		u, err := url.Parse(uri[4:])
+		u, err = url.Parse(uri[4:])
 		if err != nil {
 			return fmt.Errorf("failed to parse SRV URL %s: %v", uri[4:], err)
 		}
@@ -242,15 +245,21 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		// Update the URL with the service-selected port and hostname for SNI
 		host := net.JoinHostPort(u.Hostname(), strconv.Itoa(int(srv[0].Port)))
 		u.Host = host
-
-		if ht.config.BindAddr == "" {
-			u.Path = "/"
-		} else {
-			u.Path = ht.config.BindAddr
+	} else {
+		u, err = url.Parse(uri)
+		if err != nil {
+			return fmt.Errorf("failed to parse SRV URL %s: %v", uri[4:], err)
 		}
-
-		uri = u.String()
 	}
+
+	// Replace path
+	if ht.config.BindAddr == "" {
+		u.Path = "/"
+	} else {
+		u.Path = ht.config.BindAddr
+	}
+
+	uri = u.String()
 
 	if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
 		uri = "https://" + uri
