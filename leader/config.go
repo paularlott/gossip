@@ -19,7 +19,7 @@ func DefaultConfig() *Config {
 		LeaderCheckInterval:  1 * time.Second,
 		LeaderTimeout:        3 * time.Second,
 		HeartbeatMessageType: gossip.ReservedMsgsStart + 1,
-		QuorumPercentage:     51,
+		QuorumPercentage:     60,
 		MetadataCriteria:     nil,
 	}
 }

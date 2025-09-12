@@ -41,7 +41,7 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 		currentTerm:   0,
 		ctx:           ctx,
 		cancel:        cancel,
-		eventHandlers: newLeaderEventHandlers(),
+		eventHandlers: newLeaderEventHandlers(cluster.Logger()),
 	}
 
 	// Register event listeners
@@ -61,23 +61,26 @@ func (le *LeaderElection) HandleEventFunc(eventType EventType, handler LeaderEve
 
 // Start the election check process
 func (le *LeaderElection) Start() {
-	go func() {
-		// Kick off election
-		le.checkAndElectLeader()
+	// Kick off initial election
+	le.checkAndElectLeader()
 
-		// Start periodic checks and elections
-		ticker := time.NewTicker(le.config.LeaderCheckInterval)
-		defer ticker.Stop()
+	// Start periodic checks in a goroutine
+	go le.runElectionLoop()
+}
 
-		for {
-			select {
-			case <-ticker.C:
-				le.checkAndElectLeader()
-			case <-le.ctx.Done():
-				return
-			}
+// runElectionLoop runs the periodic election checks
+func (le *LeaderElection) runElectionLoop() {
+	ticker := time.NewTicker(le.config.LeaderCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			le.checkAndElectLeader()
+		case <-le.ctx.Done():
+			return
 		}
-	}()
+	}
 }
 
 // Stop terminates the leader election process
@@ -159,20 +162,13 @@ func (le *LeaderElection) HasLeader() bool {
 		return false
 	}
 
-	// For non-participating nodes, use all alive nodes for quorum calculation
-	// For participating nodes, use eligible nodes
+	// Cache eligible nodes to avoid multiple calls
 	var eligibleNodes []*gossip.Node
 	var isParticipating bool
 
 	if le.nodeGroup != nil {
 		isParticipating = le.nodeGroup.Contains(le.cluster.LocalNode().ID)
-		if isParticipating {
-			eligibleNodes = le.getEligibleNodes()
-		} else {
-			// Non-participating nodes should use the eligible nodes for quorum calculation
-			// but they don't participate in the election themselves
-			eligibleNodes = le.nodeGroup.GetNodes(nil)
-		}
+		eligibleNodes = le.nodeGroup.GetNodes(nil)
 	} else {
 		eligibleNodes = le.cluster.AliveNodes()
 		isParticipating = true
@@ -411,22 +407,8 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 				Field("term", le.currentTerm).
 				Debugf("Leader updated via heartbeat")
 			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
-		} /*else if le.leaderID == sender.ID {
-			le.cluster.Logger().
-				Field("senderId", sender.ID.String()).
-				Debugf("Heartbeat refresh from leader")
-		}*/
-	} /*else {
-		// Log why the heartbeat was ignored
-		le.cluster.Logger().
-			Field("senderId", sender.ID.String()).
-			Field("senderTerm", msg.Term).
-			Field("currentTerm", le.currentTerm).
-			Field("senderTime", msg.LeaderTime).
-			Field("leaderTime", le.leaderTime).
-			Field("leaderId", le.leaderID).
-			Debugf("Ignoring stale or lower priority heartbeat")
-	}*/
+		}
+	}
 
 	return nil
 }

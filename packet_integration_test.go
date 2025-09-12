@@ -20,7 +20,7 @@ func TestPacketIntegrationFullCluster(t *testing.T) {
 	clusters := make([]*Cluster, 3)
 	for i := range clusters {
 		config := DefaultConfig()
-		config.NodeID = fmt.Sprintf("node-%d", i)
+		config.NodeID = uuid.NewString()
 		config.BindAddr = fmt.Sprintf("127.0.0.1:%d", 9000+i)
 		config.Transport = &mockTransport{}
 		config.MsgCodec = &mockCodec{}
@@ -36,7 +36,7 @@ func TestPacketIntegrationFullCluster(t *testing.T) {
 	// Test message handling with packet tracking
 	const CustomMsg MessageType = UserMsg + 1
 	// Track packets for testing
-	
+
 	for _, cluster := range clusters {
 		cluster.HandleFunc(CustomMsg, func(sender *Node, packet *Packet) error {
 			// Simulate processing
@@ -249,7 +249,7 @@ func TestPacketBroadcastQueueFull(t *testing.T) {
 func TestPacketConnectionBasedReply(t *testing.T) {
 	// Create mock connection
 	conn := &mockConn{}
-	
+
 	packet := NewPacket()
 	packet.MessageType = UserMsg
 	packet.SenderID = NodeID(uuid.New())
@@ -299,9 +299,9 @@ func TestPacketRaceConditions(t *testing.T) {
 	const numGoroutines = 100
 
 	packet := NewPacket()
-	
+
 	var wg sync.WaitGroup
-	
+
 	// Multiple goroutines adding references
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
@@ -312,14 +312,14 @@ func TestPacketRaceConditions(t *testing.T) {
 			ref.Release()
 		}()
 	}
-	
+
 	wg.Wait()
-	
+
 	// Original packet should still be valid
 	if packet.refCount.Load() != 1 {
 		t.Errorf("Expected ref count 1, got %d", packet.refCount.Load())
 	}
-	
+
 	packet.Release()
 }
 
@@ -332,10 +332,10 @@ func TestPacketMemoryUsage(t *testing.T) {
 		largePayload[i] = byte(i % 256)
 	}
 	packet.SetPayload(largePayload)
-	
+
 	// Release packet
 	packet.Release()
-	
+
 	// Get new packet - payload should be cleared
 	newPacket := NewPacket()
 	if len(newPacket.Payload()) > 0 {
