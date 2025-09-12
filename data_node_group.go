@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"math/rand"
-	"strings"
 	"sync"
 )
 
@@ -57,6 +56,8 @@ func NewDataNodeGroup[T any](
 	criteria map[string]string,
 	options *DataNodeGroupOptions[T],
 ) *DataNodeGroup[T] {
+	validateNodeGroupParams(cluster, criteria)
+
 	// Use same shard count as cluster's nodeList for consistency
 	shardCount := cluster.config.NodeShardCount
 
@@ -107,20 +108,7 @@ func (dng *DataNodeGroup[T]) initializeWithExistingNodes() {
 
 // nodeMatchesCriteria checks if a node matches all the metadata criteria
 func (dng *DataNodeGroup[T]) nodeMatchesCriteria(node *Node) bool {
-	for key, expectedValue := range dng.metadataCriteria {
-		if !node.Metadata.Exists(key) {
-			return false
-		}
-
-		if expectedValue[0] == MetadataContainsPrefix[0] {
-			if !strings.Contains(node.Metadata.GetString(key), expectedValue[1:]) {
-				return false
-			}
-		} else if expectedValue != MetadataAnyValue && expectedValue != node.Metadata.GetString(key) {
-			return false
-		}
-	}
-	return true
+	return nodeMatchesCriteria(node, dng.metadataCriteria)
 }
 
 // handleNodeStateChange processes node state changes
@@ -231,7 +219,12 @@ func (dng *DataNodeGroup[T]) removeNode(node *Node) {
 
 // GetNodes returns all alive nodes in this group, excluding specified node IDs
 func (dng *DataNodeGroup[T]) GetNodes(excludeIDs []NodeID) []*Node {
-	var result []*Node
+	// Estimate capacity to reduce allocations
+	estimatedSize := dng.Count() - len(excludeIDs)
+	if estimatedSize < 0 {
+		estimatedSize = 0
+	}
+	result := make([]*Node, 0, estimatedSize)
 
 	// Build exclusion set
 	var excludeSet map[NodeID]struct{}
@@ -293,7 +286,8 @@ func (dng *DataNodeGroup[T]) UpdateNodeData(nodeID NodeID, updateFn func(*Node, 
 
 // GetDataNodes returns all alive nodes custom data
 func (dng *DataNodeGroup[T]) GetDataNodes() []*T {
-	var result []*T
+	// Pre-allocate with estimated capacity
+	result := make([]*T, 0, dng.Count())
 
 	for _, shard := range dng.shards {
 		shard.mutex.RLock()
@@ -334,17 +328,7 @@ func (dng *DataNodeGroup[T]) Count() int {
 
 // getShard returns the appropriate shard for a node ID
 func (dng *DataNodeGroup[T]) getShard(nodeID NodeID) *dataNodeGroupShard[T] {
-	// FNV-1a hash for better distribution - inlined for performance
-	idBytes := nodeID[:]
-
-	hash := uint32(2166136261) // FNV offset basis
-
-	for _, b := range idBytes {
-		hash ^= uint32(b)
-		hash *= 16777619 // FNV prime
-	}
-
-	return dng.shards[hash&dng.shardMask]
+	return dng.shards[fnvHash(nodeID)&dng.shardMask]
 }
 
 // SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
@@ -355,12 +339,7 @@ func (dng *DataNodeGroup[T]) SendToPeers(msgType MessageType, data interface{}) 
 		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
 	})
 
-	err := dng.cluster.SendToPeers(zoneNodes, msgType, data)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return dng.cluster.SendToPeers(zoneNodes, msgType, data)
 }
 
 // SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
@@ -371,10 +350,5 @@ func (dng *DataNodeGroup[T]) SendToPeersReliable(msgType MessageType, data inter
 		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
 	})
 
-	err := dng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return dng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
 }
