@@ -239,5 +239,8 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 		hm.cluster.nodes.notifyMetadataChanged(node)
 	}
 
+	// Record the nodes state
+	hm.cluster.nodes.updateState(node.ID, pongMessage.NodeState)
+
 	return true
 }
