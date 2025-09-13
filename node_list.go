@@ -2,6 +2,9 @@ package gossip
 
 import (
 	"math/rand"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -10,46 +13,69 @@ import (
 
 // NodeListShard represents a single shard of the node list
 type nodeListShard struct {
-	mutex   sync.RWMutex
-	nodes   map[NodeID]*Node               // All nodes in this shard
-	byState map[NodeState]map[NodeID]*Node // Nodes indexed by state
+	mutex sync.RWMutex
+	nodes map[NodeID]*Node // All nodes in this shard
 }
 
 // NodeList manages a collection of nodes in the cluster
 type nodeList struct {
-	cluster    *Cluster
+	cluster    *Cluster // Reference to parent cluster
 	shardCount int
 	shardMask  uint32
 	shards     []*nodeListShard
 
-	// Atomic counters for quick access without traversing the map
+	// State counters (updated atomically)
 	aliveCount   atomic.Int64
 	suspectCount atomic.Int64
 	leavingCount atomic.Int64
 	deadCount    atomic.Int64
+
+	// Cache for state-based node lists
+	cacheMutex sync.RWMutex
+	stateCache map[string][]*Node // key: sorted states string
+
+	// Event handlers
+	stateChangeHandlers    *EventHandlers[NodeStateChangeHandler]
+	metadataChangeHandlers *EventHandlers[NodeMetadataChangeHandler]
+}
+
+// Add cache key generation
+func stateSetToKey(states []NodeState) string {
+	if len(states) == 0 {
+		return ""
+	}
+
+	// Sort states for consistent key
+	sorted := make([]NodeState, len(states))
+	copy(sorted, states)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	// Build key string
+	var key strings.Builder
+	for i, state := range sorted {
+		if i > 0 {
+			key.WriteByte(',')
+		}
+		key.WriteString(strconv.Itoa(int(state)))
+	}
+	return key.String()
 }
 
 // NewNodeList creates a new node list
 func newNodeList(c *Cluster) *nodeList {
 	nl := &nodeList{
-		cluster:    c,
-		shardCount: c.config.NodeShardCount,
-		shardMask:  uint32(c.config.NodeShardCount - 1),
+		cluster:                c,
+		shardCount:             c.config.NodeShardCount,
+		shardMask:              uint32(c.config.NodeShardCount - 1),
+		stateCache:             make(map[string][]*Node),
+		stateChangeHandlers:    NewEventHandlers[NodeStateChangeHandler](),
+		metadataChangeHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
 	}
 
 	// Initialize shards
 	nl.shards = make([]*nodeListShard, c.config.NodeShardCount)
 	for i := 0; i < c.config.NodeShardCount; i++ {
-		nl.shards[i] = &nodeListShard{
-			nodes:   make(map[NodeID]*Node),
-			byState: make(map[NodeState]map[NodeID]*Node),
-		}
-
-		// Initialize maps for each state
-		nl.shards[i].byState[NodeAlive] = make(map[NodeID]*Node)
-		nl.shards[i].byState[NodeSuspect] = make(map[NodeID]*Node)
-		nl.shards[i].byState[NodeLeaving] = make(map[NodeID]*Node)
-		nl.shards[i].byState[NodeDead] = make(map[NodeID]*Node)
+		nl.shards[i] = &nodeListShard{nodes: make(map[NodeID]*Node)}
 	}
 
 	return nl
@@ -57,79 +83,74 @@ func newNodeList(c *Cluster) *nodeList {
 
 // getShard returns the appropriate shard for a node ID
 func (nl *nodeList) getShard(nodeID NodeID) *nodeListShard {
-	// FNV-1a hash for better distribution - inlined for performance
+	// UUID v7 has random bits in the last 8 bytes, use more of them
 	idBytes := nodeID[:]
-
-	hash := uint32(2166136261) // FNV offset basis
-
-	for _, b := range idBytes {
-		hash ^= uint32(b)
-		hash *= 16777619 // FNV prime
+	// Use FNV-1a hash for better distribution
+	hash := uint32(2166136261)
+	for i := 8; i < 16; i++ {
+		hash ^= uint32(idBytes[i])
+		hash *= 16777619
 	}
-
 	return nl.shards[hash&nl.shardMask]
 }
 
 func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 	shard := nl.getShard(node.ID)
-
 	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
 
-	existing, exists := shard.nodes[node.ID]
-	if exists {
+	if existing, exists := shard.nodes[node.ID]; exists {
 		if !updateExisting {
-			return false // Node already exists and we don't want to update it
+			shard.mutex.Unlock()
+			return false
 		}
 
-		// Update existing node - track state changes for counter updates
-		oldState := existing.state
-
-		// Remove from old state map
-		delete(shard.byState[oldState], node.ID)
-
-		// Update node
+		oldState := existing.observedState
 		shard.nodes[node.ID] = node
 
-		// Add to new state map
-		shard.byState[node.state][node.ID] = node
+		shard.mutex.Unlock()
 
-		// Update counters
-		nl.updateCountersForStateChange(oldState, node.state)
-
-		// If old state was leaving or dead, trigger event listener
-		if oldState == NodeLeaving || oldState == NodeDead ||
-			(oldState == NodeSuspect && node.state == NodeAlive) {
-			nl.cluster.notifyNodeStateChanged(node, oldState)
+		if oldState != node.observedState {
+			nl.updateCountersForStateChange(oldState, node.observedState)
+			nl.notifyNodeStateChanged(node, oldState)
 		}
-	} else {
-		// New node
-		shard.nodes[node.ID] = node
-
-		// Add to state map
-		shard.byState[node.state][node.ID] = node
-
-		// Update counters
-		switch node.state {
-		case NodeAlive:
-			nl.aliveCount.Add(1)
-		case NodeSuspect:
-			nl.suspectCount.Add(1)
-		case NodeLeaving:
-			nl.leavingCount.Add(1)
-		case NodeDead:
-			nl.deadCount.Add(1)
-		}
-
-		// Trigger event listener
-		nl.cluster.notifyNodeStateChanged(node, NodeUnknown)
+		return true
 	}
 
+	// New node
+	shard.nodes[node.ID] = node
+
+	shard.mutex.Unlock()
+
+	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
+	nl.notifyNodeStateChanged(node, NodeUnknown)
 	return true
 }
 
-func (nl *nodeList) addIfNotExists(node *Node) bool {
-	return nl.add(node, false)
+/**
+ * Add the node if it doesn't exist, if adding a node then it returns the added node; else the existing node.
+ */
+func (nl *nodeList) addIfNotExists(node *Node) *Node {
+	shard := nl.getShard(node.ID)
+	shard.mutex.Lock()
+
+	if existing, exists := shard.nodes[node.ID]; exists {
+		oldState := existing.observedState
+		shard.mutex.Unlock()
+
+		if oldState != node.observedState {
+			nl.updateCountersForStateChange(oldState, node.observedState)
+			nl.notifyNodeStateChanged(existing, oldState)
+		}
+		return existing
+	}
+
+	shard.nodes[node.ID] = node
+	shard.mutex.Unlock()
+
+	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
+	nl.notifyNodeStateChanged(node, NodeUnknown)
+
+	return node
 }
 
 func (nl *nodeList) addOrUpdate(node *Node) bool {
@@ -142,45 +163,47 @@ func (nl *nodeList) remove(nodeID NodeID) {
 }
 
 func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
-	if nodeID == nl.cluster.localNode.ID {
+	// Cannot remove local node
+	if nl.isLocalNode(nodeID) {
 		return false
 	}
 
 	shard := nl.getShard(nodeID)
-
 	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
 
 	node, exists := shard.nodes[nodeID]
-	if exists {
-		// Check if node is in one of the specified states
-		for _, state := range states {
-			if node.state == state {
+	if !exists {
+		shard.mutex.Unlock()
+		return false
+	}
 
-				// Update counters
-				switch node.state {
-				case NodeAlive:
-					nl.aliveCount.Add(-1)
-				case NodeSuspect:
-					nl.suspectCount.Add(-1)
-				case NodeLeaving:
-					nl.leavingCount.Add(-1)
-				case NodeDead:
-					nl.deadCount.Add(-1)
-				}
-
-				// Remove from state map
-				delete(shard.byState[node.state], nodeID)
-
-				// Remove from nodes map
-				delete(shard.nodes, nodeID)
-
-				return true
-			}
+	var matchedState NodeState
+	var found bool
+	for _, s := range states {
+		if node.observedState == s {
+			matchedState = s
+			found = true
+			break
 		}
 	}
 
-	return false
+	if !found {
+		shard.mutex.Unlock()
+		return false
+	}
+
+	// Remove the node
+	delete(shard.nodes, nodeID)
+
+	// Release lock before callbacks
+	shard.mutex.Unlock()
+
+	node.observedState = NodeRemoved
+	node.observedStateTime = hlc.Now()
+
+	nl.updateCountersForStateChange(matchedState, NodeRemoved)
+	nl.notifyNodeStateChanged(node, matchedState)
+	return true
 }
 
 // Get returns a node by ID
@@ -194,69 +217,33 @@ func (nl *nodeList) get(nodeID NodeID) *Node {
 }
 
 // UpdateState updates the state of a node using a local timestamp
-func (nl *nodeList) updateState(nodeID NodeID, state NodeState) bool {
-	// Delegate to unified function with local timestamp
-	return nl.updateStateWithTimestamp(nodeID, state, hlc.Now())
-}
-
-// updateStateWithTimestamp updates the state of a node using the provided timestamp.
-// Use this for remote-driven updates, passing the remote state-change timestamp.
-// For local updates, pass hlc.Now(). If the state is unchanged, the timestamp is only
-// updated if the provided timestamp is newer than the current stateChangeTime.
-func (nl *nodeList) updateStateWithTimestamp(nodeID NodeID, state NodeState, ts hlc.Timestamp) bool {
-	// Never allow the local node to be marked as Suspect or Dead
-	if nodeID == nl.cluster.localNode.ID {
-		// Only allow Alive or Leaving for local node
-		if state != NodeAlive && state != NodeLeaving {
-			nl.cluster.config.Logger.
-				Field("rejected_state", state.String()).
-				Debugf("Attempted to set invalid state for local node, ignoring")
-			return false
-		}
-	}
-
+func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 	shard := nl.getShard(nodeID)
 
 	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
+	node, exists := shard.nodes[nodeID]
+	if !exists {
+		shard.mutex.Unlock()
+		return false
+	}
 
-	if node, exists := shard.nodes[nodeID]; exists {
-		oldState := node.state
-
-		// If the state hasn't changed, do not update timestamp to avoid unnecessary churn
-		if oldState == state {
-			return true
-		}
-
-		// Remove from old state map
-		delete(shard.byState[oldState], nodeID)
-
-		// Update node state
-		node.state = state
-		// Use the provided timestamp if it's newer than current; otherwise fall back to local Now()
-		if ts.After(node.stateChangeTime) {
-			node.stateChangeTime = ts
-		} else {
-			node.stateChangeTime = hlc.Now()
-		}
-
-		// Add to new state map
-		shard.byState[state][nodeID] = node
-
-		// Update counters
-		nl.updateCountersForStateChange(oldState, state)
-
-		// Trigger event
-		nl.cluster.notifyNodeStateChanged(node, oldState)
-
-		// If state anything but alive clear address cache
-		if state != NodeAlive {
-			node.address.Clear()
-		}
-
+	oldState := node.observedState
+	if oldState == newState {
+		shard.mutex.Unlock()
 		return true
 	}
-	return false
+
+	node.observedState = newState
+	node.observedStateTime = hlc.Now()
+	shard.mutex.Unlock()
+
+	// Clear cached resolved address to force re-resolution later
+	node.address.Clear()
+
+	nl.updateCountersForStateChange(oldState, newState)
+	nl.notifyNodeStateChanged(node, oldState)
+
+	return true
 }
 
 // Helper to update counters when a node's state changes
@@ -283,6 +270,72 @@ func (nl *nodeList) updateCountersForStateChange(oldState, newState NodeState) {
 	case NodeDead:
 		nl.deadCount.Add(1)
 	}
+
+	nl.invalidateStateCache()
+}
+
+// Add cache invalidation method
+func (nl *nodeList) invalidateStateCache() {
+	nl.cacheMutex.Lock()
+	defer nl.cacheMutex.Unlock()
+
+	// Clear cache and bump version
+	nl.stateCache = make(map[string][]*Node)
+}
+
+// Get cached or build node list for states
+func (nl *nodeList) getCachedNodesInStates(states []NodeState) []*Node {
+	key := stateSetToKey(states)
+	if key == "" {
+		return []*Node{}
+	}
+
+	// Try cache first
+	nl.cacheMutex.RLock()
+	if cached, exists := nl.stateCache[key]; exists {
+		result := make([]*Node, len(cached))
+		copy(result, cached)
+		nl.cacheMutex.RUnlock()
+		return result
+	}
+	nl.cacheMutex.RUnlock()
+
+	// Cache miss - build the list
+	nl.cacheMutex.Lock()
+	defer nl.cacheMutex.Unlock()
+
+	// Double-check after acquiring write lock
+	if cached, exists := nl.stateCache[key]; exists {
+		result := make([]*Node, len(cached))
+		copy(result, cached)
+		return result
+	}
+
+	// Build state set for O(1) lookup
+	stateSet := make(map[NodeState]struct{}, len(states))
+	for _, s := range states {
+		stateSet[s] = struct{}{}
+	}
+
+	// Collect all nodes in these states
+	var allNodes []*Node
+	for _, shard := range nl.shards {
+		shard.mutex.RLock()
+		for _, node := range shard.nodes {
+			if _, ok := stateSet[node.observedState]; ok {
+				allNodes = append(allNodes, node)
+			}
+		}
+		shard.mutex.RUnlock()
+	}
+
+	// Cache the result
+	nl.stateCache[key] = allNodes
+
+	// Return copy to prevent external modification
+	result := make([]*Node, len(allNodes))
+	copy(result, allNodes)
+	return result
 }
 
 // GetRandomNodesInStates returns up to k random nodes in the specified states, excluding specified IDs
@@ -291,58 +344,38 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 		return []*Node{}
 	}
 
-	// Build exclusion set
-	var excludeSet map[NodeID]struct{}
-	excludeSetSize := len(excludeIDs)
-	if excludeSetSize > 0 {
-		excludeSet = make(map[NodeID]struct{}, len(excludeIDs))
+	// Get cached nodes for these states
+	allCandidates := nl.getCachedNodesInStates(states)
+
+	// Apply exclusions (not cached since excludeIDs vary)
+	if len(excludeIDs) > 0 {
+		excludeSet := make(map[NodeID]struct{}, len(excludeIDs))
 		for _, id := range excludeIDs {
 			excludeSet[id] = struct{}{}
 		}
-	}
 
-	// Initialize reservoir with capacity k
-	result := make([]*Node, 0, k)
-	// Track total eligible nodes seen
-	nodesSeen := 0
-
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-
-		// Process each requested state
-		for _, state := range states {
-			if nodesInState, exists := shard.byState[state]; exists {
-				for nodeID, node := range nodesInState {
-					// Skip excluded nodes
-					if excludeSetSize > 0 {
-						if _, excluded := excludeSet[nodeID]; excluded {
-							continue
-						}
-					}
-
-					// Increment count of eligible nodes
-					nodesSeen++
-
-					if len(result) < k {
-						// Phase 1: Fill the reservoir until we have k items
-						result = append(result, node)
-					} else {
-						// Phase 2: Replace items with decreasing probability
-						// Use package-level rand which is safe for concurrent use
-						j := rand.Intn(nodesSeen)
-						if j < k {
-							// Replace the item at index j
-							result[j] = node
-						}
-					}
-				}
+		// Filter out excluded nodes
+		filtered := allCandidates[:0] // reuse slice
+		for _, node := range allCandidates {
+			if _, excluded := excludeSet[node.ID]; !excluded {
+				filtered = append(filtered, node)
 			}
 		}
-
-		shard.mutex.RUnlock()
+		allCandidates = filtered
 	}
 
-	return result
+	// Return all if we don't have enough
+	if len(allCandidates) <= k {
+		return allCandidates
+	}
+
+	// Fisher-Yates shuffle and take first k
+	for i := len(allCandidates) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		allCandidates[i], allCandidates[j] = allCandidates[j], allCandidates[i]
+	}
+
+	return allCandidates[:k]
 }
 
 // GetRandomNodes returns up to k random live nodes (Alive or Suspect)
@@ -372,93 +405,57 @@ func (nl *nodeList) getDeadCount() int {
 
 // forAllInState executes a function for all nodes in the specified states
 // The callback function can return false to stop iteration
-func (nl *nodeList) forAllInStates(states []NodeState, callback func(*Node) bool) {
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
+func (nl *nodeList) forAllInStates(states []NodeState, cb func(*Node) bool) {
+	// Get cached nodes for these states
+	nodes := nl.getCachedNodesInStates(states)
 
-		// Collect nodes from all specified states
-		nodesCopy := make([]*Node, 0)
-		for _, state := range states {
-			if nodesInState, exists := shard.byState[state]; exists {
-				for _, node := range nodesInState {
-					nodesCopy = append(nodesCopy, node)
-				}
-			}
-		}
-
-		shard.mutex.RUnlock()
-
-		// Execute callback on each node
-		for _, node := range nodesCopy {
-			if !callback(node) {
-				return // Stop iteration if callback returns false
-			}
+	// Iterate through cached results
+	for _, node := range nodes {
+		if !cb(node) {
+			return
 		}
 	}
 }
 
 func (nl *nodeList) getAllInStates(states []NodeState) []*Node {
-	nodes := make([]*Node, 0)
-
-	nl.forAllInStates(states, func(node *Node) bool {
-		nodes = append(nodes, node)
-		return true
-	})
-
-	return nodes
+	return nl.getCachedNodesInStates(states)
 }
 
 // getAll returns all nodes in the cluster
 func (nl *nodeList) getAll() []*Node {
-	allNodes := make([]*Node, 0, nl.getAliveCount()+nl.getSuspectCount()+nl.getLeavingCount()+nl.getDeadCount())
-
-	// Iterate through all shards
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-
-		// Append all nodes in this shard to the result slice
-		for _, node := range shard.nodes {
-			allNodes = append(allNodes, node)
-		}
-
-		shard.mutex.RUnlock()
-	}
-
-	return allNodes
+	return nl.getCachedNodesInStates([]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
 }
 
-// RecalculateCounters rebuilds all counters
-func (nl *nodeList) recalculateCounters() {
-	var alive, suspect, leaving, dead int64
-
-	// Iterate through all shards
-	for _, shard := range nl.shards {
-		shard.mutex.RLock()
-
-		alive += int64(len(shard.byState[NodeAlive]))
-		suspect += int64(len(shard.byState[NodeSuspect]))
-		leaving += int64(len(shard.byState[NodeLeaving]))
-		dead += int64(len(shard.byState[NodeDead]))
-
-		shard.mutex.RUnlock()
-	}
-
-	nl.aliveCount.Store(alive)
-	nl.suspectCount.Store(suspect)
-	nl.leavingCount.Store(leaving)
-	nl.deadCount.Store(dead)
+// Add event handler registration methods
+func (nl *nodeList) OnNodeStateChange(handler NodeStateChangeHandler) HandlerID {
+	return nl.stateChangeHandlers.Add(handler)
 }
 
-// getRandomNodesForGossip returns nodes prioritizing recent state changes
-func (nl *nodeList) getRandomNodesForGossip(k int, excludeIDs []NodeID) []*Node {
-	// Get recent state changes first (alive, suspect, leaving, recent dead)
-	recentNodes := nl.getRandomNodesInStates(k*3/4, []NodeState{NodeAlive, NodeSuspect, NodeLeaving}, excludeIDs)
+func (nl *nodeList) OnNodeMetadataChange(handler NodeMetadataChangeHandler) HandlerID {
+	return nl.metadataChangeHandlers.Add(handler)
+}
 
-	// Fill remaining slots with dead nodes (for consistency)
-	if len(recentNodes) < k {
-		deadNodes := nl.getRandomNodesInStates(k-len(recentNodes), []NodeState{NodeDead}, excludeIDs)
-		recentNodes = append(recentNodes, deadNodes...)
-	}
+func (nl *nodeList) RemoveStateChangeHandler(id HandlerID) bool {
+	return nl.stateChangeHandlers.Remove(id)
+}
 
-	return recentNodes
+func (nl *nodeList) RemoveMetadataChangeHandler(id HandlerID) bool {
+	return nl.metadataChangeHandlers.Remove(id)
+}
+
+func (nl *nodeList) notifyNodeStateChanged(node *Node, prevState NodeState) {
+	nl.stateChangeHandlers.ForEach(func(handler NodeStateChangeHandler) {
+		go handler(node, prevState)
+	})
+}
+
+func (nl *nodeList) notifyMetadataChanged(node *Node) {
+	nl.metadataChangeHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
+		go handler(node)
+	})
+}
+
+// isLocalNode checks if the given node ID is the local node
+func (nl *nodeList) isLocalNode(nodeID NodeID) bool {
+	return nl.cluster != nil && nl.cluster.localNode != nil && nl.cluster.localNode.ID == nodeID
 }

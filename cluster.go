@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"net"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,23 +21,27 @@ const (
 )
 
 type Cluster struct {
-	config                      *Config
-	shutdownContext             context.Context
-	cancelFunc                  context.CancelFunc
-	shutdownWg                  sync.WaitGroup
-	msgHistory                  *messageHistory
-	transport                   Transport
-	nodes                       *nodeList
-	localNode                   *Node
-	handlers                    *handlerRegistry
-	broadcastQueue              chan *broadcastQItem
-	healthMonitor               *healthMonitor
-	stateEventHandlers          *EventHandlers[NodeStateChangeHandler]
-	metadataChangeEventHandlers *EventHandlers[NodeMetadataChangeHandler]
-	gossipEventHandlers         *EventHandlers[GossipHandler]
-	gossipTicker                *time.Ticker
-	gossipInterval              time.Duration
-	broadcastQItemPool          sync.Pool
+	config               *Config
+	shutdownContext      context.Context
+	cancelFunc           context.CancelFunc
+	shutdownWg           sync.WaitGroup
+	msgHistory           *messageHistory
+	transport            Transport
+	nodes                *nodeList
+	localNode            *Node
+	handlers             *handlerRegistry
+	broadcastQueue       chan *broadcastQItem
+	metadataGossipTicker *time.Ticker
+	stateGossipTicker    *time.Ticker
+	gossipEventHandlers  *EventHandlers[GossipHandler]
+	gossipTicker         *time.Ticker
+	gossipInterval       time.Duration
+	broadcastQItemPool   sync.Pool
+	seedPeers            []string
+	lastPeerRecovery     time.Time
+	peerRecoveryTicker   *time.Ticker
+	healthMonitor        *HealthMonitor
+	joinQueue            chan *joinRequest
 }
 
 type broadcastQItem struct {
@@ -48,6 +49,10 @@ type broadcastQItem struct {
 	transportType TransportType
 	excludePeers  []NodeID
 	peers         []*Node
+}
+
+type joinRequest struct {
+	nodeAddr string
 }
 
 func NewCluster(config *Config) (*Cluster, error) {
@@ -70,9 +75,9 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("missing MsgCodec")
 	}
 
-	// If both socket and websocket transports are enabled then block this
-	if config.SocketTransportEnabled && config.WebsocketProvider != nil {
-		return nil, fmt.Errorf("both socket and websocket transports are enabled")
+	// Check we have a transport
+	if config.Transport == nil {
+		return nil, fmt.Errorf("missing Transport")
 	}
 
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
@@ -99,84 +104,57 @@ func NewCluster(config *Config) (*Cluster, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
-		config:                      config,
-		shutdownContext:             ctx,
-		cancelFunc:                  cancel,
-		msgHistory:                  newMessageHistory(config),
-		localNode:                   newNode(NodeID(u), config.AdvertiseAddr),
-		handlers:                    newHandlerRegistry(),
-		broadcastQueue:              make(chan *broadcastQItem, config.SendQueueSize),
-		stateEventHandlers:          NewEventHandlers[NodeStateChangeHandler](),
-		metadataChangeEventHandlers: NewEventHandlers[NodeMetadataChangeHandler](),
-		gossipEventHandlers:         NewEventHandlers[GossipHandler](),
-		broadcastQItemPool:          sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
+		config:              config,
+		shutdownContext:     ctx,
+		cancelFunc:          cancel,
+		msgHistory:          newMessageHistory(config),
+		localNode:           newNode(NodeID(u), config.AdvertiseAddr),
+		handlers:            newHandlerRegistry(),
+		broadcastQueue:      make(chan *broadcastQItem, config.SendQueueSize),
+		gossipEventHandlers: NewEventHandlers[GossipHandler](),
+		broadcastQItemPool:  sync.Pool{New: func() interface{} { return new(broadcastQItem) }},
+		transport:           config.Transport,
+		seedPeers:           make([]string, 0),
+		joinQueue:           make(chan *joinRequest, config.JoinQueueSize),
 	}
 
 	cluster.nodes = newNodeList(cluster)
+	cluster.healthMonitor = newHealthMonitor(cluster)
 
 	cluster.localNode.ProtocolVersion = PROTOCOL_VERSION
 	cluster.localNode.ApplicationVersion = config.ApplicationVersion
-
-	// Automatically broadcast metadata changes for the local node
-	cluster.localNode.metadata.SetOnLocalChange(func(ts hlc.Timestamp, snapshot map[string]interface{}) {
-		// Best-effort broadcast using provided timestamp and snapshot
-		updateMsg := &metadataUpdateMessage{
-			MetadataTimestamp: ts,
-			Metadata:          snapshot,
-		}
-		if packet, err := cluster.createPacket(cluster.localNode.ID, metadataUpdateMsg, cluster.getMaxTTL(), updateMsg); err == nil {
-			cluster.enqueuePacketForBroadcast(packet, TransportBestEffort, []NodeID{cluster.localNode.ID}, nil)
-			cluster.notifyMetadataChanged(cluster.localNode)
-		} else {
-			cluster.config.Logger.Err(err).Tracef("gossip: failed to create metadata update packet")
-		}
-	})
+	cluster.localNode.metadata.update(make(map[string]interface{}, 0), hlc.Now(), true)
 
 	if len(cluster.config.EncryptionKey) == 0 && cluster.config.Cipher != nil {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
 	}
 
-	// Add the local node to the node list
+	// Add the local node to the node list and setup handlers
 	cluster.nodes.addOrUpdate(cluster.localNode)
+	cluster.localNode.metadata.SetOnLocalChange(func(ts hlc.Timestamp, data map[string]interface{}) {
+		// Handle the meta data change locally
+		cluster.nodes.notifyMetadataChanged(cluster.localNode)
 
-	// Create transport first so we can use it for address resolution
-	if config.Transport == nil {
-		// For bind address, we need to resolve it to create the transport
-		var bindAddresses []Address
-		if config.SocketTransportEnabled {
-			// Create a temporary transport to resolve bind address
-			tempTransport := &transport{config: config}
-			bindAddresses, err = tempTransport.ResolveAddress(config.BindAddr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve bind address: %v", err)
-			}
-		} else {
-			// For WebSocket-only mode, we don't need a bind address with IP/Port
-			bindAddresses = []Address{{}} // Empty address for WebSocket-only
-		}
+		// Send to the cluster
+		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{
+			MetadataTimestamp: ts,
+			Metadata:          data,
+			NodeState:         cluster.localNode.observedState,
+		})
+	})
 
-		// Check we have a bind port or are using WebSocket-only mode
-		if config.SocketTransportEnabled && (len(bindAddresses) == 0 || bindAddresses[0].Port == 0) {
-			return nil, fmt.Errorf("no bind port specified for socket transport")
-		}
-
-		cluster.transport, err = NewTransport(ctx, &cluster.shutdownWg, config, bindAddresses[0])
-		if err != nil {
-			return nil, fmt.Errorf("failed to create transport: %v", err)
-		}
-	} else {
-		cluster.transport = config.Transport
-	}
-
-	// If using websockets then see if we should disable compression
-	if cluster.config.WebsocketProvider != nil && cluster.config.WebsocketProvider.CompressionEnabled() {
-		cluster.config.Compressor = nil
-	}
+	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
 
 	return cluster, nil
 }
 
 func (c *Cluster) Start() {
+	// Start the transport
+	if err := c.transport.Start(c.shutdownContext, &c.shutdownWg); err != nil {
+		c.config.Logger.Err(err).Errorf("Failed to start transport")
+		panic("Failed to start cluster")
+	}
+
 	// Start the send workers
 	for range c.config.NumSendWorkers {
 		c.shutdownWg.Add(1)
@@ -189,28 +167,31 @@ func (c *Cluster) Start() {
 		go c.acceptPackets()
 	}
 
-	// Start the health monitor
-	c.healthMonitor = newHealthMonitor(c)
+	// Start join workers
+	for range c.config.NumJoinWorkers {
+		c.shutdownWg.Add(1)
+		go c.joinWorker()
+	}
 
 	// Register the system message handlers
 	c.registerSystemHandlers()
 
-	// Start periodic state synchronization
-	c.periodicStateSync()
-
-	// Start the gossip notification manager
+	// Start the gossip runners
+	c.metadataGossipManager()
+	c.stateGossipManager()
 	c.gossipManager()
+	c.nodeCleanupManager()
+	c.peerRecoveryManager()
+	c.healthMonitor.start()
 
 	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
 }
 
 func (c *Cluster) Stop() {
-	if c.localNode.state != NodeLeaving {
-		c.Leave()
-	}
+	c.config.Logger.Infof("gossip: Starting cluster shutdown")
 
-	if c.healthMonitor != nil {
-		c.healthMonitor.stop()
+	if c.localNode.observedState != NodeLeaving {
+		c.Leave()
 	}
 
 	if c.msgHistory != nil {
@@ -227,27 +208,17 @@ func (c *Cluster) Stop() {
 	c.config.Logger.Infof("gossip: Cluster stopped")
 }
 
-// Handler for incoming WebSocket connections when gossiping over web sockets
-func (c *Cluster) WebsocketHandler(w http.ResponseWriter, r *http.Request) {
-	if c.config.BearerToken != "" {
-		authHeader := r.Header.Get("Authorization")
-		const bearerPrefix = "Bearer "
+func (c *Cluster) joinWorker() {
+	defer c.shutdownWg.Done()
 
-		if !strings.HasPrefix(authHeader, bearerPrefix) {
-			c.config.Logger.Debugf("gossip: Missing or invalid Authorization header format")
-			http.Error(w, "Invalid authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		bearer := strings.TrimSpace(authHeader[len(bearerPrefix):])
-		if bearer != c.config.BearerToken {
-			c.config.Logger.Debugf("gossip: Invalid bearer token")
-			http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
+	for {
+		select {
+		case req := <-c.joinQueue:
+			c.joinPeer(req.nodeAddr)
+		case <-c.shutdownContext.Done():
 			return
 		}
 	}
-
-	c.transport.WebsocketHandler(c.shutdownContext, w, r)
 }
 
 func (c *Cluster) Join(peers []string) error {
@@ -281,10 +252,8 @@ func (c *Cluster) Join(peers []string) error {
 
 	wg.Wait()
 
-	// Add the list of peers to the health monitor so they can be used for recovery
-	for _, peerAddr := range peers {
-		c.healthMonitor.addJoinPeer(peerAddr)
-	}
+	// Remember the peers so we can use them for recovery
+	c.seedPeers = append(c.seedPeers, peers...)
 
 	return nil
 }
@@ -293,59 +262,130 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	joinMsg := &joinMessage{
 		ID:                 c.localNode.ID,
 		AdvertiseAddr:      c.localNode.advertiseAddr,
+		State:              c.localNode.observedState,
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
 		ApplicationVersion: c.config.ApplicationVersion,
 	}
 
-	addresses, err := c.transport.ResolveAddress(peerAddr)
+	// Create a node for the peer
+	node := newNode(EmptyNodeID, peerAddr)
+
+	// Attempt to join the peer
+	joinReply := &joinReplyMessage{}
+	err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 	if err != nil {
-		c.config.Logger.Err(err).Warnf("Failed to resolve address: %s", peerAddr)
+		c.config.Logger.Err(err).Warnf("Failed to join peer: %s", peerAddr)
 		return
 	}
 
-	// Create a node which we'll use for connection attempts
-	node := newNode(c.localNode.ID, peerAddr)
+	if !joinReply.Accepted {
+		c.config.Logger.Field("address", peerAddr).Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
+		return
+	}
 
-	for _, addr := range addresses {
-		joinReply := &joinReplyMessage{}
+	node.ID = joinReply.NodeID
+	node.advertiseAddr = joinReply.AdvertiseAddr
+	node = c.nodes.addIfNotExists(node)
 
-		// Apply address to node and attempt to join
-		node.address = addr
-		err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
-		if err != nil {
-			continue
-		}
+	// Update the copy of the nodes metadata
+	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, false)
 
-		if !joinReply.Accepted {
-			c.config.Logger.Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
-			continue
-		}
+	// Run the list of nodes that we've been given and attempt to join with any we don't know
+	for _, peer := range joinReply.Nodes {
+		if existing := c.nodes.get(peer.ID); existing == nil {
+			c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Tracef("gossip: Joining unknown peer")
 
-		// Update the node with the peer's information
-		node.ID = joinReply.ID
-		node.advertiseAddr = joinReply.AdvertiseAddr // Use the address the node advertises
-		node.ProtocolVersion = joinReply.ProtocolVersion
-		node.ApplicationVersion = joinReply.ApplicationVersion
-		node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, true)
-		if c.nodes.addOrUpdate(node) {
-			c.config.Logger.Debugf("gossip: Joined peer: %s", addr.String())
-			err = c.exchangeState(node, []NodeID{c.localNode.ID})
-			if err != nil {
-				c.config.Logger.Err(err).Warnf("gossip: Failed to exchange state with peer")
+			req := &joinRequest{
+				nodeAddr: peer.AdvertiseAddr,
 			}
-			break
+
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+			}
 		}
 	}
 }
 
-// MMarks the local node as leaving and broadcasts this state to the cluster
+func (c *Cluster) peerRecoveryManager() {
+	go func() {
+		// Initial delay with jitter
+		jitter := time.Duration(rand.Int63n(int64(c.config.PeerRecoveryInterval / 4)))
+		time.Sleep(jitter)
+
+		c.peerRecoveryTicker = time.NewTicker(c.config.PeerRecoveryInterval)
+		defer c.peerRecoveryTicker.Stop()
+
+		for {
+			select {
+			case <-c.peerRecoveryTicker.C:
+				c.checkPeerConnectivity()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) checkPeerConnectivity() {
+	// Skip if no seed peers configured
+	if len(c.seedPeers) == 0 {
+		return
+	}
+
+	// Skip if we recently attempted recovery (prevent spam)
+	if time.Since(c.lastPeerRecovery) < c.config.PeerRecoveryInterval/2 {
+		return
+	}
+
+	aliveCount := c.nodes.getAliveCount()
+	seedPeerCount := len(c.seedPeers)
+
+	// Calculate the threshold (50% of seed peers)
+	threshold := seedPeerCount / 2
+	if seedPeerCount%2 == 1 {
+		threshold++ // Round up for odd numbers
+	}
+
+	// Trigger recovery if alive nodes <= 50% of seed peers
+	if aliveCount <= threshold {
+		reason := fmt.Sprintf("alive nodes (%d) <= 50%% of seed peers (%d/%d)", aliveCount, threshold, seedPeerCount)
+		c.config.Logger.Warnf("gossip: Triggering peer recovery - %s", reason)
+		c.lastPeerRecovery = time.Now()
+
+		for _, peer := range c.seedPeers {
+			req := &joinRequest{
+				nodeAddr: peer,
+			}
+
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("address", peer).Warnf("gossip: Join queue full, dropping join request for node")
+			}
+		}
+	} else {
+		c.config.Logger.Tracef("gossip: Cluster health good: %d alive nodes > %d threshold (50%% of %d seed peers)", aliveCount, threshold, seedPeerCount)
+	}
+}
+
+// Marks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
 	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
-	if c.healthMonitor != nil {
-		c.healthMonitor.MarkNodeLeaving(c.localNode)
-	}
+
+	// Update our local node state to leaving
+	c.nodes.updateState(c.localNode.ID, NodeLeaving)
+
+	// Broadcast the leaving message
+	c.sendMessage(nil, TransportBestEffort, c.getMaxTTL(), nodeLeaveMsg, nil)
+
+	// Give some time for the leave messages to be sent before shutting down
+	time.Sleep(100 * time.Millisecond)
+
+	c.config.Logger.Debugf("gossip: Leave message broadcast completed")
 }
 
 func (c *Cluster) acceptPackets() {
@@ -371,6 +411,12 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		return
 	}
 
+	// If message has a target node ID and it's not us, ignore it
+	if packet.MessageType != nodeJoinMsg && packet.TargetNodeID != nil && *packet.TargetNodeID != c.localNode.ID {
+		packet.Release()
+		return
+	}
+
 	// Record the message in the message history
 	c.msgHistory.recordMessage(packet.SenderID, packet.MessageID)
 
@@ -378,39 +424,32 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	senderNode := c.nodes.get(packet.SenderID)
 	if senderNode != nil {
 		senderNode.updateLastActivity()
-
-		// If not marked alive then we need to recover it to alive
-		if senderNode.state != NodeAlive {
-			c.config.Logger.Tracef("gossip: Recovering node via message: %s", senderNode.ID.String())
-			c.nodes.updateState(senderNode.ID, NodeAlive)
-		}
 	}
 
-	// Run the message handler
-	h := c.handlers.getHandler(packet.MessageType)
-	if h != nil {
-		if h.forward {
-			var transportType TransportType
-			if packet.conn != nil {
-				transportType = TransportReliable
-			} else {
-				transportType = TransportBestEffort
-			}
-			c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
-		}
-
-		err := h.dispatch(c, senderNode, packet)
-		if err != nil {
-			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
-		}
-	} else {
+	// Forward packets
+	if !packet.CanReply() {
 		var transportType TransportType
 		if packet.conn != nil {
 			transportType = TransportReliable
 		} else {
 			transportType = TransportBestEffort
 		}
-		c.enqueuePacketForBroadcast(packet, transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+		c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+	}
+
+	// If we don't know the sender then unless it's a join message ignore it
+	if senderNode == nil && packet.MessageType != nodeJoinMsg && packet.MessageType != pingMsg {
+		packet.Release()
+		return
+	}
+
+	// Run the message handler
+	h := c.handlers.getHandler(packet.MessageType)
+	if h != nil {
+		err := h.dispatch(c, senderNode, packet)
+		if err != nil {
+			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
+		}
 	}
 }
 
@@ -426,7 +465,7 @@ func (c *Cluster) CalcFanOut() int {
 	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.FanOutMultiplier)
 	cap := 10.0
 
-	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
+	return int(math.Min(totalNodes, math.Max(3, math.Min(basePeerCount, cap))))
 }
 
 // CalcPayloadSize determines how many items should be included
@@ -440,25 +479,25 @@ func (c *Cluster) CalcPayloadSize(totalItems int) int {
 		return 0
 	}
 
-	basePeerCount := math.Ceil(math.Log2(float64(totalItems))*c.config.StateExchangeMultiplier) + 2
+	basePayloadSize := math.Ceil(math.Log2(float64(totalItems))*c.config.StateExchangeMultiplier) + 2
 	cap := 16.0
 
-	return int(math.Min(float64(totalItems), math.Max(1, math.Min(basePeerCount, cap))))
+	return int(math.Min(float64(totalItems), math.Max(3, math.Min(basePayloadSize, cap))))
 }
 
-// getPeerSubsetSizeIndirectPing The number of peers to use for indirect pings.
-func (c *Cluster) getPeerSubsetSizeIndirectPing() int {
-	totalNodes := float64(c.nodes.getAliveCount() + c.nodes.getSuspectCount())
-	if totalNodes <= 0 {
-		return 0
-	}
-
-	basePeerCount := math.Ceil(math.Log2(totalNodes) * c.config.IndirectPingMultiplier)
-	cap := 6.0
-
-	return int(math.Min(totalNodes, math.Max(1, math.Min(basePeerCount, cap))))
-}
-
+// getMaxTTL calculates the maximum Time-To-Live (hop count) for gossip messages
+// based on the current cluster size. TTL determines how many times a message
+// can be forwarded before being dropped, preventing infinite message loops
+// while ensuring adequate propagation coverage.
+//
+// The TTL is calculated using logarithmic scaling to balance message reach
+// with network overhead:
+// - Small clusters (2-4 nodes): TTL of 3-4 hops
+// - Medium clusters (16-32 nodes): TTL of 5-6 hops
+// - Large clusters (100+ nodes): TTL of 7-8 hops (capped)
+//
+// Returns 0 if no alive nodes exist, ensuring messages don't propagate
+// in empty clusters.
 func (c *Cluster) getMaxTTL() uint8 {
 	totalNodes := c.nodes.getAliveCount()
 	if totalNodes <= 0 {
@@ -471,46 +510,100 @@ func (c *Cluster) getMaxTTL() uint8 {
 	return uint8(math.Max(1, math.Min(basePeerCount, cap)))
 }
 
-// Exchange the state of a random subset of nodes with the given node
-func (c *Cluster) exchangeState(node *Node, exclude []NodeID) error {
+// Exchange the state of a random subset of nodes with the given nodes
+func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 
 	// Get a random selection of nodes, excluding specified nodes
-	randomNodes := c.nodes.getRandomNodesForGossip(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+	randomNodes := c.nodes.getRandomNodesInStates(
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
 		exclude,
 	)
+
+	// No nodes to exchange, this is fine
+	if len(randomNodes) == 0 {
+		return
+	}
 
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
 	for _, n := range randomNodes {
 		peerStates = append(peerStates, exchangeNodeState{
-			ID:                n.ID,
-			AdvertiseAddr:     n.advertiseAddr,
-			State:             n.state,
-			StateChangeTime:   n.stateChangeTime,
-			MetadataTimestamp: n.metadata.GetTimestamp(),
-			Metadata:          n.metadata.GetAll(),
+			ID:             n.ID,
+			AdvertiseAddr:  n.advertiseAddr,
+			State:          n.observedState,
+			StateTimestamp: n.observedStateTime,
 		})
 	}
 
-	// No nodes to exchange, this is fine
-	if len(peerStates) == 0 {
-		return nil
-	}
+	for _, node := range nodes {
+		var peerResponseStates []exchangeNodeState
 
-	// Exchange state with the peer
-	err := c.sendToWithResponse(
-		node,
-		pushPullStateMsg,
-		&peerStates,
-		&peerStates)
-	if err != nil {
-		return err
-	}
+		// Exchange state with the peer
+		err := c.sendToWithResponse(
+			node,
+			pushPullStateMsg,
+			&peerStates,
+			&peerResponseStates,
+		)
+		if err != nil {
+			c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Failed to exchange state with node")
+			c.nodes.updateState(node.ID, NodeSuspect)
+		} else {
+			if node.observedState == NodeSuspect {
+				c.nodes.updateState(node.ID, NodeAlive)
+				c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Node recovered from suspect")
+			}
+			node.updateLastActivity()
 
-	// Process the received states
-	c.healthMonitor.combineRemoteNodeState(node, peerStates)
-	return nil
+			c.combineStates(peerResponseStates)
+		}
+	}
+}
+
+// Combine the received states with our own to form a complete view of the cluster state
+func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
+	for _, state := range remoteStates {
+		// Skip us
+		if state.ID == c.localNode.ID {
+			continue
+		}
+
+		localNode := c.nodes.get(state.ID)
+		if localNode == nil {
+			// Skip dead or leaving nodes when creating new nodes
+			if state.State == NodeDead || state.State == NodeLeaving {
+				continue
+			}
+
+			req := &joinRequest{
+				nodeAddr: state.AdvertiseAddr,
+			}
+
+			select {
+			case c.joinQueue <- req:
+			default:
+				c.config.Logger.Field("peer_id", state.ID.String()).Field("address", state.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+			}
+		} else {
+			// Node exists locally, need to merge states intelligently
+			c.config.Logger.Tracef("gossip: Merging state for existing node: %s", state.ID.String())
+
+			// Update advertise address if it has changed (but log it)
+			if localNode.advertiseAddr != state.AdvertiseAddr {
+				c.config.Logger.Debugf("gossip: Node %s advertise address changed: %s -> %s", state.ID.String(), localNode.advertiseAddr, state.AdvertiseAddr)
+				localNode.advertiseAddr = state.AdvertiseAddr
+				localNode.address.Clear() // Force re-resolution
+			}
+
+			// If the remote state timestamp is newer then we need to consider what's being reported
+			if state.StateTimestamp.After(localNode.observedStateTime) && state.State != localNode.observedState {
+				if state.State == NodeLeaving {
+					c.nodes.updateState(localNode.ID, NodeLeaving)
+				}
+			}
+		}
+	}
 }
 
 // Enqueue a packet for broadcasting to peers.
@@ -552,8 +645,10 @@ func (c *Cluster) broadcastWorker() {
 				item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
 			}
 
-			if err := c.transport.SendPacket(item.transportType, item.peers, item.packet); err != nil {
-				c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
+			for _, node := range item.peers {
+				if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
+					c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
+				}
 			}
 
 			// Release the broadcast item back to the pool
@@ -565,47 +660,6 @@ func (c *Cluster) broadcastWorker() {
 			return
 		}
 	}
-}
-
-// Start periodic state synchronization with random peers
-func (c *Cluster) periodicStateSync() {
-	go func() {
-		// Add jitter to prevent all nodes syncing at the same time
-		jitter := time.Duration(rand.Int63n(int64(c.config.StateSyncInterval / 4)))
-		time.Sleep(jitter)
-
-		ticker := time.NewTicker(c.config.StateSyncInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// Calculate appropriate number of peers based on cluster size
-				peerCount := c.CalcFanOut()
-				if peerCount == 0 {
-					continue
-				}
-
-				// Get random subset, excluding ourselves
-				peers := c.nodes.getRandomNodes(peerCount, []NodeID{c.localNode.ID})
-
-				// Perform state exchange with selected peers
-				for _, peer := range peers {
-					go func(p *Node) {
-						err := c.exchangeState(p, []NodeID{c.localNode.ID, p.ID})
-						if err != nil {
-							c.config.Logger.Err(err).Field("peer", p.ID.String()).Tracef("gossip: Periodic state exchange failed")
-						} else {
-							c.config.Logger.Field("peer", p.ID.String()).Tracef("gossip: Completed periodic state exchange")
-						}
-					}(peer)
-				}
-
-			case <-c.shutdownContext.Done():
-				return
-			}
-		}
-	}()
 }
 
 func (c *Cluster) LocalNode() *Node {
@@ -661,16 +715,7 @@ func (c *Cluster) HandleFunc(msgType MessageType, handler Handler) error {
 	if msgType < ReservedMsgsStart {
 		return fmt.Errorf("invalid message type")
 	}
-	c.handlers.registerHandler(msgType, true, handler)
-	return nil
-}
-
-// Registers a handler to accept a message without automatically forwarding it to other nodes
-func (c *Cluster) HandleFuncNoForward(msgType MessageType, handler Handler) error {
-	if msgType < ReservedMsgsStart {
-		return fmt.Errorf("invalid message type")
-	}
-	c.handlers.registerHandler(msgType, false, handler)
+	c.handlers.registerHandler(msgType, handler)
 	return nil
 }
 
@@ -683,15 +728,6 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
-// Registers a handler to accept a message and open a stream between sender and destination, always uses the reliable transport
-func (c *Cluster) HandleStreamFunc(msgType MessageType, handler StreamHandler) error {
-	if msgType < ReservedMsgsStart {
-		return fmt.Errorf("invalid message type")
-	}
-	c.handlers.registerStreamHandler(msgType, handler)
-	return nil
-}
-
 func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
 	if msgType < ReservedMsgsStart {
 		return false
@@ -700,31 +736,19 @@ func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
 }
 
 func (c *Cluster) HandleNodeStateChangeFunc(handler NodeStateChangeHandler) HandlerID {
-	return c.stateEventHandlers.Add(handler)
+	return c.nodes.OnNodeStateChange(handler)
 }
 
 func (c *Cluster) RemoveNodeStateChangeHandler(id HandlerID) bool {
-	return c.stateEventHandlers.Remove(id)
+	return c.nodes.RemoveStateChangeHandler(id)
 }
 
 func (c *Cluster) HandleNodeMetadataChangeFunc(handler NodeMetadataChangeHandler) HandlerID {
-	return c.metadataChangeEventHandlers.Add(handler)
+	return c.nodes.OnNodeMetadataChange(handler)
 }
 
 func (c *Cluster) RemoveNodeMetadataChangeHandler(id HandlerID) bool {
-	return c.metadataChangeEventHandlers.Remove(id)
-}
-
-func (c *Cluster) notifyNodeStateChanged(node *Node, prevState NodeState) {
-	c.stateEventHandlers.ForEach(func(handler NodeStateChangeHandler) {
-		go handler(node, prevState)
-	})
-}
-
-func (c *Cluster) notifyMetadataChanged(node *Node) {
-	c.metadataChangeEventHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
-		go handler(node)
-	})
+	return c.nodes.RemoveMetadataChangeHandler(id)
 }
 
 func (c *Cluster) NodeIsLocal(node *Node) bool {
@@ -744,10 +768,44 @@ func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
 	return c.gossipEventHandlers.Remove(id)
 }
 
-func (c *Cluster) notifyDoGossip() {
-	c.gossipEventHandlers.ForEach(func(handler GossipHandler) {
-		handler()
-	})
+func (c *Cluster) metadataGossipManager() {
+	go func() {
+		// Small jitter
+		jitter := time.Duration(rand.Int63n(int64(c.config.MetadataGossipInterval / 4)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.MetadataGossipInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.gossipMetadata()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) stateGossipManager() {
+	go func() {
+		// Larger jitter for state sync
+		jitter := time.Duration(rand.Int63n(int64(c.config.StateGossipInterval / 2)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.StateGossipInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.exchangeState(c.GetCandidates(), []NodeID{c.localNode.ID})
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
 }
 
 func (c *Cluster) gossipManager() {
@@ -763,7 +821,9 @@ func (c *Cluster) gossipManager() {
 			select {
 			case <-c.gossipTicker.C:
 				start := time.Now()
-				c.notifyDoGossip()
+				c.gossipEventHandlers.ForEach(func(handler GossipHandler) {
+					handler()
+				})
 				elapsed := time.Since(start)
 
 				c.adjustGossipInterval(elapsed)
@@ -806,26 +866,31 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 	}
 }
 
+func (c *Cluster) gossipMetadata() {
+	// Only send periodic metadata if we haven't sent any metadata updates recently
+	// This avoids redundant traffic when metadata is actively changing
+	lastUpdate := c.localNode.metadata.GetTimestamp().Time()
+	if time.Since(lastUpdate) <= c.config.MetadataGossipInterval/2 {
+		return
+	}
+
+	// Send lightweight metadata updates to a small subset of nodes
+	candidates := c.nodes.getRandomNodes(3, []NodeID{c.localNode.ID})
+	c.sendMessage(
+		candidates,
+		TransportBestEffort,
+		c.getMaxTTL(),
+		metadataUpdateMsg,
+		metadataUpdateMessage{
+			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
+			Metadata:          c.localNode.metadata.GetAll(),
+			NodeState:         c.localNode.observedState,
+		},
+	)
+}
+
 func (c *Cluster) Logger() Logger {
 	return c.config.Logger
-}
-
-// Checks the connections is of Stream type and enables compression if supported
-// This is a no-op if the connection is not a Stream
-func (c *Cluster) EnableStreamCompression(s net.Conn) *Cluster {
-	if stream, ok := s.(*Stream); ok {
-		stream.EnableCompression()
-	}
-	return c
-}
-
-// Checks the connections is of Stream type and disables compression if supported
-// This is a no-op if the connection is not a Stream
-func (c *Cluster) DisableStreamCompression(s net.Conn) *Cluster {
-	if stream, ok := s.(*Stream); ok {
-		stream.DisableCompression()
-	}
-	return c
 }
 
 func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
@@ -834,4 +899,48 @@ func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
 		ids = append(ids, node.ID)
 	}
 	return ids
+}
+
+func (c *Cluster) nodeCleanupManager() {
+	go func() {
+		// Add jitter to prevent all nodes cleaning up at the same time
+		jitter := time.Duration(rand.Int63n(int64(c.config.NodeCleanupInterval / 4)))
+		time.Sleep(jitter)
+
+		ticker := time.NewTicker(c.config.NodeCleanupInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.cleanupNodes()
+			case <-c.shutdownContext.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (c *Cluster) cleanupNodes() {
+	now := time.Now()
+
+	// Get all leaving and dead nodes
+	leavingNodes := c.nodes.getAllInStates([]NodeState{NodeLeaving})
+	deadNodes := c.nodes.getAllInStates([]NodeState{NodeDead})
+
+	// Move old leaving nodes to dead
+	for _, node := range leavingNodes {
+		if now.Sub(node.observedStateTime.Time()) > c.config.LeavingNodeTimeout {
+			c.nodes.updateState(node.ID, NodeDead)
+			c.config.Logger.Debugf("gossip: Moved leaving node to dead: %s", node.ID.String())
+		}
+	}
+
+	// Remove old dead nodes
+	for _, node := range deadNodes {
+		if now.Sub(node.observedStateTime.Time()) > c.config.NodeRetentionTime {
+			c.nodes.remove(node.ID)
+			c.config.Logger.Debugf("gossip: Removed dead node: %s", node.ID.String())
+		}
+	}
 }

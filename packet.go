@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -14,21 +15,15 @@ type MessageID hlc.Timestamp
 
 const (
 	// Message types
-	replyMsg           MessageType = iota // Reply to a message
-	pingMsg                               // Sent to test if a peer is alive
-	pingAckMsg                            // Sent in response to a ping message
-	indirectPingMsg                       // Sent to test if a peer is alive, but not directly reachable
-	indirectPingAckMsg                    // Sent in response to an indirect ping message
-	nodeJoinMsg                           // Sent by peers when they are joining the network, as doing a push / pull state transfer
-	pushPullStateMsg                      // Sent by peers when pushing / pulling state
-	aliveMsg                              // Sent to announce a node is alive
-	suspicionMsg                          // Sent to announce a node is suspected to be dead
-	leavingMsg                            // Sent to announce a node is leaving
-	metadataUpdateMsg                     // Update the metadata of a node
-	streamOpenAckMsg                      // Acknowledgement of a stream open
-	ReservedMsgsStart  MessageType = 64   // Reserved for future use
-	_                                     // skip to 128
-	UserMsg            MessageType = 128  // User messages start here
+	replyMsg          MessageType = iota // Reply to a message
+	nodeJoinMsg                          // Sent by peers when they are joining the network, as doing a push / pull state transfer
+	nodeLeaveMsg                         // Sent by peers when they are leaving the network
+	pushPullStateMsg                     // Sent by peers when pushing / pulling state
+	metadataUpdateMsg                    // Update the metadata of a node
+	pingMsg                              // Health check ping
+	ReservedMsgsStart MessageType = 64   // Reserved for future use
+	_                                    // skip to 128
+	UserMsg           MessageType = 128  // User messages start here
 )
 
 var (
@@ -41,14 +36,21 @@ var (
 
 // Packet holds the payload of a message being passed between nodes
 type Packet struct {
-	MessageType MessageType `msgpack:"mt" json:"mt"`
-	SenderID    NodeID      `msgpack:"si" json:"si"`
-	MessageID   MessageID   `msgpack:"mi" json:"mi"`
-	TTL         uint8       `msgpack:"ttl" json:"ttl"`
-	payload     []byte
-	codec       codec.Serializer
-	conn        net.Conn
-	refCount    atomic.Int32
+	MessageType  MessageType `msgpack:"mt" json:"mt"`
+	SenderID     NodeID      `msgpack:"si" json:"si"`
+	TargetNodeID *NodeID     `msgpack:"ti,omitempty" json:"ti,omitempty"` // Optional: for direct messages
+	MessageID    MessageID   `msgpack:"mi" json:"mi"`
+	TTL          uint8       `msgpack:"ttl" json:"ttl"`
+	payload      []byte
+	codec        codec.Serializer
+
+	// Connection for connection-based transports (TCP/WebSocket)
+	conn net.Conn
+
+	// Reply channel for async replies (works for all transports)
+	replyChan chan<- *Packet
+
+	refCount atomic.Int32
 }
 
 func NewPacket() *Packet {
@@ -70,6 +72,9 @@ func (p *Packet) Release() {
 
 		p.conn = nil
 		p.payload = nil
+		p.replyChan = nil
+		p.SenderID = EmptyNodeID
+		p.TargetNodeID = nil
 
 		packetPool.Put(p)
 	}
@@ -83,62 +88,96 @@ func (p *Packet) Codec() codec.Serializer {
 	return p.codec
 }
 
+// CanReply returns true if the packet can send a reply
+func (p *Packet) CanReply() bool {
+	return p.conn != nil || p.replyChan != nil
+}
+
+// SendReply sends a reply packet using the available reply mechanism
+func (p *Packet) SendReply() error {
+	if p.replyChan != nil {
+		select {
+		case p.replyChan <- p:
+			return nil
+		default:
+			return fmt.Errorf("reply channel full or closed")
+		}
+	}
+	return fmt.Errorf("no reply mechanism available")
+}
+
+// SetReplyChan sets the reply channel for this packet
+func (p *Packet) SetReplyChan(ch chan<- *Packet) {
+	p.replyChan = ch
+}
+
+// SetConn sets the connection for this packet
+func (p *Packet) SetConn(conn net.Conn) {
+	p.conn = conn
+}
+
+// Payload returns the packet payload
+func (p *Packet) Payload() []byte {
+	return p.payload
+}
+
+// SetPayload sets the packet payload
+func (p *Packet) SetPayload(payload []byte) {
+	p.payload = payload
+}
+
+// SetCodec sets the packet codec
+func (p *Packet) SetCodec(codec codec.Serializer) {
+	p.codec = codec
+}
+
 type joinMessage struct {
 	ID                 NodeID                 `msgpack:"id" json:"id"`
 	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
+	State              NodeState              `msgpack:"s" json:"s"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
 
 type joinReplyMessage struct {
-	Accepted           bool                   `msgpack:"acc" json:"acc"`
-	RejectReason       string                 `msgpack:"rr" json:"rr"`
-	ID                 NodeID                 `msgpack:"id" json:"id"`
-	AdvertiseAddr      string                 `msgpack:"addr" json:"addr"`
-	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
-	ApplicationVersion string                 `msgpack:"av" json:"av"`
-	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
-	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
-}
-
-type exchangeNodeState struct {
-	ID                NodeID                 `msgpack:"id" json:"id"`
+	Accepted          bool                   `msgpack:"acc" json:"acc"`
+	RejectReason      string                 `msgpack:"rr" json:"rr"`
+	NodeID            NodeID                 `msgpack:"id" json:"id"`
 	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
-	State             NodeState              `msgpack:"s" json:"s"`
-	StateChangeTime   hlc.Timestamp          `msgpack:"sct" json:"sct"`
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	Nodes             []joinNode             `msgpack:"nodes" json:"nodes"`
 }
 
-type pingMessage struct {
-	TargetID      NodeID `msgpack:"ti" json:"ti"`
-	Seq           uint32 `msgpack:"seq" json:"seq"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
-}
-
-type indirectPingMessage struct {
-	TargetID      NodeID `msgpack:"ti" json:"ti"`
-	Seq           uint32 `msgpack:"seq" json:"seq"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr,omitempty"`
-	Ok            bool   `msgpack:"ok" json:"ok"`
-}
-
-type aliveMessage struct {
-	NodeID        NodeID `msgpack:"ni" json:"ni"`
+type joinNode struct {
+	ID            NodeID `msgpack:"id" json:"id"`
 	AdvertiseAddr string `msgpack:"addr" json:"addr"`
 }
 
-type suspicionMessage struct {
-	NodeID NodeID `msgpack:"ni" json:"ni"`
-}
-
-type leavingMessage struct {
-	NodeID NodeID `msgpack:"ni" json:"ni"`
+type exchangeNodeState struct {
+	ID             NodeID        `msgpack:"id" json:"id"`
+	AdvertiseAddr  string        `msgpack:"addr" json:"addr"`
+	State          NodeState     `msgpack:"s" json:"s"`
+	StateTimestamp hlc.Timestamp `msgpack:"sct" json:"sct"`
 }
 
 type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	NodeState         NodeState              `msgpack:"state" json:"state"`
+}
+
+type pingMessage struct {
+	SenderID      NodeID `msgpack:"sid" json:"sid"`
+	AdvertiseAddr string `msgpack:"addr" json:"addr"`
+}
+
+type pongMessage struct {
+	NodeID            NodeID                 `msgpack:"nid" json:"nid"`
+	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
+	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
+	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
+	NodeState         NodeState              `msgpack:"state" json:"state"`
 }

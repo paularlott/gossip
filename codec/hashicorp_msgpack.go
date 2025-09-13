@@ -14,6 +14,10 @@ func NewHashicorpMsgpackCodec() *HashicorpMsgpackCodec {
 	}
 }
 
+func (mp *HashicorpMsgpackCodec) Name() string {
+	return "hashicorp-msgpack"
+}
+
 func (mp *HashicorpMsgpackCodec) Marshal(v interface{}) ([]byte, error) {
 	var data []byte
 

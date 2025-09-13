@@ -33,11 +33,14 @@ func (le EventType) String() string {
 type LeaderEventHandler func(EventType, gossip.NodeID)
 
 type leaderEventHandlers struct {
+	logger   gossip.Logger
 	handlers atomic.Value
 }
 
-func newLeaderEventHandlers() *leaderEventHandlers {
-	handlers := &leaderEventHandlers{}
+func newLeaderEventHandlers(logger gossip.Logger) *leaderEventHandlers {
+	handlers := &leaderEventHandlers{
+		logger: logger,
+	}
 	handlers.handlers.Store(make(map[EventType][]LeaderEventHandler))
 	return handlers
 }
@@ -67,8 +70,16 @@ func (h *leaderEventHandlers) dispatch(eventType EventType, leaderID gossip.Node
 		return
 	}
 
-	// Call each handler
+	// Call each handler with panic recovery
 	for _, handler := range eventHandlers {
-		go handler(eventType, leaderID)
+		go func(evtHandler LeaderEventHandler) {
+			defer func() {
+				if r := recover(); r != nil {
+					// Log panic but don't crash the application
+					h.logger.Warnf("Recovered from panic in leader event handler: %v", r)
+				}
+			}()
+			evtHandler(eventType, leaderID)
+		}(handler)
 	}
 }

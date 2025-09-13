@@ -1,391 +1,643 @@
 package gossip
 
 import (
-	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/paularlott/gossip/hlc"
 )
 
-func TestMetadataBasicOperations(t *testing.T) {
+func TestNewMetadata(t *testing.T) {
 	md := NewMetadata()
-
-	// Test empty state
-	if val := md.GetString("nonexistent"); val != "" {
-		t.Errorf("Expected empty string for nonexistent key, got %s", val)
+	
+	if md == nil {
+		t.Fatal("NewMetadata returned nil")
 	}
-
-	// Set and get string
-	md.SetString("name", "test-node")
-	if val := md.GetString("name"); val != "test-node" {
-		t.Errorf("Expected 'test-node', got %s", val)
+	
+	if md.data.Load() == nil {
+		t.Fatal("data not initialized")
 	}
-
-	// Test delete
-	md.Delete("name")
-	if val := md.GetString("name"); val != "" {
-		t.Errorf("Expected empty string after delete, got %s", val)
+	
+	if len(*md.data.Load()) != 0 {
+		t.Fatal("data should be empty initially")
+	}
+	
+	if md.GetTimestamp() != 0 {
+		t.Fatal("timestamp should be 0 initially")
 	}
 }
 
-func TestMetadataStringConversions(t *testing.T) {
+func TestMetadataInterfaceImplementation(t *testing.T) {
 	md := NewMetadata()
-
-	// Set various types and get as string
-	md.SetBool("bool-true", true)
-	md.SetBool("bool-false", false)
-	md.SetInt("int", 123)
-	md.SetInt64("int64", -9223372036854775807)
-	md.SetUint64("uint64", 18446744073709551615)
-	md.SetFloat64("float64", 123.456)
-	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	md.SetTime("time", testTime)
-
-	tests := []struct {
-		key      string
-		expected string
-	}{
-		{"bool-true", "true"},
-		{"bool-false", "false"},
-		{"int", "123"},
-		{"int64", "-9223372036854775807"},
-		{"uint64", "18446744073709551615"},
-		{"float64", "123.456"},
-		{"time", "2023-01-01T12:00:00Z"},
+	
+	// Test MetadataReader interface
+	var reader MetadataReader = md
+	if reader == nil {
+		t.Fatal("Metadata should implement MetadataReader")
 	}
-
-	for _, test := range tests {
-		got := md.GetString(test.key)
-		if got != test.expected {
-			t.Errorf("GetString(%s) = %s; want %s", test.key, got, test.expected)
-		}
+	
+	// Test LocalMetadata interface
+	var local LocalMetadata = md
+	if local == nil {
+		t.Fatal("Metadata should implement LocalMetadata")
 	}
 }
 
-func TestMetadataBoolConversions(t *testing.T) {
+func TestMetadataSetString(t *testing.T) {
 	md := NewMetadata()
-
-	// Test direct bool values
-	md.SetBool("true", true)
-	md.SetBool("false", false)
-
-	// Test numeric to bool conversions
-	md.SetInt("int-one", 1)
-	md.SetInt("int-zero", 0)
-	md.SetInt64("int64-neg", -10)
-	md.SetFloat64("float-nonzero", 0.1)
-	md.SetFloat64("float-zero", 0.0)
-
-	// Test string to bool conversions
-	md.SetString("str-true", "true")
-	md.SetString("str-false", "false")
-	md.SetString("str-one", "1")
-	md.SetString("str-zero", "0")
-	md.SetString("str-invalid", "invalid")
-
-	tests := []struct {
-		key      string
-		expected bool
-	}{
-		{"true", true},
-		{"false", false},
-		{"int-one", true},
-		{"int-zero", false},
-		{"int64-neg", true}, // Non-zero int is true
-		{"float-nonzero", true},
-		{"float-zero", false},
-		{"str-true", true},
-		{"str-false", false},
-		{"str-one", true},
-		{"str-zero", false},
-		{"str-invalid", false}, // Invalid string should be false
-		{"nonexistent", false}, // Nonexistent key should be false
+	
+	result := md.SetString("key1", "value1")
+	if result != md {
+		t.Fatal("SetString should return self")
 	}
-
-	for _, test := range tests {
-		got := md.GetBool(test.key)
-		if got != test.expected {
-			t.Errorf("GetBool(%s) = %v; want %v", test.key, got, test.expected)
-		}
+	
+	if md.GetString("key1") != "value1" {
+		t.Fatal("GetString should return set value")
+	}
+	
+	if !md.Exists("key1") {
+		t.Fatal("Key should exist after setting")
+	}
+	
+	// Test timestamp update
+	if md.GetTimestamp() == 0 {
+		t.Fatal("Timestamp should be updated after setting")
 	}
 }
 
-func TestMetadataIntConversions(t *testing.T) {
+func TestMetadataSetBool(t *testing.T) {
 	md := NewMetadata()
+	
+	md.SetBool("bool_true", true)
+	md.SetBool("bool_false", false)
+	
+	if !md.GetBool("bool_true") {
+		t.Fatal("GetBool should return true")
+	}
+	
+	if md.GetBool("bool_false") {
+		t.Fatal("GetBool should return false")
+	}
+	
+	// Test string conversion
+	if md.GetString("bool_true") != "true" {
+		t.Fatal("Bool true should convert to string 'true'")
+	}
+	
+	if md.GetString("bool_false") != "false" {
+		t.Fatal("Bool false should convert to string 'false'")
+	}
+}
 
-	// Test various types that should convert to integers
+func TestMetadataSetInt(t *testing.T) {
+	md := NewMetadata()
+	
 	md.SetInt("int", 42)
 	md.SetInt32("int32", 32)
 	md.SetInt64("int64", 64)
-	md.SetUint("uint", 100)
-	md.SetUint32("uint32", 320)
-	md.SetUint64("uint64", 640)
-	md.SetFloat32("float32", 32.5)
-	md.SetFloat64("float64", 64.5)
-	md.SetString("str-int", "123")
-	md.SetString("str-neg", "-456")
-	md.SetString("str-float", "789.5")
-	md.SetString("str-invalid", "not-a-number")
-	md.SetBool("bool-true", true)
-	md.SetBool("bool-false", false)
-
-	// Test int conversions
-	tests := []struct {
-		key      string
-		expected int
-	}{
-		{"int", 42},
-		{"int32", 32},
-		{"int64", 64},
-		{"uint", 100},
-		{"uint32", 320},
-		{"uint64", 640},
-		{"float32", 32}, // Truncated
-		{"float64", 64}, // Truncated
-		{"str-int", 123},
-		{"str-neg", -456},
-		{"str-float", 789}, // Truncated
-		{"str-invalid", 0}, // Invalid string should be 0
-		{"bool-true", 1},
-		{"bool-false", 0},
-		{"nonexistent", 0}, // Nonexistent key should be 0
+	
+	if md.GetInt("int") != 42 {
+		t.Fatal("GetInt should return 42")
 	}
-
-	for _, test := range tests {
-		got := md.GetInt(test.key)
-		if got != test.expected {
-			t.Errorf("GetInt(%s) = %d; want %d", test.key, got, test.expected)
-		}
+	
+	if md.GetInt32("int32") != 32 {
+		t.Fatal("GetInt32 should return 32")
 	}
-
-	// Test int32/int64 conversions - sample key cases
-	if md.GetInt32("int") != 42 {
-		t.Errorf("GetInt32(int) failed")
+	
+	if md.GetInt64("int64") != 64 {
+		t.Fatal("GetInt64 should return 64")
 	}
-	if md.GetInt64("str-neg") != -456 {
-		t.Errorf("GetInt64(str-neg) failed")
+	
+	// Test cross-type conversion
+	if md.GetInt64("int") != 42 {
+		t.Fatal("GetInt64 should convert int to int64")
+	}
+	
+	if md.GetString("int") != "42" {
+		t.Fatal("GetString should convert int to string")
 	}
 }
 
-func TestMetadataUintConversions(t *testing.T) {
+func TestMetadataSetUint(t *testing.T) {
 	md := NewMetadata()
-
-	// Set various types
+	
 	md.SetUint("uint", 42)
 	md.SetUint32("uint32", 32)
 	md.SetUint64("uint64", 64)
-	md.SetInt("int-pos", 100)
-	md.SetInt("int-neg", -100) // Negative should convert to 0
-	md.SetFloat64("float", 123.45)
-	md.SetString("str-uint", "789")
-	md.SetString("str-neg", "-123") // Should convert to 0
-	md.SetBool("bool-true", true)
-	md.SetBool("bool-false", false)
-
-	tests := []struct {
-		key      string
-		expected uint
-	}{
-		{"uint", 42},
-		{"uint32", 32},
-		{"uint64", 64},
-		{"int-pos", 100},
-		{"int-neg", 0}, // Negative becomes 0
-		{"float", 123}, // Truncated
-		{"str-uint", 789},
-		{"str-neg", 0}, // Negative string becomes 0
-		{"bool-true", 1},
-		{"bool-false", 0},
-		{"nonexistent", 0},
+	
+	if md.GetUint("uint") != 42 {
+		t.Fatal("GetUint should return 42")
 	}
-
-	for _, test := range tests {
-		got := md.GetUint(test.key)
-		if got != test.expected {
-			t.Errorf("GetUint(%s) = %d; want %d", test.key, got, test.expected)
-		}
+	
+	if md.GetUint32("uint32") != 32 {
+		t.Fatal("GetUint32 should return 32")
 	}
-
-	// Test uint32/uint64 conversions - sample key cases
-	if md.GetUint32("uint") != 42 {
-		t.Errorf("GetUint32(uint) failed")
+	
+	if md.GetUint64("uint64") != 64 {
+		t.Fatal("GetUint64 should return 64")
 	}
-	if md.GetUint64("str-uint") != 789 {
-		t.Errorf("GetUint64(str-uint) failed")
+	
+	// Test negative int conversion to uint
+	md.SetInt("negative", -5)
+	if md.GetUint64("negative") != 0 {
+		t.Fatal("Negative int should convert to 0 for uint")
 	}
 }
 
-func TestMetadataFloatConversions(t *testing.T) {
+func TestMetadataSetFloat(t *testing.T) {
 	md := NewMetadata()
-
-	// Set various types
-	md.SetFloat32("float32", 32.5)
-	md.SetFloat64("float64", 64.75)
-	md.SetInt("int", 42)
-	md.SetUint64("uint64", 100)
-	md.SetString("str-float", "123.45")
-	md.SetString("str-int", "789")
-	md.SetString("str-invalid", "not-a-number")
-	md.SetBool("bool-true", true)
-	md.SetBool("bool-false", false)
-
-	tests := []struct {
-		key      string
-		expected float64
-	}{
-		{"float32", 32.5},
-		{"float64", 64.75},
-		{"int", 42.0},
-		{"uint64", 100.0},
-		{"str-float", 123.45},
-		{"str-int", 789.0},
-		{"str-invalid", 0.0},
-		{"bool-true", 1.0},
-		{"bool-false", 0.0},
-		{"nonexistent", 0.0},
+	
+	md.SetFloat32("float32", 3.14)
+	md.SetFloat64("float64", 2.718)
+	
+	if md.GetFloat32("float32") != 3.14 {
+		t.Fatal("GetFloat32 should return 3.14")
 	}
-
-	for _, test := range tests {
-		got := md.GetFloat64(test.key)
-		if got != test.expected {
-			t.Errorf("GetFloat64(%s) = %f; want %f", test.key, got, test.expected)
-		}
+	
+	if md.GetFloat64("float64") != 2.718 {
+		t.Fatal("GetFloat64 should return 2.718")
 	}
-
-	// Test float32 conversion
-	if md.GetFloat32("float64") != 64.75 {
-		t.Errorf("GetFloat32(float64) failed")
+	
+	// Test cross-type conversion
+	if md.GetFloat64("float32") != 3.140000104904175 { // float32 precision
+		t.Fatalf("GetFloat64 should convert float32, got %f", md.GetFloat64("float32"))
 	}
 }
 
-func TestMetadataTimeConversions(t *testing.T) {
+func TestMetadataSetTime(t *testing.T) {
 	md := NewMetadata()
-
-	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	md.SetTime("time", testTime)
-	md.SetInt64("ts", testTime.UnixNano())
-	md.SetString("str-rfc3339", testTime.Format(time.RFC3339))
-	md.SetString("str-date", "2023-01-02") // Just date
-	md.SetString("str-invalid", "not-a-time")
-
-	// Direct time retrieval
-	if !md.GetTime("time").Equal(testTime) {
-		t.Errorf("GetTime(time) failed")
+	
+	now := time.Now()
+	md.SetTime("time", now)
+	
+	retrieved := md.GetTime("time")
+	if !retrieved.Equal(now) {
+		t.Fatal("GetTime should return the same time")
 	}
-
-	// Timestamp conversion
-	if !md.GetTime("ts").Equal(testTime) {
-		t.Errorf("GetTime(ts) failed")
+	
+	// Test string conversion
+	expected := now.Format(time.RFC3339)
+	if md.GetString("time") != expected {
+		t.Fatal("Time should convert to RFC3339 string")
 	}
+}
 
-	// String conversion
-	if !md.GetTime("str-rfc3339").Equal(testTime) {
-		t.Errorf("GetTime(str-rfc3339) failed")
+func TestMetadataDelete(t *testing.T) {
+	md := NewMetadata()
+	
+	md.SetString("key1", "value1")
+	md.SetString("key2", "value2")
+	
+	if !md.Exists("key1") {
+		t.Fatal("key1 should exist")
 	}
-
-	// Date-only string should work but have zero time
-	expectedDate := time.Date(2023, 1, 2, 0, 0, 0, 0, time.UTC)
-	if !md.GetTime("str-date").Equal(expectedDate) {
-		t.Errorf("GetTime(str-date) failed, got %v, want %v",
-			md.GetTime("str-date"), expectedDate)
+	
+	initialTimestamp := md.GetTimestamp()
+	time.Sleep(time.Microsecond) // Ensure timestamp difference
+	
+	md.Delete("key1")
+	
+	if md.Exists("key1") {
+		t.Fatal("key1 should not exist after deletion")
 	}
-
-	// Invalid string should return zero time
-	if !md.GetTime("str-invalid").Equal(time.Time{}) {
-		t.Errorf("GetTime(str-invalid) should return zero time")
+	
+	if md.GetString("key1") != "" {
+		t.Fatal("Deleted key should return empty string")
 	}
-
-	// Nonexistent key should return zero time
-	if !md.GetTime("nonexistent").Equal(time.Time{}) {
-		t.Errorf("GetTime(nonexistent) should return zero time")
+	
+	if md.Exists("key2") != true {
+		t.Fatal("key2 should still exist")
 	}
+	
+	// Test timestamp update on delete
+	if md.GetTimestamp() <= initialTimestamp {
+		t.Fatal("Timestamp should be updated after deletion")
+	}
+	
+	// Test deleting non-existent key
+	md.Delete("nonexistent")
+	// Should not panic
 }
 
 func TestMetadataGetAll(t *testing.T) {
 	md := NewMetadata()
-
-	// Add some values
-	md.SetString("str", "string")
+	
+	md.SetString("str", "value")
 	md.SetInt("int", 42)
 	md.SetBool("bool", true)
-
-	// Get all values
+	
 	all := md.GetAll()
-
-	// Check count
+	
 	if len(all) != 3 {
-		t.Errorf("GetAll should return 3 items, got %d", len(all))
+		t.Fatalf("Expected 3 items, got %d", len(all))
 	}
-
-	// Check values
-	if all["str"] != "string" {
-		t.Errorf("GetAll['str'] invalid")
+	
+	if all["str"] != "value" {
+		t.Fatal("str value incorrect")
 	}
+	
 	if all["int"] != 42 {
-		t.Errorf("GetAll['int'] invalid")
+		t.Fatal("int value incorrect")
 	}
+	
 	if all["bool"] != true {
-		t.Errorf("GetAll['bool'] invalid")
+		t.Fatal("bool value incorrect")
 	}
+	
+	// Test that returned map is a copy
+	all["str"] = "modified"
+	if md.GetString("str") == "modified" {
+		t.Fatal("GetAll should return a copy, not reference")
+	}
+}
 
-	// Modify the returned map should not affect original
-	all["new"] = "value"
-	if exists := md.Exists("new"); exists {
-		t.Errorf("Modifying the map returned by GetAll should not affect the metadata")
+func TestMetadataGetAllKeys(t *testing.T) {
+	md := NewMetadata()
+	
+	md.SetString("key1", "value1")
+	md.SetString("key2", "value2")
+	md.SetString("key3", "value3")
+	
+	keys := md.GetAllKeys()
+	
+	if len(keys) != 3 {
+		t.Fatalf("Expected 3 keys, got %d", len(keys))
+	}
+	
+	keyMap := make(map[string]bool)
+	for _, key := range keys {
+		keyMap[key] = true
+	}
+	
+	if !keyMap["key1"] || !keyMap["key2"] || !keyMap["key3"] {
+		t.Fatal("Missing expected keys")
+	}
+}
+
+func TestMetadataGetAllAsString(t *testing.T) {
+	md := NewMetadata()
+	
+	md.SetString("str", "value")
+	md.SetInt("int", 42)
+	md.SetBool("bool", true)
+	md.SetFloat64("float", 3.14)
+	
+	allStr := md.GetAllAsString()
+	
+	if len(allStr) != 4 {
+		t.Fatalf("Expected 4 items, got %d", len(allStr))
+	}
+	
+	if allStr["str"] != "value" {
+		t.Fatal("str conversion incorrect")
+	}
+	
+	if allStr["int"] != "42" {
+		t.Fatal("int conversion incorrect")
+	}
+	
+	if allStr["bool"] != "true" {
+		t.Fatal("bool conversion incorrect")
+	}
+	
+	if allStr["float"] != "3.14" {
+		t.Fatal("float conversion incorrect")
+	}
+}
+
+func TestMetadataTypeConversions(t *testing.T) {
+	md := NewMetadata()
+	
+	// Test string to various types
+	md.SetString("str_int", "123")
+	md.SetString("str_float", "45.67")
+	md.SetString("str_bool", "true")
+	md.SetString("str_time", "2023-01-01T12:00:00Z")
+	
+	if md.GetInt64("str_int") != 123 {
+		t.Fatal("String to int conversion failed")
+	}
+	
+	if md.GetFloat64("str_float") != 45.67 {
+		t.Fatal("String to float conversion failed")
+	}
+	
+	if !md.GetBool("str_bool") {
+		t.Fatal("String to bool conversion failed")
+	}
+	
+	expectedTime, _ := time.Parse(time.RFC3339, "2023-01-01T12:00:00Z")
+	if !md.GetTime("str_time").Equal(expectedTime) {
+		t.Fatal("String to time conversion failed")
+	}
+	
+	// Test bool to numeric
+	md.SetBool("bool_true", true)
+	md.SetBool("bool_false", false)
+	
+	if md.GetInt64("bool_true") != 1 {
+		t.Fatal("Bool true should convert to 1")
+	}
+	
+	if md.GetInt64("bool_false") != 0 {
+		t.Fatal("Bool false should convert to 0")
+	}
+	
+	// Test numeric to bool
+	md.SetInt("zero", 0)
+	md.SetInt("nonzero", 5)
+	
+	if md.GetBool("zero") {
+		t.Fatal("Zero should convert to false")
+	}
+	
+	if !md.GetBool("nonzero") {
+		t.Fatal("Non-zero should convert to true")
+	}
+}
+
+func TestMetadataUpdate(t *testing.T) {
+	md := NewMetadata()
+	
+	// Set initial data
+	md.SetString("key1", "value1")
+	initialTimestamp := md.GetTimestamp()
+	
+	// Test update with newer timestamp
+	newData := map[string]interface{}{
+		"key1": "updated_value1",
+		"key2": "value2",
+	}
+	newerTimestamp := hlc.Timestamp(uint64(initialTimestamp) + 1000)
+	
+	if !md.update(newData, newerTimestamp, false) {
+		t.Fatal("Update with newer timestamp should succeed")
+	}
+	
+	if md.GetString("key1") != "updated_value1" {
+		t.Fatal("Data should be updated")
+	}
+	
+	if md.GetString("key2") != "value2" {
+		t.Fatal("New key should be added")
+	}
+	
+	if md.GetTimestamp() != newerTimestamp {
+		t.Fatal("Timestamp should be updated")
+	}
+	
+	// Test update with older timestamp (should fail)
+	olderData := map[string]interface{}{
+		"key1": "old_value",
+	}
+	olderTimestamp := hlc.Timestamp(uint64(initialTimestamp) - 1000)
+	
+	if md.update(olderData, olderTimestamp, false) {
+		t.Fatal("Update with older timestamp should fail")
+	}
+	
+	if md.GetString("key1") == "old_value" {
+		t.Fatal("Data should not be updated with older timestamp")
+	}
+	
+	// Test forced update with older timestamp
+	if !md.update(olderData, olderTimestamp, true) {
+		t.Fatal("Forced update should succeed")
+	}
+	
+	if md.GetString("key1") != "old_value" {
+		t.Fatal("Forced update should change data")
+	}
+}
+
+func TestMetadataExists(t *testing.T) {
+	md := NewMetadata()
+	
+	if md.Exists("nonexistent") {
+		t.Fatal("Non-existent key should return false")
+	}
+	
+	md.SetString("key", "value")
+	
+	if !md.Exists("key") {
+		t.Fatal("Existing key should return true")
+	}
+	
+	md.Delete("key")
+	
+	if md.Exists("key") {
+		t.Fatal("Deleted key should return false")
+	}
+}
+
+func TestMetadataEmptyValues(t *testing.T) {
+	md := NewMetadata()
+	
+	// Test getting non-existent keys
+	if md.GetString("missing") != "" {
+		t.Fatal("Missing string should return empty")
+	}
+	
+	if md.GetInt("missing") != 0 {
+		t.Fatal("Missing int should return 0")
+	}
+	
+	if md.GetBool("missing") {
+		t.Fatal("Missing bool should return false")
+	}
+	
+	if !md.GetTime("missing").IsZero() {
+		t.Fatal("Missing time should return zero time")
+	}
+	
+	// Test empty string conversions
+	md.SetString("empty", "")
+	
+	if md.GetInt("empty") != 0 {
+		t.Fatal("Empty string should convert to 0")
+	}
+	
+	if md.GetBool("empty") {
+		t.Fatal("Empty string should convert to false")
 	}
 }
 
 func TestMetadataConcurrentAccess(t *testing.T) {
 	md := NewMetadata()
-
-	// Number of goroutines to use for testing
+	
 	const numGoroutines = 10
-	// Number of operations per goroutine
-	const numOps = 100
-
-	// Use a channel to signal completion
-	done := make(chan bool, numGoroutines*2)
-
-	// Start reader goroutines
+	const numOperations = 100
+	
+	var wg sync.WaitGroup
+	var setCount atomic.Int64
+	
+	// Concurrent writes
 	for i := 0; i < numGoroutines; i++ {
-		go func(n int) {
-			for j := 0; j < numOps; j++ {
-				// Read some values
-				md.GetString(fmt.Sprintf("key-%d", j%10))
-				md.GetInt(fmt.Sprintf("key-%d", j%10))
-				md.GetBool(fmt.Sprintf("key-%d", j%10))
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numOperations; j++ {
+				key := "key_" + string(rune(goroutineID)) + "_" + string(rune(j))
+				md.SetString(key, "value")
+				setCount.Add(1)
 			}
-			done <- true
 		}(i)
 	}
-
-	// Start writer goroutines
+	
+	// Concurrent reads
 	for i := 0; i < numGoroutines; i++ {
-		go func(n int) {
-			for j := 0; j < numOps; j++ {
-				// Write different types of values
-				key := fmt.Sprintf("key-%d", j%10)
-				switch j % 3 {
-				case 0:
-					md.SetString(key, fmt.Sprintf("value-%d-%d", n, j))
-				case 1:
-					md.SetInt(key, j)
-				case 2:
-					md.SetBool(key, j%2 == 0)
-				}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numOperations; j++ {
+				md.GetString("key_0_0")
+				md.Exists("key_0_0")
+				md.GetAll()
 			}
-			done <- true
-		}(i)
+		}()
 	}
-
-	// Wait for all goroutines to finish
-	for i := 0; i < numGoroutines*2; i++ {
-		<-done
+	
+	wg.Wait()
+	
+	// Verify some data was written
+	if setCount.Load() != int64(numGoroutines*numOperations) {
+		t.Fatalf("Expected %d sets, got %d", numGoroutines*numOperations, setCount.Load())
 	}
+}
 
-	// We mainly care that there are no race conditions or panics
-	// but we should also have some data
-	all := md.GetAll()
-	if len(all) == 0 {
-		t.Errorf("No metadata entries after concurrent operations")
+func TestMetadataChaining(t *testing.T) {
+	md := NewMetadata()
+	
+	// Test method chaining
+	result := md.SetString("str", "value").
+		SetInt("int", 42).
+		SetBool("bool", true).
+		SetFloat64("float", 3.14)
+	
+	if result != md {
+		t.Fatal("Chaining should return same instance")
+	}
+	
+	if md.GetString("str") != "value" {
+		t.Fatal("Chained SetString failed")
+	}
+	
+	if md.GetInt("int") != 42 {
+		t.Fatal("Chained SetInt failed")
+	}
+	
+	if !md.GetBool("bool") {
+		t.Fatal("Chained SetBool failed")
+	}
+	
+	if md.GetFloat64("float") != 3.14 {
+		t.Fatal("Chained SetFloat64 failed")
+	}
+}
+
+// Benchmarks
+
+func BenchmarkMetadataSetString(b *testing.B) {
+	md := NewMetadata()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.SetString("key", "value")
+	}
+}
+
+func BenchmarkMetadataGetString(b *testing.B) {
+	md := NewMetadata()
+	md.SetString("key", "value")
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.GetString("key")
+	}
+}
+
+func BenchmarkMetadataSetInt(b *testing.B) {
+	md := NewMetadata()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.SetInt("key", i)
+	}
+}
+
+func BenchmarkMetadataGetInt(b *testing.B) {
+	md := NewMetadata()
+	md.SetInt("key", 42)
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.GetInt("key")
+	}
+}
+
+func BenchmarkMetadataExists(b *testing.B) {
+	md := NewMetadata()
+	md.SetString("key", "value")
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.Exists("key")
+	}
+}
+
+func BenchmarkMetadataGetAll(b *testing.B) {
+	md := NewMetadata()
+	for i := 0; i < 100; i++ {
+		md.SetString("key"+string(rune(i)), "value")
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		md.GetAll()
+	}
+}
+
+func BenchmarkMetadataConcurrentRead(b *testing.B) {
+	md := NewMetadata()
+	md.SetString("key", "value")
+	
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			md.GetString("key")
+		}
+	})
+}
+
+func BenchmarkMetadataConcurrentWrite(b *testing.B) {
+	md := NewMetadata()
+	
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			md.SetString("key", "value"+string(rune(i)))
+			i++
+		}
+	})
+}
+
+func BenchmarkMetadataMixed(b *testing.B) {
+	md := NewMetadata()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		switch i % 4 {
+		case 0:
+			md.SetString("key", "value")
+		case 1:
+			md.GetString("key")
+		case 2:
+			md.Exists("key")
+		case 3:
+			md.Delete("key")
+		}
 	}
 }

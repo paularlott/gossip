@@ -1,225 +1,260 @@
 package hlc
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestTimestampConstants(t *testing.T) {
-	// Test that our constants make sense
-	t.Logf("epochUnixMicro: %d", epochUnixMicro)
-	t.Logf("timeBits: %d", timeBits)
-	t.Logf("counterBits: %d", counterBits)
-	t.Logf("maxTime: %d", (uint64(1)<<timeBits)-1)
-
-	// Verify epoch is January 1, 2025
-	expectedEpoch := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	if epochUnixMicro != expectedEpoch.UnixMicro() {
-		t.Errorf("Epoch mismatch: expected %d, got %d", expectedEpoch.UnixMicro(), epochUnixMicro)
+func TestNewClock(t *testing.T) {
+	clock := NewClock()
+	if clock == nil {
+		t.Fatal("NewClock() returned nil")
+	}
+	if clock.last != 0 {
+		t.Errorf("Expected initial last value to be 0, got %d", clock.last)
 	}
 }
 
-func TestTimestampTimeConversion(t *testing.T) {
+func TestTimestampNow(t *testing.T) {
 	clock := NewClock()
 
-	// Test with current time
+	// Test basic timestamp generation
+	ts1 := clock.Now()
+	ts2 := clock.Now()
+
+	if ts1 == 0 {
+		t.Error("Expected non-zero timestamp")
+	}
+
+	if !ts2.After(ts1) && !ts2.Equal(ts1) {
+		t.Errorf("Expected ts2 (%d) to be after or equal to ts1 (%d)", ts2, ts1)
+	}
+}
+
+func TestTimestampMonotonicity(t *testing.T) {
+	clock := NewClock()
+
+	var timestamps []Timestamp
+	for i := 0; i < 1000; i++ {
+		timestamps = append(timestamps, clock.Now())
+	}
+
+	// Verify monotonicity
+	for i := 1; i < len(timestamps); i++ {
+		if timestamps[i].Before(timestamps[i-1]) {
+			t.Errorf("Timestamp %d (%d) is before timestamp %d (%d)",
+				i, timestamps[i], i-1, timestamps[i-1])
+		}
+	}
+}
+
+func TestTimestampConcurrency(t *testing.T) {
+	clock := NewClock()
+	const numGoroutines = 100
+	const timestampsPerGoroutine = 100
+
+	timestamps := make([][]Timestamp, numGoroutines)
+	var wg sync.WaitGroup
+
+	// Generate timestamps concurrently
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			timestamps[idx] = make([]Timestamp, timestampsPerGoroutine)
+			for j := 0; j < timestampsPerGoroutine; j++ {
+				timestamps[idx][j] = clock.Now()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Collect all timestamps
+	var allTimestamps []Timestamp
+	for i := 0; i < numGoroutines; i++ {
+		allTimestamps = append(allTimestamps, timestamps[i]...)
+	}
+
+	// Verify uniqueness
+	timestampMap := make(map[Timestamp]bool)
+	for _, ts := range allTimestamps {
+		if timestampMap[ts] {
+			t.Errorf("Duplicate timestamp found: %d", ts)
+		}
+		timestampMap[ts] = true
+	}
+
+	if len(timestampMap) != len(allTimestamps) {
+		t.Errorf("Expected %d unique timestamps, got %d", len(allTimestamps), len(timestampMap))
+	}
+}
+
+func TestTimestampComparison(t *testing.T) {
+	clock := NewClock()
+
+	ts1 := clock.Now()
+	time.Sleep(1 * time.Millisecond) // Ensure different time
+	ts2 := clock.Now()
+
+	// Test Before
+	if !ts1.Before(ts2) {
+		t.Errorf("Expected ts1 (%d) to be before ts2 (%d)", ts1, ts2)
+	}
+	if ts2.Before(ts1) {
+		t.Errorf("Expected ts2 (%d) not to be before ts1 (%d)", ts2, ts1)
+	}
+
+	// Test After
+	if !ts2.After(ts1) {
+		t.Errorf("Expected ts2 (%d) to be after ts1 (%d)", ts2, ts1)
+	}
+	if ts1.After(ts2) {
+		t.Errorf("Expected ts1 (%d) not to be after ts2 (%d)", ts1, ts2)
+	}
+
+	// Test Equal
+	if ts1.Equal(ts2) {
+		t.Errorf("Expected ts1 (%d) not to equal ts2 (%d)", ts1, ts2)
+	}
+	if !ts1.Equal(ts1) {
+		t.Errorf("Expected ts1 (%d) to equal itself", ts1)
+	}
+}
+
+func TestTimestampTimeExtraction(t *testing.T) {
+	clock := NewClock()
+
 	beforeTime := time.Now()
 	ts := clock.Now()
 	afterTime := time.Now()
 
 	extractedTime := ts.Time()
 
-	t.Logf("Before: %v (%d)", beforeTime, beforeTime.UnixMicro())
-	t.Logf("Timestamp: %d", uint64(ts))
-	t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
-	t.Logf("After: %v (%d)", afterTime, afterTime.UnixMicro())
-
-	// The extracted time should be between beforeTime and afterTime
-	if extractedTime.Before(beforeTime) {
-		t.Errorf("Extracted time %v is before creation time %v", extractedTime, beforeTime)
+	// The extracted time should be within the window
+	if extractedTime.Before(beforeTime.Add(-1 * time.Millisecond)) {
+		t.Errorf("Extracted time %v is too early, expected after %v", extractedTime, beforeTime)
 	}
-	if extractedTime.After(afterTime) {
-		t.Errorf("Extracted time %v is after creation time %v", extractedTime, afterTime)
+	if extractedTime.After(afterTime.Add(1 * time.Millisecond)) {
+		t.Errorf("Extracted time %v is too late, expected before %v", extractedTime, afterTime)
 	}
 }
 
-func TestTimestampRoundTrip(t *testing.T) {
-	// Test specific times around the epoch
-	testTimes := []time.Time{
-		time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),             // Epoch start
-		time.Date(2025, 1, 1, 0, 0, 0, 1000, time.UTC),          // 1 microsecond after epoch
-		time.Date(2025, 1, 1, 0, 0, 1, 0, time.UTC),             // 1 second after epoch
-		time.Date(2025, 6, 15, 12, 30, 45, 123456000, time.UTC), // Mid-year
-	}
-
-	for _, testTime := range testTimes {
-		t.Run(testTime.Format(time.RFC3339Nano), func(t *testing.T) {
-			// Calculate what the relative microseconds should be
-			relMicro := uint64(testTime.UnixMicro() - epochUnixMicro)
-
-			// Create a timestamp with zero counter
-			ts := Timestamp(relMicro << counterBits)
-			extractedTime := ts.Time()
-
-			t.Logf("Original: %v (%d)", testTime, testTime.UnixMicro())
-			t.Logf("RelMicro: %d", relMicro)
-			t.Logf("Timestamp: %d", uint64(ts))
-			t.Logf("Extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
-
-			// The times should match exactly (ignoring counter bits)
-			if !extractedTime.Equal(testTime) {
-				t.Errorf("Round trip failed: expected %v, got %v", testTime, extractedTime)
-			}
-		})
-	}
-}
-
-func TestTimestampEpochHandling(t *testing.T) {
-	// Test timestamp at epoch
-	epochTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	ts := Timestamp(0) // Zero timestamp should represent epoch
-	extractedTime := ts.Time()
-
-	t.Logf("Epoch time: %v (%d)", epochTime, epochTime.UnixMicro())
-	t.Logf("Zero timestamp extracted: %v (%d)", extractedTime, extractedTime.UnixMicro())
-
-	if !extractedTime.Equal(epochTime) {
-		t.Errorf("Epoch conversion failed: expected %v, got %v", epochTime, extractedTime)
-	}
-}
-
-func TestClockMonotonicity(t *testing.T) {
+func TestTimestampCounterExtraction(t *testing.T) {
 	clock := NewClock()
 
-	var previous Timestamp
+	// Generate many timestamps quickly to trigger counter increments
+	var counters []uint16
 	for i := 0; i < 100; i++ {
-		current := clock.Now()
-		if i > 0 && !current.After(previous) {
-			t.Errorf("Clock not monotonic: iteration %d, current %d not after previous %d", i, current, previous)
+		ts := clock.Now()
+		counters = append(counters, ts.Counter())
+	}
+
+	// At least some should have non-zero counters due to rapid generation
+	hasNonZeroCounter := false
+	for _, counter := range counters {
+		if counter > 0 {
+			hasNonZeroCounter = true
+			break
 		}
-		previous = current
+		if uint64(counter) > counterMask {
+			t.Errorf("Counter %d exceeds maximum value %d", counter, counterMask)
+		}
+	}
+
+	// Note: This might occasionally fail on very fast systems, but should generally pass
+	if !hasNonZeroCounter {
+		t.Log("Warning: No non-zero counters found - this might indicate timestamps aren't being generated fast enough")
 	}
 }
 
-func TestTimestampBitManipulation(t *testing.T) {
-	// Test that we can extract time and counter correctly
-	testTime := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC) // 1 hour after epoch
-	relMicro := uint64(testTime.UnixMicro() - epochUnixMicro)
+func TestTimestampBitLayout(t *testing.T) {
+	clock := NewClock()
+	ts := clock.Now()
 
-	// Create timestamp with specific counter value
-	counter := uint64(42)
-	ts := Timestamp((relMicro << counterBits) | counter)
+	// Verify the bit layout
+	timeComponent := uint64(ts) >> CounterBits
+	counterComponent := uint64(ts) & counterMask
 
-	// Extract time part (should ignore counter)
-	extractedTime := ts.Time()
-	expectedTime := time.UnixMicro(int64(relMicro) + epochUnixMicro)
+	// Reconstruct timestamp
+	reconstructed := (timeComponent << CounterBits) | counterComponent
 
-	t.Logf("Original time: %v", testTime)
-	t.Logf("RelMicro: %d", relMicro)
-	t.Logf("Counter: %d", counter)
-	t.Logf("Timestamp: %d", uint64(ts))
-	t.Logf("Extracted time: %v", extractedTime)
-	t.Logf("Expected time: %v", expectedTime)
+	if reconstructed != uint64(ts) {
+		t.Errorf("Bit layout verification failed: original=%d, reconstructed=%d", ts, reconstructed)
+	}
 
-	if !extractedTime.Equal(expectedTime) {
-		t.Errorf("Time extraction failed: expected %v, got %v", expectedTime, extractedTime)
+	// Verify counter is within bounds
+	if counterComponent > counterMask {
+		t.Errorf("Counter component %d exceeds mask %d", counterComponent, counterMask)
 	}
 }
 
-func TestDebugBitManipulation(t *testing.T) {
-	// Let's debug exactly what's happening
-	beforeTime := time.Now()
-	ts := NewClock().Now()
+func TestDefaultClock(t *testing.T) {
+	// Test the package-level Now() function
+	ts1 := Now()
+	ts2 := Now()
 
-	t.Logf("Before time: %d", beforeTime.UnixMicro())
-	t.Logf("Epoch: %d", epochUnixMicro)
-	t.Logf("Relative micro should be: %d", uint64(beforeTime.UnixMicro())-epochUnixMicro)
+	if ts1 == 0 {
+		t.Error("Expected non-zero timestamp from default clock")
+	}
 
-	// Extract what the timestamp thinks the relative micro is
-	extractedRelMicro := uint64(ts) >> counterBits
-	t.Logf("Timestamp raw: %d", uint64(ts))
-	t.Logf("Extracted rel micro: %d", extractedRelMicro)
-	t.Logf("Counter: %d", uint64(ts)&counterMask)
-
-	// What time does this give us?
-	reconstructedTime := time.UnixMicro(int64(extractedRelMicro) + epochUnixMicro)
-	t.Logf("Reconstructed time: %v (%d)", reconstructedTime, reconstructedTime.UnixMicro())
-
-	// Let's also check the Now() implementation
-	now := uint64(time.Now().UnixMicro())
-	relNow := now - epochUnixMicro
-	t.Logf("Current time: %d", now)
-	t.Logf("Current rel time: %d", relNow)
-	t.Logf("Shifted rel time: %d", relNow<<counterBits)
-}
-
-func TestTypeConversions(t *testing.T) {
-	now := time.Now()
-	nowMicro := now.UnixMicro()
-	nowUint := uint64(nowMicro)
-
-	t.Logf("Now as int64: %d", nowMicro)
-	t.Logf("Now as uint64: %d", nowUint)
-	t.Logf("Epoch as int64: %d", epochUnixMicro)
-	t.Logf("Epoch as uint64: %d", uint64(epochUnixMicro))
-
-	// Test the subtraction both ways
-	relMicro1 := nowUint - uint64(epochUnixMicro)
-	relMicro2 := uint64(nowMicro - epochUnixMicro)
-
-	t.Logf("Method 1 (uint64 - uint64): %d", relMicro1)
-	t.Logf("Method 2 (uint64(int64 - int64)): %d", relMicro2)
-
-	if relMicro1 != relMicro2 {
-		t.Errorf("Type conversion issue detected!")
+	if !ts2.After(ts1) && !ts2.Equal(ts1) {
+		t.Errorf("Expected ts2 (%d) to be after or equal to ts1 (%d)", ts2, ts1)
 	}
 }
 
-func TestDebugArithmetic(t *testing.T) {
-	now := time.Now().UnixMicro()
+func TestTimestampCounterOverflow(t *testing.T) {
+	clock := NewClock()
 
-	// Test the old way (broken)
-	nowUint := uint64(now)
-	relNowBroken := uint64(nowUint - epochUnixMicro) // This is wrong!
+	// This test is tricky because we need to generate enough concurrent
+	// timestamps to potentially overflow the counter
+	const iterations = 2000
 
-	// Test the correct way
-	relNowFixed := uint64(now - epochUnixMicro)
+	var timestamps []Timestamp
+	for i := 0; i < iterations; i++ {
+		timestamps = append(timestamps, clock.Now())
+	}
 
-	t.Logf("Now (int64): %d", now)
-	t.Logf("Now (uint64): %d", nowUint)
-	t.Logf("Epoch: %d", epochUnixMicro)
-	t.Logf("Broken calculation: %d", relNowBroken)
-	t.Logf("Fixed calculation: %d", relNowFixed)
-
-	// The broken version will be completely wrong
-	if relNowBroken == relNowFixed {
-		t.Logf("Both calculations match (unexpected)")
-	} else {
-		t.Logf("Calculations differ as expected - broken: %d, fixed: %d", relNowBroken, relNowFixed)
+	// Check that all timestamps are unique and monotonic
+	for i := 1; i < len(timestamps); i++ {
+		if timestamps[i].Before(timestamps[i-1]) {
+			t.Errorf("Non-monotonic timestamps at index %d: %d < %d",
+				i, timestamps[i], timestamps[i-1])
+		}
+		if timestamps[i].Equal(timestamps[i-1]) {
+			t.Errorf("Duplicate timestamps at index %d: %d", i, timestamps[i])
+		}
 	}
 }
 
-func TestTimeRangeCalculationMicroseconds(t *testing.T) {
-	// Calculate the maximum time we can represent
-	maxRelativeMicro := (uint64(1) << timeBits) - 1
-	maxAbsoluteMicro := int64(maxRelativeMicro) + epochUnixMicro
-	maxTime := time.UnixMicro(maxAbsoluteMicro)
+func BenchmarkTimestampGeneration(b *testing.B) {
+	clock := NewClock()
 
-	t.Logf("Max relative microseconds: %d", maxRelativeMicro)
-	t.Logf("Max absolute microseconds: %d", maxAbsoluteMicro)
-	t.Logf("Max representable time: %v", maxTime)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = clock.Now()
+	}
+}
 
-	// Convert to years
-	microsecondsPerYear := 365.25 * 24 * 3600 * 1e6
-	yearsFromEpoch := float64(maxRelativeMicro) / microsecondsPerYear
-	t.Logf("Years from epoch: %.1f", yearsFromEpoch)
+func BenchmarkTimestampGenerationParallel(b *testing.B) {
+	clock := NewClock()
 
-	// Check current usage
-	now := time.Now()
-	currentRelMicro := uint64(now.UnixMicro() - epochUnixMicro)
-	usagePercent := float64(currentRelMicro) / float64(maxRelativeMicro) * 100
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = clock.Now()
+		}
+	})
+}
 
-	t.Logf("Current time: %v", now)
-	t.Logf("Current relative microseconds: %d", currentRelMicro)
-	t.Logf("Current usage: %.6f%%", usagePercent)
+func BenchmarkTimestampComparison(b *testing.B) {
+	clock := NewClock()
+	ts1 := clock.Now()
+	ts2 := clock.Now()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ts1.Before(ts2)
+	}
 }

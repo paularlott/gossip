@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"math/rand"
-	"strings"
 	"sync"
 )
 
@@ -38,6 +37,8 @@ type NodeGroupOptions struct {
 
 // NewNodeGroup creates a new node group that tracks nodes with matching metadata
 func NewNodeGroup(cluster *Cluster, criteria map[string]string, opts *NodeGroupOptions) *NodeGroup {
+	validateNodeGroupParams(cluster, criteria)
+
 	// Use same shard count as cluster's nodeList for consistency
 	shardCount := cluster.config.NodeShardCount
 
@@ -96,21 +97,7 @@ func (ng *NodeGroup) initializeWithExistingNodes() {
 
 // nodeMatchesCriteria checks if a node matches all the metadata criteria
 func (ng *NodeGroup) nodeMatchesCriteria(node *Node) bool {
-	for key, expectedValue := range ng.metadataCriteria {
-		if !node.Metadata.Exists(key) {
-			return false
-		}
-
-		if expectedValue[0] == MetadataContainsPrefix[0] {
-			if !strings.Contains(node.Metadata.GetString(key), expectedValue[1:]) {
-				return false
-			}
-		} else if expectedValue != MetadataAnyValue && expectedValue != node.Metadata.GetString(key) {
-			return false
-		}
-	}
-
-	return true
+	return nodeMatchesCriteria(node, ng.metadataCriteria)
 }
 
 // handleNodeStateChange processes node state changes
@@ -119,8 +106,10 @@ func (ng *NodeGroup) handleNodeStateChange(node *Node, prevState NodeState) {
 		// Node is now alive, check if it matches criteria
 		if ng.nodeMatchesCriteria(node) {
 			ng.addNode(node)
+		} else {
+			ng.removeNode(node)
 		}
-	} else if prevState == NodeAlive || prevState == NodeSuspect {
+	} else {
 		// Node is no longer alive, remove it
 		ng.removeNode(node)
 	}
@@ -179,7 +168,12 @@ func (ng *NodeGroup) removeNode(node *Node) {
 
 // GetNodes returns all nodes in this group, excluding specified node IDs
 func (ng *NodeGroup) GetNodes(excludeIDs []NodeID) []*Node {
-	var result []*Node
+	// Estimate capacity to reduce allocations
+	estimatedSize := ng.Count() - len(excludeIDs)
+	if estimatedSize < 0 {
+		estimatedSize = 0
+	}
+	result := make([]*Node, 0, estimatedSize)
 
 	// Build exclusion set
 	var excludeSet map[NodeID]struct{}
@@ -236,17 +230,7 @@ func (ng *NodeGroup) Count() int {
 
 // getShard returns the appropriate shard for a node ID
 func (ng *NodeGroup) getShard(nodeID NodeID) *nodeGroupShard {
-	// FNV-1a hash for better distribution - inlined for performance
-	idBytes := nodeID[:]
-
-	hash := uint32(2166136261) // FNV offset basis
-
-	for _, b := range idBytes {
-		hash ^= uint32(b)
-		hash *= 16777619 // FNV prime
-	}
-
-	return ng.shards[hash&ng.shardMask]
+	return ng.shards[fnvHash(nodeID)&ng.shardMask]
 }
 
 // SendToPeers sends a message to all peers in the group and if necessary gossips to random peers.
@@ -257,17 +241,7 @@ func (ng *NodeGroup) SendToPeers(msgType MessageType, data interface{}) error {
 		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
 	})
 
-	err := ng.cluster.SendToPeers(zoneNodes, msgType, data)
-	if err != nil {
-		return err
-	}
-
-	if ng.cluster.CalcFanOut() > len(zoneNodes)+1 {
-		zoneNodes = append(zoneNodes, ng.cluster.localNode)
-		return ng.cluster.SendExcluding(msgType, data, ng.cluster.NodesToIDs(zoneNodes))
-	}
-
-	return nil
+	return ng.cluster.SendToPeers(zoneNodes, msgType, data)
 }
 
 // SendToPeersReliable sends a message to all peers in the group reliably and if necessary gossips to random peers.
@@ -278,15 +252,5 @@ func (ng *NodeGroup) SendToPeersReliable(msgType MessageType, data interface{}) 
 		zoneNodes[i], zoneNodes[j] = zoneNodes[j], zoneNodes[i]
 	})
 
-	err := ng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
-	if err != nil {
-		return err
-	}
-
-	if ng.cluster.CalcFanOut() > len(zoneNodes)+1 {
-		zoneNodes = append(zoneNodes, ng.cluster.localNode)
-		return ng.cluster.SendReliableExcluding(msgType, data, ng.cluster.NodesToIDs(zoneNodes))
-	}
-
-	return nil
+	return ng.cluster.SendToPeersReliable(zoneNodes, msgType, data)
 }

@@ -29,50 +29,71 @@ type MetadataReader interface {
 	Exists(key string) bool
 }
 
-// Ensure Metadata implements MetadataReader
-var _ MetadataReader = (*Metadata)(nil)
+// LocalMetadata provides read-write access for local node
+type LocalMetadata interface {
+	MetadataReader
+	SetString(key, value string) LocalMetadata
+	SetBool(key string, value bool) LocalMetadata
+	SetInt(key string, value int) LocalMetadata
+	SetInt32(key string, value int32) LocalMetadata
+	SetInt64(key string, value int64) LocalMetadata
+	SetUint(key string, value uint) LocalMetadata
+	SetUint32(key string, value uint32) LocalMetadata
+	SetUint64(key string, value uint64) LocalMetadata
+	SetFloat32(key string, value float32) LocalMetadata
+	SetFloat64(key string, value float64) LocalMetadata
+	SetTime(key string, value time.Time) LocalMetadata
+	Delete(key string)
+}
 
 // Metadata holds node metadata with type-safe accessors
 type Metadata struct {
-	data          atomic.Value                                // Holds map[string]interface{}
+	data          atomic.Pointer[map[string]interface{}]
 	lastModified  atomic.Uint64                               // Last modification timestamp in nanoseconds
 	onLocalChange func(hlc.Timestamp, map[string]interface{}) // Callback on local changes: (ts, snapshot)
 }
 
+// Ensure interfaces are implemented
+var _ MetadataReader = (*Metadata)(nil)
+var _ LocalMetadata = (*Metadata)(nil)
+
 // NewMetadata creates a new metadata container
 func NewMetadata() *Metadata {
 	md := &Metadata{}
-	md.data.Store(make(map[string]interface{}))
-	// Start at zero to allow first incoming update from remote to set its timestamp.
-	// Local writes will set a fresh HLC timestamp via setters.
+	initialMap := make(map[string]interface{})
+	md.data.Store(&initialMap)
 	md.lastModified.Store(0)
-	// Initialize onLocalChange with a no-op to simplify calling without nil checks
 	md.onLocalChange = func(hlc.Timestamp, map[string]interface{}) {}
 	return md
 }
 
 // Get retrieves a raw value from metadata
 func (md *Metadata) get(key string) (interface{}, bool) {
-	currentData := md.data.Load().(map[string]interface{})
-	val, ok := currentData[key]
+	currentData := md.data.Load()
+	if currentData == nil {
+		return nil, false
+	}
+	val, ok := (*currentData)[key]
 	return val, ok
 }
 
 // Internal setter with timestamp update
 func (md *Metadata) set(key string, value interface{}) *Metadata {
-	currentData := md.data.Load().(map[string]interface{})
-	newData := make(map[string]interface{}, len(currentData)+1)
+	currentData := md.data.Load()
+	if currentData == nil {
+		currentData = &map[string]interface{}{}
+	}
 
-	for k, v := range currentData {
+	// Create new map with optimized capacity
+	newData := make(map[string]interface{}, len(*currentData)+1)
+	for k, v := range *currentData {
 		newData[k] = v
 	}
 	newData[key] = value
 
 	ts := hlc.Now()
-	md.data.Store(newData)
+	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
-
-	// Fire local change callback with the freshly stored timestamp and snapshot
 	md.onLocalChange(ts, newData)
 
 	return md
@@ -85,13 +106,10 @@ func (md *Metadata) GetString(key string) string {
 		return ""
 	}
 
-	// Direct string case
-	if str, ok := val.(string); ok {
-		return str
-	}
-
 	// Convert from our supported types
 	switch v := val.(type) {
+	case string:
+		return v
 	case bool:
 		return strconv.FormatBool(v)
 	case int:
@@ -365,88 +383,103 @@ func (md *Metadata) GetTime(key string) time.Time {
 // Type-specific setters
 
 // SetString sets a string value
-func (md *Metadata) SetString(key, value string) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetString(key, value string) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetBool sets a boolean value
-func (md *Metadata) SetBool(key string, value bool) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetBool(key string, value bool) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetInt sets an integer value
-func (md *Metadata) SetInt(key string, value int) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetInt(key string, value int) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetInt32 sets a 32-bit integer value
-func (md *Metadata) SetInt32(key string, value int32) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetInt32(key string, value int32) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetInt64 sets a 64-bit integer value
-func (md *Metadata) SetInt64(key string, value int64) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetInt64(key string, value int64) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetUint sets an unsigned integer value
-func (md *Metadata) SetUint(key string, value uint) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetUint(key string, value uint) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetUint32 sets a 32-bit unsigned integer value
-func (md *Metadata) SetUint32(key string, value uint32) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetUint32(key string, value uint32) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetUint64 sets a 64-bit unsigned integer value
-func (md *Metadata) SetUint64(key string, value uint64) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetUint64(key string, value uint64) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetFloat32 sets a 32-bit float value
-func (md *Metadata) SetFloat32(key string, value float32) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetFloat32(key string, value float32) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetFloat64 sets a 64-bit float value
-func (md *Metadata) SetFloat64(key string, value float64) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetFloat64(key string, value float64) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // SetTime sets a time value
-func (md *Metadata) SetTime(key string, value time.Time) *Metadata {
-	return md.set(key, value)
+func (md *Metadata) SetTime(key string, value time.Time) LocalMetadata {
+	md.set(key, value)
+	return md
 }
 
 // Delete removes a key from the metadata
 func (md *Metadata) Delete(key string) {
-	currentData := md.data.Load().(map[string]interface{})
-	if _, exists := currentData[key]; !exists {
+	currentData := md.data.Load()
+	if currentData == nil {
+		return
+	}
+
+	if _, exists := (*currentData)[key]; !exists {
 		return // Key doesn't exist, nothing to do
 	}
 
-	newData := make(map[string]interface{}, len(currentData)-1)
-
-	// Copy existing data except the deleted key
-	for k, v := range currentData {
+	// Create new map without the deleted key
+	newData := make(map[string]interface{}, len(*currentData)-1)
+	for k, v := range *currentData {
 		if k != key {
 			newData[k] = v
 		}
 	}
 
 	ts := hlc.Now()
-	md.data.Store(newData)
+	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
-
-	// Fire local change callback with the freshly stored timestamp and snapshot
 	md.onLocalChange(ts, newData)
 }
 
 // Exists returns true if the key exists in the metadata
 func (md *Metadata) Exists(key string) bool {
-	currentData := md.data.Load().(map[string]interface{})
-	_, exists := currentData[key]
+	currentData := md.data.Load()
+	if currentData == nil {
+		return false
+	}
+	_, exists := (*currentData)[key]
 	return exists
 }
 
@@ -455,43 +488,44 @@ func (md *Metadata) GetTimestamp() hlc.Timestamp {
 	return hlc.Timestamp(md.lastModified.Load())
 }
 
-// TODO REMOVE ME!!!
-// GetLastModified returns when the metadata was last modified
-/* func (md *Metadata) GetLastModified() time.Time {
-	return time.Unix(0, md.lastModified.Load())
-} */
-
 // GetAll returns a copy of all metadata
 func (md *Metadata) GetAll() map[string]interface{} {
-	currentData := md.data.Load().(map[string]interface{})
-
-	// Create a copy to avoid exposing internal map
-	result := make(map[string]interface{}, len(currentData))
-	for k, v := range currentData {
-		result[k] = v
+	currentData := md.data.Load()
+	if currentData == nil {
+		return make(map[string]interface{})
 	}
 
+	// Create a copy to avoid exposing internal map
+	result := make(map[string]interface{}, len(*currentData))
+	for k, v := range *currentData {
+		result[k] = v
+	}
 	return result
 }
 
 // GetAllKeys returns all keys in the metadata
 func (md *Metadata) GetAllKeys() []string {
-	currentData := md.data.Load().(map[string]interface{})
-
-	keys := make([]string, 0, len(currentData))
-	for k := range currentData {
-		keys = append(keys, k)
+	currentData := md.data.Load()
+	if currentData == nil {
+		return nil
 	}
 
+	keys := make([]string, 0, len(*currentData))
+	for k := range *currentData {
+		keys = append(keys, k)
+	}
 	return keys
 }
 
 // GetAllAsString returns all metadata as string values
 func (md *Metadata) GetAllAsString() map[string]string {
-	currentData := md.data.Load().(map[string]interface{})
+	currentData := md.data.Load()
+	if currentData == nil {
+		return nil
+	}
 
-	result := make(map[string]string, len(currentData))
-	for k, _ := range currentData {
+	result := make(map[string]string, len(*currentData))
+	for k := range *currentData {
 		result[k] = md.GetString(k)
 	}
 
@@ -500,7 +534,6 @@ func (md *Metadata) GetAllAsString() map[string]string {
 
 // update replaces all metadata if the timestamp is newer, if force is true then the timestamp check is ignored
 func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp, force bool) bool {
-	// Only replace if the incoming timestamp is newer
 	currentTime := md.lastModified.Load()
 	currentTimestamp := hlc.Timestamp(currentTime)
 
@@ -508,14 +541,15 @@ func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp,
 		return false // Reject older data
 	}
 
-	// Create a copy to avoid exposing internal map
+	// Create a copy to avoid exposing internal map (optimized capacity)
 	dataCopy := make(map[string]interface{}, len(data))
 	for k, v := range data {
 		dataCopy[k] = v
 	}
 
-	md.data.Store(dataCopy)
+	md.data.Store(&dataCopy)
 	md.lastModified.Store(uint64(timestamp))
+	md.onLocalChange(timestamp, dataCopy)
 	return true
 }
 
