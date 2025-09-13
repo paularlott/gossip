@@ -1,6 +1,6 @@
 # Basic Example
 
-Basic usage example, creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
+Basic usage example, creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or HTTP.
 
 ## Running
 
@@ -25,7 +25,7 @@ go run . --web-port=8082 --peers=http://127.0.0.1:8080/ --node-id=01960a1c-6852-
 ```
 
 
-### WebSocket
+### HTTP
 
 ```shell
 go run . --web-port=8080 --peers=http://127.0.0.1:8080/,http://127.0.0.1:8081/,http://127.0.0.1:8082/ --node-id=0196042b-1caa-7ad9-9ea3-c57b2e189b23

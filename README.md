@@ -1,6 +1,6 @@
 # Gossip Protocol Library
 
-A lightweight, Go-based library for implementing the gossip protocol in distributed systems. The library supports multiple transport mechanisms, including TCP, UDP, and WebSocket, providing flexibility for a variety of use cases.
+A lightweight, Go-based library for implementing the gossip protocol in distributed systems. The library supports multiple transport mechanisms, including TCP, UDP, and HTTP, providing flexibility for a variety of use cases.
 
 With its straightforward API, the library simplifies decentralized communication by enabling the creation and management of nodes, exchanging messages, and handling critical events like node joins and departures. Designed with reliability in mind, it continuously monitors node health within the cluster and seamlessly removes unreachable nodes, ensuring the system stays robust and adaptive.
 
@@ -13,8 +13,7 @@ This flexible architecture supports the development of resilient distributed sys
 
 ## Features
 
-- **Multiple Transport Support**: TCP, UDP, and WebSocket (both ws and wss) connections
-- **Pluggable WebSocket Providers**: Support for both Gorilla and Coder WebSocket implementations
+- **Multiple Transport Support**: TCP, UDP, and HTTP connections
 - **Message Security**: Optional encryption for message payloads
 - **Compression**: Configurable message compression, support for Snappy is provide by default
 - **Health Monitoring**: Automatic node health checking with direct and indirect pings
@@ -43,7 +42,6 @@ import (
   "github.com/paularlott/gossip"
   "github.com/paularlott/gossip/codec"
   "github.com/paularlott/gossip/compression"
-  "github.com/paularlott/gossip/websocket"
 )
 
 func main() {
@@ -98,8 +96,8 @@ The gossip library supports multiple address formats for binding and connecting 
 - **hostname:port** - DNS hostname with port, when multiple addresses are returned the node will attempt to connect to each address in turn assuming each is a node within the cluster
 - **hostname** or **IP** - The default port will be used, for a hostname returning multiple addresses the node will attempt to connect to each address in turn assuming each is a node within the cluster
 - **srv+service-name** - SRV DNS record lookup, when multiple addresses are returned the node will attempt to connect to each address in turn assuming each is a node within the cluster
-- **ws://hostname:port/endpoint** - WebSocket connection
-- **wss://hostname:port/endpoint** - Secure WebSocket connection
+- **https://hostname:port/endpoint** - HTTP connection
+- **srv+https://hostname:port/endpoint** - Secure HTTP connection looking up the port number for the target
 
 ## Configuration Options
 
@@ -118,11 +116,7 @@ config.EncryptionKey = "your-32-byte-key"              // Optional: enables encr
 config.Cipher = encryption.NewAESEncryptor()           // Encryption algorithm
 config.Compressor = compression.NewSnappyCompressor()  // Enable payload compression using the provided compressor
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
-
-// Networking, optional but if given allows use of WebSockets for transport and disables TCP/UDP
-config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
-config.AllowInsecureWebsockets = true
-config.SocketTransportEnabled = false
+config.Transport = gossip.NewSocketTransport(config)   // Socket based transport
 ```
 
 ## Node States
@@ -134,18 +128,6 @@ Nodes in the cluster go through several states:
 - **NodeSuspect** - Node might be unhealthy (pending confirmation)
 - **NodeDead** - Node is confirmed dead
 - **NodeLeaving** - Node is gracefully leaving the cluster
-
-## WebSocket Support
-
-The library provides adapters for two WebSocket implementations allowing you to choose the one that fits with the rest of your application:
-
-```go
-// Using Gorilla WebSockets
-config.WebsocketProvider = websocket.NewGorillaProvider(5*time.Second, true, "")
-
-// Using Coder WebSockets
-config.WebsocketProvider = websocket.NewCoderProvider(5*time.Second, true, "")
-```
 
 ## Message Codecs
 
@@ -166,7 +148,7 @@ config.MsgCodec = codec.NewJSONCodec()
 
 The `examples` directory contains various examples demonstrating the library's capabilities. Each example is self-contained and can be run independently.
 
-- **[basic](examples/basic)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or WebSocket.
+- **[basic](examples/basic)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or HTTP.
 - **[events](examples/events)**: Example that installs an event handler to display cluster events.
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
 - **[kv](examples/kv)**: Example Key Value store.

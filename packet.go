@@ -44,7 +44,7 @@ type Packet struct {
 	payload      []byte
 	codec        codec.Serializer
 
-	// Connection for connection-based transports (TCP/WebSocket)
+	// Connection for connection-based transports (TCP)
 	conn net.Conn
 
 	// Reply channel for async replies (works for all transports)

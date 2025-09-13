@@ -44,7 +44,7 @@ type Config struct {
 	FanOutMultiplier         float64                 // Scale of peer count for broadcast messages
 	StateExchangeMultiplier  float64                 // Scale of peer sampling for state exchange messages
 	TTLMultiplier            float64                 // Multiplier for TTL, used to determine how many hops a message can take
-	ForceReliableTransport   bool                    // Force all messages to use reliable transport (TCP/WebSocket)
+	ForceReliableTransport   bool                    // Force all messages to use reliable transport
 	Resolver                 Resolver                // DNS resolver to use for address resolution, if not set uses default resolver
 	PreferIPv6               bool                    // Prefer IPv6 addresses when resolving hostnames (default false = prefer IPv4)
 	NodeCleanupInterval      time.Duration           // How often to run node cleanup

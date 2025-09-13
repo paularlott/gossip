@@ -38,7 +38,7 @@ func (ns NodeState) String() string {
 type Node struct {
 	ID                 NodeID
 	advertiseAddr      string        // Raw advertise address (may contain SRV records, URLs, etc.)
-	address            Address       // Resolved address (IP/Port or WebSocket URL) - resolved locally when needed
+	address            Address       // Resolved address (IP/Port or URL) - resolved locally when needed
 	observedState      NodeState     // The local view of the node's state
 	observedStateTime  hlc.Timestamp // Local timestamp for the node's state (updated by the node)
 	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)

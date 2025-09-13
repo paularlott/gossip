@@ -90,7 +90,7 @@ func main() {
 	// Handle CLI input
 	go common.HandleCLIInput(cluster)
 
-	// If web port is specified then start a web server to handle websocket traffic
+	// If web port is specified then start a web server to handle HTTP traffic
 	var httpServer *http.Server
 	if *webPort > 0 {
 		http.HandleFunc("/", httpTransport.HandleGossipRequest)
