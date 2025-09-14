@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -222,30 +224,55 @@ func (c *Cluster) joinWorker() {
 }
 
 func (c *Cluster) Join(peers []string) error {
-	if len(peers) == 0 {
+	joinList := make([]string, 0, len(peers))
+
+	// If http then we have to compare at the domain / port level
+	if strings.HasPrefix(c.localNode.advertiseAddr, "http://") || strings.HasPrefix(c.localNode.advertiseAddr, "https://") {
+		self, err := url.Parse(c.localNode.advertiseAddr)
+		if err != nil {
+			return fmt.Errorf("invalid advertise address: %v", err)
+		}
+
+		for _, peerAddr := range peers {
+			peer, err := url.Parse(peerAddr)
+			if err != nil {
+				return fmt.Errorf("invalid peer address: %v", err)
+			}
+
+			if self.Host == peer.Host && self.Port() == peer.Port() {
+				continue
+			}
+
+			joinList = append(joinList, peerAddr)
+		}
+	} else {
+		// Look through the list of peers and skip our own address
+		for _, peerAddr := range peers {
+			if peerAddr == c.config.AdvertiseAddr {
+				continue
+			}
+			joinList = append(joinList, peerAddr)
+		}
+	}
+
+	if len(joinList) == 0 {
 		return fmt.Errorf("no peers provided")
 	}
 
 	// Shuffle the peers, many nodes may be using the same peer list so shuffling helps to spread the load
-	rand.Shuffle(len(peers), func(i, j int) {
-		peers[i], peers[j] = peers[j], peers[i]
+	rand.Shuffle(len(joinList), func(i, j int) {
+		joinList[i], joinList[j] = joinList[j], joinList[i]
 	})
 
 	wg := sync.WaitGroup{}
-	wg.Add(len(peers))
+	wg.Add(len(joinList))
 
 	// Join the cluster by attempting to connect to as many peers as possible
-	for _, peerAddr := range peers {
+	for _, peerAddr := range joinList {
 		go func(peerAddr string) {
 			defer wg.Done()
 
 			c.config.Logger.Tracef("Attempting to join peer: %s", peerAddr)
-
-			// If address matches our advertise address then skip it
-			if peerAddr == c.config.AdvertiseAddr {
-				return
-			}
-
 			c.joinPeer(peerAddr)
 		}(peerAddr)
 	}
@@ -253,7 +280,7 @@ func (c *Cluster) Join(peers []string) error {
 	wg.Wait()
 
 	// Remember the peers so we can use them for recovery
-	c.seedPeers = append(c.seedPeers, peers...)
+	c.seedPeers = append(c.seedPeers, joinList...)
 
 	return nil
 }
