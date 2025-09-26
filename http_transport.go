@@ -248,7 +248,7 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 	} else {
 		u, err = url.Parse(uri)
 		if err != nil {
-			return fmt.Errorf("failed to parse SRV URL %s: %v", uri[4:], err)
+			return fmt.Errorf("failed to parse URL %s: %v", uri, err)
 		}
 	}
 
