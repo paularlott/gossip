@@ -49,7 +49,9 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		c.nodes.updateState(node.ID, joinMsg.State)
 	}
 
-	node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false)
+	if node != nil {
+		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false)
+	}
 
 	reply := &joinReplyMessage{
 		Accepted:          accepted,
