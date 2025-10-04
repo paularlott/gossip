@@ -110,6 +110,7 @@ func TestHTTPTransport_HandleGossipRequest_NoReply(t *testing.T) {
 		IncomingPacketQueueDepth: 10,
 		MsgCodec:                 codec.NewJsonCodec(),
 		Logger:                   NewNullLogger(),
+		TCPMaxPacketSize:         65535,
 	}
 
 	transport := NewHTTPTransport(config)
@@ -187,6 +188,7 @@ func TestHTTPTransport_Authentication(t *testing.T) {
 		MsgCodec:                 codec.NewJsonCodec(),
 		Logger:                   NewNullLogger(),
 		BearerToken:              "test-token",
+		TCPMaxPacketSize:         65535,
 	}
 
 	transport := NewHTTPTransport(config)
@@ -235,8 +237,9 @@ func TestHTTPTransport_Authentication(t *testing.T) {
 
 func TestHTTPTransport_SendWithReply(t *testing.T) {
 	config := &Config{
-		MsgCodec: codec.NewJsonCodec(),
-		Logger:   NewNullLogger(),
+		MsgCodec:         codec.NewJsonCodec(),
+		Logger:           NewNullLogger(),
+		TCPMaxPacketSize: 65535,
 	}
 
 	transport := NewHTTPTransport(config)

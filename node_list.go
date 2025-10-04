@@ -195,11 +195,14 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 	// Remove the node
 	delete(shard.nodes, nodeID)
 
-	// Release lock before callbacks
-	shard.mutex.Unlock()
-
+	// Update node state while still holding lock
+	node.mu.Lock()
 	node.observedState = NodeRemoved
 	node.observedStateTime = hlc.Now()
+	node.mu.Unlock()
+
+	// Release lock before callbacks
+	shard.mutex.Unlock()
 
 	nl.updateCountersForStateChange(matchedState, NodeRemoved)
 	nl.notifyNodeStateChanged(node, matchedState)
@@ -227,14 +230,17 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 		return false
 	}
 
+	node.mu.Lock()
 	oldState := node.observedState
 	if oldState == newState {
+		node.mu.Unlock()
 		shard.mutex.Unlock()
 		return true
 	}
 
 	node.observedState = newState
 	node.observedStateTime = hlc.Now()
+	node.mu.Unlock()
 	shard.mutex.Unlock()
 
 	// Clear cached resolved address to force re-resolution later

@@ -91,17 +91,19 @@ func TestNodeRemoveFlag(t *testing.T) {
 		t.Fatalf("Failed to create cluster: %v", err)
 	}
 
-	// Track removal notifications
+	// Track removal notifications with proper synchronization
+	var mu sync.Mutex
 	var removedNode *Node
 	cluster.HandleNodeStateChangeFunc(func(node *Node, prevState NodeState) {
 		if node.Removed() {
+			mu.Lock()
 			removedNode = node
+			mu.Unlock()
 		}
 	})
 
 	// Create and add test node
 	testNode := newNode(NodeID(uuid.New()), "127.0.0.1:8001")
-	//testNode.state = NodeDead
 	cluster.nodes.addOrUpdate(testNode)
 
 	// Remove the node
@@ -111,6 +113,8 @@ func TestNodeRemoveFlag(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify removal flag was set and notification sent
+	mu.Lock()
+	defer mu.Unlock()
 	if removedNode == nil {
 		t.Error("Expected removal notification")
 	}

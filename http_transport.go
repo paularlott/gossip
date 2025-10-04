@@ -28,11 +28,35 @@ type HTTPTransport struct {
 }
 
 func NewHTTPTransport(config *Config) *HTTPTransport {
+	// Use configured timeout or default to 5 seconds
+	timeout := transportMaxWaitTime
+	if config.TCPDialTimeout > 0 {
+		timeout = config.TCPDialTimeout
+	}
+
+	// Create a custom transport with proper timeouts and connection limits
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   timeout,          // Connection timeout
+			KeepAlive: 30 * time.Second, // Keep-alive probe interval
+		}).DialContext,
+		TLSHandshakeTimeout:   timeout,          // TLS handshake timeout
+		ResponseHeaderTimeout: timeout,          // Time to receive response headers
+		ExpectContinueTimeout: 1 * time.Second,  // Time to wait for 100-continue
+		IdleConnTimeout:       90 * time.Second, // How long idle connections stay open
+		MaxIdleConns:          100,              // Max idle connections across all hosts
+		MaxIdleConnsPerHost:   10,               // Max idle connections per host
+		MaxConnsPerHost:       50,               // Max total connections per host
+		DisableKeepAlives:     false,            // Enable connection reuse
+		ForceAttemptHTTP2:     true,             // Try HTTP/2
+	}
+
 	return &HTTPTransport{
 		config:        config,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		client: &http.Client{
-			Timeout: transportMaxWaitTime,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }
@@ -55,8 +79,11 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 		return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), ht.client.Timeout)
+	defer cancel()
+
 	// Fire and forget HTTP POST
-	req, err := http.NewRequest(http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
 	if err != nil {
 		node.Address().Clear()
 		return err
@@ -92,7 +119,10 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	ctx, cancel := context.WithTimeout(context.Background(), ht.client.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
 	if err != nil {
 		node.Address().Clear()
 		return nil, err
@@ -119,7 +149,9 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 
-	replyBody, err := io.ReadAll(resp.Body)
+	// Read with a size limit to prevent memory exhaustion
+	limitedReader := io.LimitReader(resp.Body, int64(ht.config.TCPMaxPacketSize))
+	replyBody, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +185,9 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	// Read with a size limit to prevent memory exhaustion
+	limitedReader := io.LimitReader(r.Body, int64(ht.config.TCPMaxPacketSize))
+	body, err := io.ReadAll(limitedReader)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
@@ -192,12 +226,36 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 			case <-time.After(transportMaxWaitTime):
 				w.WriteHeader(http.StatusNoContent)
 
+				// Try to drain any reply that might arrive to prevent leak
+				go func() {
+					select {
+					case replyPacket := <-replyChan:
+						replyPacket.Release()
+					case <-time.After(1 * time.Second):
+						// Give up after 1 second
+					}
+					close(replyChan)
+				}()
+
+				return
+
 			case <-r.Context().Done():
+				// Client disconnected, drain any pending reply
+				go func() {
+					select {
+					case replyPacket := <-replyChan:
+						replyPacket.Release()
+					case <-time.After(1 * time.Second):
+						// Give up after 1 second
+					}
+					close(replyChan)
+				}()
 				return
 			}
 
 		default:
 			http.Error(w, "Server busy", http.StatusServiceUnavailable)
+			packet.Release()
 		}
 
 		close(replyChan)
@@ -206,6 +264,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 		case ht.packetChannel <- packet:
 			w.WriteHeader(http.StatusNoContent)
 		default:
+			packet.Release()
 			http.Error(w, "Server busy", http.StatusServiceUnavailable)
 		}
 	}

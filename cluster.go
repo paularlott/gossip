@@ -657,6 +657,10 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 	default:
 		// Queue full, log and skip this message
 		c.config.Logger.Warnf("gossip: Broadcast queue is full, skipping message")
+
+		item.packet.Release()
+		item.packet = nil
+		c.broadcastQItemPool.Put(item)
 	}
 }
 

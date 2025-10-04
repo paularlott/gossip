@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"sync"
+
 	"github.com/paularlott/gossip/hlc"
 )
 
@@ -46,6 +48,7 @@ type Node struct {
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
+	mu                 sync.RWMutex // Protects observedState reads
 }
 
 func newNode(id NodeID, advertiseAddr string) *Node {
@@ -75,22 +78,32 @@ func (n *Node) getLastActivity() hlc.Timestamp {
 }
 
 func (node *Node) GetObservedState() NodeState {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.observedState
 }
 
 func (node *Node) DeadOrLeft() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.observedState == NodeDead || node.observedState == NodeLeaving
 }
 
 func (node *Node) Alive() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.observedState == NodeAlive
 }
 
 func (node *Node) Suspect() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.observedState == NodeSuspect
 }
 
 func (node *Node) Removed() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.observedState == NodeRemoved
 }
 

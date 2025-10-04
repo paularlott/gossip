@@ -214,6 +214,7 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 
 				select {
 				case <-ctx.Done():
+					packet.Release()
 					return
 				case st.packetChannel <- packet:
 				}
@@ -248,13 +249,32 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 					replyPacket.Release()
 				}
 			case <-time.After(st.config.TCPDeadline):
+				// Timeout - try to drain any late reply
+				select {
+				case replyPacket := <-replyChan:
+					if replyPacket != nil {
+						replyPacket.Release()
+					}
+				case <-time.After(100 * time.Millisecond):
+					// Give up
+				}
 			case <-ctx.Done():
+				// Context cancelled - try to drain any pending reply
+				select {
+				case replyPacket := <-replyChan:
+					if replyPacket != nil {
+						replyPacket.Release()
+					}
+				case <-time.After(100 * time.Millisecond):
+					// Give up
+				}
 			}
 		}()
 	}
 
 	select {
 	case <-ctx.Done():
+		packet.Release()
 		return
 	case st.packetChannel <- packet:
 	}
@@ -577,6 +597,7 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 	packet := NewPacket()
 	err := st.config.MsgCodec.Unmarshal(encryptedPortion[:headerSize], &packet)
 	if err != nil {
+		packet.Release()
 		return nil, false, err
 	}
 
@@ -585,6 +606,7 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 	if st.config.Compressor != nil && isCompressed {
 		payload, err := st.config.Compressor.Decompress(encryptedPortion[headerSize:])
 		if err != nil {
+			packet.Release()
 			return nil, false, err
 		}
 		packet.SetPayload(payload)
