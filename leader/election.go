@@ -180,10 +180,10 @@ func (le *LeaderElection) HasLeader() bool {
 	if numEligible < requiredQuorum {
 		// Log loss of quorum if desired
 		le.cluster.Logger().
-			Field("eligibleNodes", numEligible).
-			Field("requiredQuorum", requiredQuorum).
-			Field("participating", isParticipating).
-			Warnf("Quorum lost among eligible nodes")
+			With("eligibleNodes", numEligible).
+			With("requiredQuorum", requiredQuorum).
+			With("participating", isParticipating).
+			Warn("Quorum lost among eligible nodes")
 		return false // Not enough nodes for quorum
 	}
 
@@ -203,8 +203,8 @@ func (le *LeaderElection) HasLeader() bool {
 	if le.nodeGroup != nil {
 		if !le.nodeGroup.Contains(leader.ID) {
 			le.cluster.Logger().
-				Field("leaderId", le.leaderID).
-				Debugf("Current leader no longer eligible due to metadata mismatch")
+				With("leaderId", le.leaderID).
+				Debug("Current leader no longer eligible due to metadata mismatch")
 			return false
 		}
 	}
@@ -223,14 +223,14 @@ func (le *LeaderElection) electLeader() {
 
 	if numEligible < requiredQuorum {
 		le.cluster.Logger().
-			Field("eligibleNodes", numEligible).
-			Field("requiredQuorum", requiredQuorum).
-			Debugf("Quorum not met, cannot elect leader")
+			With("eligibleNodes", numEligible).
+			With("requiredQuorum", requiredQuorum).
+			Debug("Quorum not met, cannot elect leader")
 
 		// Optional: If we previously had a leader but lost quorum, clear the leader state.
 		le.lock.Lock()
 		if le.hasLeader {
-			le.cluster.Logger().Warnf("Lost leader %s due to lack of quorum", le.leaderID)
+			le.cluster.Logger().Warn("lost leader due to lack of quorum", "leader_id", le.leaderID)
 			if le.isLeader {
 				le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
 			}
@@ -251,7 +251,7 @@ func (le *LeaderElection) electLeader() {
 		}
 	}
 	if candidateNode == nil {
-		le.cluster.Logger().Errorf("No candidate node found despite meeting quorum")
+		le.cluster.Logger().Error("no candidate node found despite meeting quorum")
 		return
 	}
 
@@ -272,10 +272,10 @@ func (le *LeaderElection) electLeader() {
 	le.lock.Unlock()
 
 	le.cluster.Logger().
-		Field("leaderId", candidateNode.ID.String()).
-		Field("term", le.currentTerm).
-		Field("isLocal", le.isLeader).
-		Debugf("New leader elected (quorum: %d/%d)", numEligible, requiredQuorum)
+		With("leaderId", candidateNode.ID.String()).
+		With("term", le.currentTerm).
+		With("isLocal", le.isLeader).
+		Debug("New leader elected (quorum: %d/%d)", numEligible, requiredQuorum)
 
 	// Dispatch events based on state changes
 	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
@@ -335,7 +335,7 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	// Handle the heartbeat message
 	var msg heartbeatMessage
 	if err := packet.Unmarshal(&msg); err != nil {
-		le.cluster.Logger().Errorf("Failed to unmarshal heartbeat message: %v", err)
+		le.cluster.Logger().Error("failed to unmarshal heartbeat message", "error", err)
 		return err
 	}
 
@@ -352,26 +352,26 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	if msg.Term > le.currentTerm {
 		acceptHeartbeat = true
 		le.cluster.Logger().
-			Field("senderId", sender.ID.String()).
-			Field("senderTerm", msg.Term).
-			Field("currentTerm", le.currentTerm).
-			Debugf("Accepting heartbeat due to higher term")
+			With("senderId", sender.ID.String()).
+			With("senderTerm", msg.Term).
+			With("currentTerm", le.currentTerm).
+			Debug("Accepting heartbeat due to higher term")
 	} else if msg.Term == le.currentTerm {
 		if !le.hasLeader {
 			acceptHeartbeat = true
 			le.cluster.Logger().
-				Field("senderId", sender.ID.String()).
-				Field("term", msg.Term).
-				Debugf("Accepting heartbeat as we have no current leader")
+				With("senderId", sender.ID.String()).
+				With("term", msg.Term).
+				Debug("Accepting heartbeat as we have no current leader")
 		} else if msg.LeaderTime.After(le.leaderTime) {
 			acceptHeartbeat = true
 		} else if msg.LeaderTime.Equal(le.leaderTime) && sender.ID.String() < le.leaderID.String() {
 			acceptHeartbeat = true
 			le.cluster.Logger().
-				Field("senderId", sender.ID.String()).
-				Field("leaderId", le.leaderID.String()).
-				Field("term", msg.Term).
-				Debugf("Accepting heartbeat due to tie-breaker (lower ID)")
+				With("senderId", sender.ID.String()).
+				With("leaderId", le.leaderID.String()).
+				With("term", msg.Term).
+				Debug("Accepting heartbeat due to tie-breaker (lower ID)")
 		}
 	}
 
@@ -393,19 +393,17 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 
 		// Log state changes and dispatch events
 		if steppedDown {
-			le.cluster.Logger().Debugf("Stepping down as leader due to heartbeat from %s", sender.ID)
+			le.cluster.Logger().Debug("stepping down as leader due to heartbeat", "sender_id", sender.ID)
 			le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
 		}
 		if becameLeader {
-			le.cluster.Logger().Warnf("Became leader unexpectedly via heartbeat from self?")
+			le.cluster.Logger().Warn("became leader unexpectedly via heartbeat from self")
 			le.eventHandlers.dispatch(BecameLeaderEvent, le.cluster.LocalNode().ID)
 		}
 
 		if leaderChanged {
 			le.cluster.Logger().
-				Field("leaderId", sender.ID.String()).
-				Field("term", le.currentTerm).
-				Debugf("Leader updated via heartbeat")
+				Debug("leader updated via heartbeat", "leaderId", sender.ID.String(), "term", le.currentTerm)
 			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
 		}
 	}
@@ -416,10 +414,10 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 // handleNodeStateChange is called when any node's state changes
 func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gossip.NodeState) {
 	le.cluster.Logger().
-		Field("nodeId", node.ID.String()).
-		Field("prevState", prevState.String()).
-		Field("newState", node.GetObservedState().String()).
-		Debugf("Node state changed")
+		With("nodeId", node.ID.String()).
+		With("prevState", prevState.String()).
+		With("newState", node.GetObservedState().String()).
+		Debug("Node state changed")
 
 	le.lock.RLock()
 	isCurrentLeader := le.hasLeader && (node.ID == le.leaderID)
@@ -429,9 +427,9 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	// If the current leader has failed...
 	if isCurrentLeader && node.GetObservedState() != gossip.NodeAlive {
 		le.cluster.Logger().
-			Field("leaderId", node.ID.String()).
-			Field("currentTerm", le.currentTerm).
-			Warnf("Leader node is down, clearing leader state")
+			With("leaderId", node.ID.String()).
+			With("currentTerm", le.currentTerm).
+			Warn("Leader node is down, clearing leader state")
 
 		le.eventHandlers.dispatch(LeaderLostEvent, currentLeaderID)
 

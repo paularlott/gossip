@@ -10,6 +10,7 @@ import (
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
+	"github.com/paularlott/logger"
 )
 
 // TestClusterBasicOperations tests basic cluster operations
@@ -20,7 +21,7 @@ func TestClusterBasicOperations(t *testing.T) {
 	config.BindAddr = "127.0.0.1:0"
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -100,7 +101,7 @@ func TestCodecImplementations(t *testing.T) {
 // TestCompressionImplementations tests compression implementations
 func TestCompressionImplementations(t *testing.T) {
 	compressor := compression.NewSnappyCompressor()
-	
+
 	testData := []byte("This is a test string that should compress well when repeated. " +
 		"This is a test string that should compress well when repeated. " +
 		"This is a test string that should compress well when repeated.")
@@ -150,7 +151,7 @@ func TestNodeStates(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -195,7 +196,7 @@ func TestAddressResolution(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = NewSocketTransport(config)
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	transport := config.Transport.(*SocketTransport)
 
@@ -234,7 +235,7 @@ func TestMetadataOperations(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -271,7 +272,7 @@ func TestEventHandling(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -293,7 +294,7 @@ func TestHealthMonitoring(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 	config.HealthCheckInterval = 50 * time.Millisecond
 
 	cluster, err := NewCluster(config)
@@ -344,7 +345,7 @@ func TestClusterCalculations(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -381,7 +382,7 @@ func TestTransportInterface(t *testing.T) {
 	config := DefaultConfig()
 	config.BindAddr = "127.0.0.1:0"
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	transport := NewSocketTransport(config)
 
@@ -413,7 +414,7 @@ func TestTransportInterface(t *testing.T) {
 			t.Logf("Recovered from panic (expected): %v", r)
 		}
 	}()
-	
+
 	err := transport.Send(TransportBestEffort, node, packet)
 	if err == nil {
 		t.Error("Expected error for unresolved address")
@@ -447,7 +448,7 @@ func TestConcurrentOperations(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

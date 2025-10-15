@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paularlott/logger"
 )
 
 const (
@@ -23,6 +25,7 @@ const (
 
 type HTTPTransport struct {
 	config        *Config
+	logger        logger.Logger
 	packetChannel chan *Packet
 	client        *http.Client
 }
@@ -51,8 +54,17 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 		ForceAttemptHTTP2:     true,             // Try HTTP/2
 	}
 
+	// Create logger with transport group
+	var lgr logger.Logger
+	if config.Logger != nil {
+		lgr = config.Logger.WithGroup("gossip")
+	} else {
+		lgr = logger.NewNullLogger()
+	}
+
 	return &HTTPTransport{
 		config:        config,
+		logger:        lgr,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		client: &http.Client{
 			Timeout:   timeout,
@@ -195,7 +207,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 
 	packet, err := ht.packetFromBuffer(body)
 	if err != nil {
-		ht.config.Logger.Err(err).Errorf("Failed to decode incoming packet")
+		ht.logger.WithError(err).Error("failed to decode incoming packet")
 		http.Error(w, "Invalid packet format", http.StatusBadRequest)
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/logger"
 )
 
 type EventType int
@@ -33,11 +34,11 @@ func (le EventType) String() string {
 type LeaderEventHandler func(EventType, gossip.NodeID)
 
 type leaderEventHandlers struct {
-	logger   gossip.Logger
+	logger   logger.Logger
 	handlers atomic.Value
 }
 
-func newLeaderEventHandlers(logger gossip.Logger) *leaderEventHandlers {
+func newLeaderEventHandlers(logger logger.Logger) *leaderEventHandlers {
 	handlers := &leaderEventHandlers{
 		logger: logger,
 	}
@@ -76,7 +77,7 @@ func (h *leaderEventHandlers) dispatch(eventType EventType, leaderID gossip.Node
 			defer func() {
 				if r := recover(); r != nil {
 					// Log panic but don't crash the application
-					h.logger.Warnf("Recovered from panic in leader event handler: %v", r)
+					h.logger.Warn("Recovered from panic in leader event handler: %v", r)
 				}
 			}()
 			evtHandler(eventType, leaderID)

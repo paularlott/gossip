@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/logger"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -61,7 +62,7 @@ func TestEventTypes(t *testing.T) {
 }
 
 func TestEventHandlerBasic(t *testing.T) {
-	handlers := newLeaderEventHandlers(gossip.NewNullLogger())
+	handlers := newLeaderEventHandlers(logger.NewNullLogger())
 
 	handler := func(EventType, gossip.NodeID) {
 		// Handler executed
@@ -81,7 +82,7 @@ func TestEventHandlerBasic(t *testing.T) {
 }
 
 func TestNoHandlers(t *testing.T) {
-	handlers := newLeaderEventHandlers(gossip.NewNullLogger())
+	handlers := newLeaderEventHandlers(logger.NewNullLogger())
 
 	// Should not panic when no handlers are registered
 	assert.NotPanics(t, func() {
@@ -97,7 +98,7 @@ func TestLeaderElectionInit(t *testing.T) {
 		hasLeader:     false,
 		currentTerm:   0,
 		isLeader:      false,
-		eventHandlers: newLeaderEventHandlers(gossip.NewNullLogger()),
+		eventHandlers: newLeaderEventHandlers(logger.NewNullLogger()),
 	}
 
 	assert.NotNil(t, election)

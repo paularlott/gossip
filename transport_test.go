@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/paularlott/logger"
 )
 
 type mockCodec struct{}
@@ -24,7 +25,7 @@ func (m *mockCodec) Name() string {
 
 func TestNewTransportInterface(t *testing.T) {
 	config := DefaultConfig()
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 	config.MsgCodec = &mockCodec{}
 	config.BindAddr = "127.0.0.1:0"
 

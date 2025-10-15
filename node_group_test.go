@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/paularlott/logger"
 )
 
 func TestNewNodeGroup(t *testing.T) {
@@ -574,7 +575,7 @@ func createTestCluster(t *testing.T) *Cluster {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

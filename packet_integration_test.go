@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/hlc"
+	"github.com/paularlott/logger"
 )
 
 // TestPacketIntegrationFullCluster tests packet management in a full cluster scenario
@@ -24,7 +25,7 @@ func TestPacketIntegrationFullCluster(t *testing.T) {
 		config.BindAddr = fmt.Sprintf("127.0.0.1:%d", 9000+i)
 		config.Transport = &mockTransport{}
 		config.MsgCodec = &mockCodec{}
-		config.Logger = NewNullLogger()
+		config.Logger = logger.NewNullLogger()
 
 		cluster, err := NewCluster(config)
 		if err != nil {
@@ -62,7 +63,7 @@ func TestPacketHandlerErrorScenario(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -96,7 +97,7 @@ func TestPacketTTLExpiration(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -123,7 +124,7 @@ func TestPacketDuplicateMessage(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -164,7 +165,7 @@ func TestPacketTargetedMessage(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -193,7 +194,7 @@ func TestPacketUnknownSender(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -220,7 +221,7 @@ func TestPacketBroadcastQueueFull(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 	// Note: BroadcastQueueDepth is not configurable, using default
 
 	cluster, err := NewCluster(config)

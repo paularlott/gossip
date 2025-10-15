@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/hlc"
+	"github.com/paularlott/logger"
 )
 
 // TestPacketPoolBasicAllocationRelease tests basic packet allocation and release
@@ -94,7 +95,7 @@ func TestPacketConcurrentAccess(t *testing.T) {
 // TestPacketMultipleReferences tests multiple references to the same packet
 func TestPacketMultipleReferences(t *testing.T) {
 	packet := NewPacket()
-	
+
 	// Create multiple references
 	refs := make([]*Packet, 5)
 	for i := range refs {
@@ -125,7 +126,7 @@ func TestPacketMultipleReferences(t *testing.T) {
 // TestPacketCleanupOnRelease tests that packet fields are cleaned up on release
 func TestPacketCleanupOnRelease(t *testing.T) {
 	packet := NewPacket()
-	
+
 	// Set various fields
 	packet.MessageType = UserMsg
 	packet.SenderID = NodeID(uuid.New())
@@ -159,7 +160,7 @@ func TestPacketForwardingScenario(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	_, err := NewCluster(config)
 	if err != nil {
@@ -200,7 +201,7 @@ func TestPacketBroadcastScenario(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	_, err := NewCluster(config)
 	if err != nil {
@@ -317,7 +318,7 @@ func TestPacketWithResponseScenario(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransportWithReply{}
 	config.MsgCodec = &mockCodec{}
-	config.Logger = NewNullLogger()
+	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -383,7 +384,7 @@ func TestPacketPoolStressTest(t *testing.T) {
 				default:
 					// Allocate packet
 					packet := NewPacket()
-					
+
 					// Sometimes add references
 					var refs []*Packet
 					if atomic.LoadInt64(&operations)%3 == 0 {
@@ -391,13 +392,13 @@ func TestPacketPoolStressTest(t *testing.T) {
 							refs = append(refs, packet.AddRef())
 						}
 					}
-					
+
 					// Release all references
 					for _, ref := range refs {
 						ref.Release()
 					}
 					packet.Release()
-					
+
 					atomic.AddInt64(&operations, 1)
 				}
 			}
@@ -405,24 +406,24 @@ func TestPacketPoolStressTest(t *testing.T) {
 	}
 
 	wg.Wait()
-	
+
 	t.Logf("Completed %d packet operations", atomic.LoadInt64(&operations))
 }
 
 // TestPacketFieldsAfterRelease ensures packet fields are properly reset
 func TestPacketFieldsAfterRelease(t *testing.T) {
 	packet := NewPacket()
-	
+
 	// Set fields that should be reset
 	packet.SenderID = NodeID(uuid.New())
 	targetID := NodeID(uuid.New())
 	packet.TargetNodeID = &targetID
 	packet.SetPayload([]byte("test data"))
-	
+
 	// Mock reply channel
 	replyChan := make(chan *Packet, 1)
 	packet.SetReplyChan(replyChan)
-	
+
 	// Verify fields are set
 	if packet.SenderID == EmptyNodeID {
 		t.Error("SenderID should be set")
@@ -436,14 +437,14 @@ func TestPacketFieldsAfterRelease(t *testing.T) {
 	if !packet.CanReply() {
 		t.Error("Packet should be able to reply")
 	}
-	
+
 	// Release packet
 	packet.Release()
-	
+
 	// Get a new packet from pool
 	newPacket := NewPacket()
 	defer newPacket.Release()
-	
+
 	// Verify only the fields that are actually reset are clean
 	if newPacket.SenderID != EmptyNodeID {
 		t.Errorf("SenderID not reset: %v", newPacket.SenderID)

@@ -1,42 +1,75 @@
 package common
 
 import (
-	"github.com/paularlott/gossip"
+	"io"
+	"os"
 
-	"github.com/rs/zerolog"
+	"github.com/paularlott/logger"
+	logslog "github.com/paularlott/logger/slog"
 )
 
-// ZerologLogger implements the Logger interface using zerolog
-type ZerologLogger struct {
-	zl zerolog.Logger
+var defaultLogger logger.Logger
+
+func init() {
+	// Initialize with default configuration
+	defaultLogger = logslog.New(logslog.Config{
+		Level:  "info",
+		Format: "console",
+		Writer: os.Stdout,
+	})
 }
 
-func NewZerologLogger(zl zerolog.Logger) *ZerologLogger {
-	return &ZerologLogger{zl: zl}
+// Configure sets up the logger with the given settings
+func Configure(level, format string, writer io.Writer) {
+	if writer == nil {
+		writer = os.Stdout
+	}
+
+	defaultLogger = logslog.New(logslog.Config{
+		Level:  level,
+		Format: format,
+		Writer: writer,
+	})
 }
 
-func (l *ZerologLogger) Tracef(format string, args ...interface{}) {
-	l.zl.Trace().Msgf(format, args...)
+// GetLogger returns the configured logger instance
+func GetLogger() logger.Logger {
+	return defaultLogger
 }
-func (l *ZerologLogger) Debugf(format string, args ...interface{}) {
-	l.zl.Debug().Msgf(format, args...)
+
+// Package-level convenience functions
+func Trace(msg string, keysAndValues ...any) {
+	defaultLogger.Trace(msg, keysAndValues...)
 }
-func (l *ZerologLogger) Infof(format string, args ...interface{}) {
-	l.zl.Info().Msgf(format, args...)
+
+func Debug(msg string, keysAndValues ...any) {
+	defaultLogger.Debug(msg, keysAndValues...)
 }
-func (l *ZerologLogger) Warnf(format string, args ...interface{}) {
-	l.zl.Warn().Msgf(format, args...)
+
+func Info(msg string, keysAndValues ...any) {
+	defaultLogger.Info(msg, keysAndValues...)
 }
-func (l *ZerologLogger) Errorf(format string, args ...interface{}) {
-	l.zl.Error().Msgf(format, args...)
+
+func Warn(msg string, keysAndValues ...any) {
+	defaultLogger.Warn(msg, keysAndValues...)
 }
-func (l *ZerologLogger) Field(key string, value interface{}) gossip.Logger {
-	return &ZerologLogger{
-		zl: l.zl.With().Interface(key, value).Logger(),
-	}
+
+func Error(msg string, keysAndValues ...any) {
+	defaultLogger.Error(msg, keysAndValues...)
 }
-func (l *ZerologLogger) Err(err error) gossip.Logger {
-	return &ZerologLogger{
-		zl: l.zl.With().Err(err).Logger(),
-	}
+
+func Fatal(msg string, keysAndValues ...any) {
+	defaultLogger.Fatal(msg, keysAndValues...)
+}
+
+func With(key string, value any) logger.Logger {
+	return defaultLogger.With(key, value)
+}
+
+func WithError(err error) logger.Logger {
+	return defaultLogger.WithError(err)
+}
+
+func WithGroup(group string) logger.Logger {
+	return defaultLogger.WithGroup(group)
 }

@@ -13,10 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paularlott/logger"
 )
 
 type SocketTransport struct {
 	config        *Config
+	logger        logger.Logger
 	tcpListener   *net.TCPListener
 	udpListener   *net.UDPConn
 	packetChannel chan *Packet
@@ -24,8 +27,17 @@ type SocketTransport struct {
 }
 
 func NewSocketTransport(config *Config) *SocketTransport {
+	// Create logger with transport group
+	var lgr logger.Logger
+	if config.Logger != nil {
+		lgr = config.Logger.WithGroup("gossip")
+	} else {
+		lgr = logger.NewNullLogger()
+	}
+
 	st := &SocketTransport{
 		config:        config,
+		logger:        lgr,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		resolver:      config.Resolver,
 	}
@@ -43,10 +55,7 @@ func (st *SocketTransport) Start(ctx context.Context, wg *sync.WaitGroup) error 
 		return err
 	}
 
-	st.config.Logger.
-		Field("bind_addr", bindAddress.IP.String()).
-		Field("bind_port", bindAddress.Port).
-		Infof("transport: Bind to address")
+	st.logger.Info("bind to address", "bind_addr", bindAddress.IP.String(), "bind_port", bindAddress.Port)
 
 	tcpAddr := &net.TCPAddr{
 		IP:   bindAddress.IP,
@@ -178,7 +187,7 @@ func (st *SocketTransport) tcpListen(ctx context.Context, wg *sync.WaitGroup) {
 			if st.isNetClosedError(err) {
 				return
 			}
-			st.config.Logger.Err(err).Errorf("transport: Failed to accept TCP connection")
+			st.logger.WithError(err).Error("failed to accept TCP connection")
 			continue
 		}
 
@@ -197,7 +206,7 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 			if st.isNetClosedError(err) {
 				return
 			}
-			st.config.Logger.Err(err).Errorf("transport: Failed to read from UDP connection")
+			st.logger.WithError(err).Error("failed to read from UDP connection")
 			continue
 		}
 
@@ -208,7 +217,7 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 			go func() {
 				packet, _, err := st.packetFromBuffer(packetData)
 				if err != nil {
-					st.config.Logger.Err(err).Errorf("Failed to decode UDP packet")
+					st.logger.WithError(err).Error("failed to decode UDP packet")
 					return
 				}
 
@@ -226,7 +235,7 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 	packet, replyExpected, err := st.readPacket(conn)
 	if err != nil {
-		st.config.Logger.Err(err).Errorf("transport: Failed to read packet")
+		st.logger.WithError(err).Error("failed to read packet")
 		conn.Close()
 		return
 	}
@@ -244,7 +253,7 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 			case replyPacket := <-replyChan:
 				if replyPacket != nil {
 					if err := st.writePacket(conn, replyPacket, false); err != nil {
-						st.config.Logger.Err(err).Errorf("Failed to write reply packet")
+						st.logger.WithError(err).Error("failed to write reply packet")
 					}
 					replyPacket.Release()
 				}

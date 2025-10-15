@@ -17,14 +17,10 @@ import (
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/examples/common"
 	"github.com/paularlott/gossip/leader"
-
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	common.Configure("debug", "console", os.Stderr)
 
 	port := flag.Int("port", 0, "Port to listen on")
 	webPort := flag.Int("web-port", 0, "Web port")
@@ -34,7 +30,6 @@ func main() {
 	flag.Parse()
 
 	if *debug {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
 
 	// Parse peers
@@ -61,7 +56,7 @@ func main() {
 	config.AdvertiseAddr = advertiseAddr
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
-	config.Logger = common.NewZerologLogger(log.Logger)
+	config.Logger = common.GetLogger()
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
 
@@ -75,7 +70,7 @@ func main() {
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create cluster")
+		common.WithError(err).Error("Failed to create cluster")
 	}
 
 	// Set some metadata for the local node
@@ -90,16 +85,16 @@ func main() {
 	election := leader.NewLeaderElection(cluster, electionConfig)
 
 	election.HandleEventFunc(leader.BecameLeaderEvent, func(let leader.EventType, ni gossip.NodeID) {
-		log.Warn().Str("nodeID", ni.String()).Msg("Event: Became leader")
+		common.Warn("Event: Became leader", "nodeID", ni.String())
 	})
 	election.HandleEventFunc(leader.LeaderLostEvent, func(let leader.EventType, ni gossip.NodeID) {
-		log.Warn().Str("nodeID", ni.String()).Msg("Event: Lost leader")
+		common.Warn("Event: Lost leader", "nodeID", ni.String())
 	})
 	election.HandleEventFunc(leader.LeaderElectedEvent, func(let leader.EventType, ni gossip.NodeID) {
-		log.Warn().Str("nodeID", ni.String()).Msg("Event: Leader elected")
+		common.Warn("Event: Leader elected", "nodeID", ni.String())
 	})
 	election.HandleEventFunc(leader.SteppedDownEvent, func(let leader.EventType, ni gossip.NodeID) {
-		log.Warn().Str("nodeID", ni.String()).Msg("Event: Stepped down from leader")
+		common.Warn("Event: Stepped down from leader", "nodeID", ni.String())
 	})
 
 	// Start leader election
@@ -112,7 +107,7 @@ func main() {
 	// Join the cluster
 	err = cluster.Join(peers)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to join cluster")
+		common.WithError(err).Fatal("Failed to join cluster")
 	}
 
 	// Periodically output the leadership status
@@ -126,14 +121,11 @@ func main() {
 				// Add leader info if we're the leader
 				if election.IsLeader() {
 					//meta.SetString("status", "leader")
-					log.Info().
-						Msg("I am the leader")
+					common.Info("I am the leader")
 				} else if election.HasLeader() {
 					leaderID := election.GetLeaderID()
 					if leaderNode := cluster.GetNode(leaderID); leaderNode != nil {
-						log.Info().
-							Str("leaderId", leaderID.String()).
-							Msg("Current leader")
+						common.Info("Current leader", "leaderId", leaderID.String())
 					}
 				}
 			}
@@ -150,7 +142,7 @@ func main() {
 		httpServer = &http.Server{Addr: fmt.Sprintf(":%d", *webPort)}
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatal().Err(err).Msg("Failed to start web server")
+				common.WithError(err).Error("Failed to start web server")
 			}
 		}()
 	}
@@ -165,7 +157,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Error().Err(err).Msg("Failed to gracefully shutdown HTTP server")
+			common.WithError(err).Error("Failed to gracefully shutdown HTTP server")
 		}
 	}
 }

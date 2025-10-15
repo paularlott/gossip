@@ -117,7 +117,50 @@ config.Cipher = encryption.NewAESEncryptor()           // Encryption algorithm
 config.Compressor = compression.NewSnappyCompressor()  // Enable payload compression using the provided compressor
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
 config.Transport = gossip.NewSocketTransport(config)   // Socket based transport
+
+// Logging
+config.Logger = logger.NewNullLogger()                 // Default: no logging
 ```
+
+## Logging
+
+The library uses the [github.com/paularlott/logger](https://github.com/paularlott/logger) interface for logging. By default, a null logger is used which discards all log output. You can provide your own logger implementation by implementing the `logger.Logger` interface:
+
+```go
+type Logger interface {
+    Trace(msg string, args ...any)
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    Fatal(msg string, args ...any)
+    With(key string, value any) Logger
+    WithError(err error) Logger
+    WithGroup(name string) Logger
+}
+```
+
+The `Fatal` method logs the message and then calls `os.Exit(1)`, making it convenient for handling fatal errors without explicit exit calls.
+
+### Using slog
+
+The library provides examples using the slog implementation:
+
+```go
+import (
+    "os"
+    "github.com/paularlott/logger/slog"
+)
+
+// Create a console logger with colored output
+logger := slog.New("debug", "console", os.Stderr)
+
+// Configure the cluster with the logger
+config := gossip.DefaultConfig()
+config.Logger = logger
+```
+
+See the [examples/common/log.go](examples/common/log.go) file for a complete implementation using slog.
 
 ## Node States
 

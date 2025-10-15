@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/hlc"
+	"github.com/paularlott/logger"
 )
 
 func TestHTTPTransport_NewHTTPTransport(t *testing.T) {
@@ -109,7 +110,7 @@ func TestHTTPTransport_HandleGossipRequest_NoReply(t *testing.T) {
 	config := &Config{
 		IncomingPacketQueueDepth: 10,
 		MsgCodec:                 codec.NewJsonCodec(),
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 		TCPMaxPacketSize:         65535,
 	}
 
@@ -155,7 +156,7 @@ func TestHTTPTransport_HandleGossipRequest_WithReply(t *testing.T) {
 	config := &Config{
 		IncomingPacketQueueDepth: 10,
 		MsgCodec:                 codec.NewJsonCodec(),
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 	}
 
 	transport := NewHTTPTransport(config)
@@ -186,7 +187,7 @@ func TestHTTPTransport_Authentication(t *testing.T) {
 	config := &Config{
 		IncomingPacketQueueDepth: 10,
 		MsgCodec:                 codec.NewJsonCodec(),
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 		BearerToken:              "test-token",
 		TCPMaxPacketSize:         65535,
 	}
@@ -238,7 +239,7 @@ func TestHTTPTransport_Authentication(t *testing.T) {
 func TestHTTPTransport_SendWithReply(t *testing.T) {
 	config := &Config{
 		MsgCodec:         codec.NewJsonCodec(),
-		Logger:           NewNullLogger(),
+		Logger:           logger.NewNullLogger(),
 		TCPMaxPacketSize: 65535,
 	}
 
@@ -302,7 +303,7 @@ func TestHTTPTransport_SendWithReply(t *testing.T) {
 func TestHTTPTransport_ErrorCases(t *testing.T) {
 	config := &Config{
 		MsgCodec: codec.NewJsonCodec(),
-		Logger:   NewNullLogger(),
+		Logger:   logger.NewNullLogger(),
 	}
 
 	transport := NewHTTPTransport(config)

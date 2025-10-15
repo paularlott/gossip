@@ -16,9 +16,6 @@ import (
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/examples/common"
-
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -31,8 +28,7 @@ type GossipMessage struct {
 }
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC822})
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	common.Configure("debug", "console", os.Stderr)
 
 	port := flag.Int("port", 0, "Port to listen on")
 	webPort := flag.Int("web-port", 0, "Web port")
@@ -64,7 +60,7 @@ func main() {
 	config.AdvertiseAddr = advertiseAddr
 	config.EncryptionKey = []byte("1234567890123456")
 	config.Cipher = encryption.NewAESEncryptor()
-	config.Logger = common.NewZerologLogger(log.Logger)
+	config.Logger = common.GetLogger()
 	config.MsgCodec = codec.NewShamatonMsgpackCodec()
 	config.Compressor = compression.NewSnappyCompressor()
 
@@ -84,7 +80,7 @@ func main() {
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create cluster")
+		common.WithError(err).Fatal("Failed to create cluster")
 	}
 	cluster.Start()
 	defer cluster.Stop()
@@ -103,7 +99,7 @@ func main() {
 	// Join the cluster
 	err = cluster.Join(peers)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to join cluster")
+		common.WithError(err).Fatal("Failed to join cluster")
 	}
 
 	// Handle CLI input
@@ -129,7 +125,7 @@ func main() {
 		httpServer = &http.Server{Addr: fmt.Sprintf(":%d", *webPort)}
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatal().Err(err).Msg("Failed to start web server")
+				common.WithError(err).Fatal("Failed to start web server")
 			}
 		}()
 	}
@@ -144,7 +140,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Error().Err(err).Msg("Failed to gracefully shutdown HTTP server")
+			common.WithError(err).Error("Failed to gracefully shutdown HTTP server")
 		}
 	}
 }

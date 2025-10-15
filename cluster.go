@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/hlc"
+	"github.com/paularlott/logger"
 )
 
 var (
@@ -24,6 +25,7 @@ const (
 
 type Cluster struct {
 	config               *Config
+	logger               logger.Logger
 	shutdownContext      context.Context
 	cancelFunc           context.CancelFunc
 	shutdownWg           sync.WaitGroup
@@ -69,7 +71,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	}
 
 	if config.Logger == nil {
-		config.Logger = NewNullLogger()
+		config.Logger = logger.NewNullLogger()
 	}
 
 	// Check we have a codec for encoding and decoding messages
@@ -107,6 +109,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
 		config:              config,
+		logger:              config.Logger.WithGroup("gossip"),
 		shutdownContext:     ctx,
 		cancelFunc:          cancel,
 		msgHistory:          newMessageHistory(config),
@@ -145,7 +148,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		})
 	})
 
-	config.Logger.Field("transport", cluster.transport.Name()).Infof("gossip: Cluster selected transport")
+	cluster.logger.Info("cluster selected transport", "transport", cluster.transport.Name())
 
 	return cluster, nil
 }
@@ -153,7 +156,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 func (c *Cluster) Start() {
 	// Start the transport
 	if err := c.transport.Start(c.shutdownContext, &c.shutdownWg); err != nil {
-		c.config.Logger.Err(err).Errorf("Failed to start transport")
+		c.logger.WithError(err).Error("failed to start transport")
 		panic("Failed to start cluster")
 	}
 
@@ -186,11 +189,11 @@ func (c *Cluster) Start() {
 	c.peerRecoveryManager()
 	c.healthMonitor.start()
 
-	c.config.Logger.Infof("gossip: Cluster started, local node ID: %s", c.localNode.ID.String())
+	c.logger.Info("cluster started", "node_id", c.localNode.ID.String())
 }
 
 func (c *Cluster) Stop() {
-	c.config.Logger.Infof("gossip: Starting cluster shutdown")
+	c.logger.Info("starting cluster shutdown")
 
 	if c.localNode.observedState != NodeLeaving {
 		c.Leave()
@@ -207,7 +210,7 @@ func (c *Cluster) Stop() {
 	// Wait for all goroutines to finish
 	c.shutdownWg.Wait()
 
-	c.config.Logger.Infof("gossip: Cluster stopped")
+	c.logger.Info("cluster stopped")
 }
 
 func (c *Cluster) joinWorker() {
@@ -272,7 +275,7 @@ func (c *Cluster) Join(peers []string) error {
 		go func(peerAddr string) {
 			defer wg.Done()
 
-			c.config.Logger.Tracef("Attempting to join peer: %s", peerAddr)
+			c.logger.Trace("attempting to join peer", "address", peerAddr)
 			c.joinPeer(peerAddr)
 		}(peerAddr)
 	}
@@ -303,12 +306,12 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	joinReply := &joinReplyMessage{}
 	err := c.sendToWithResponse(node, nodeJoinMsg, &joinMsg, &joinReply)
 	if err != nil {
-		c.config.Logger.Err(err).Warnf("Failed to join peer: %s", peerAddr)
+		c.logger.Warn("failed to join peer", "error", err, "address", peerAddr)
 		return
 	}
 
 	if !joinReply.Accepted {
-		c.config.Logger.Field("address", peerAddr).Field("reason", joinReply.RejectReason).Warnf("gossip: Peer rejected our join request")
+		c.logger.Warn("peer rejected join request", "address", peerAddr, "reason", joinReply.RejectReason)
 		return
 	}
 
@@ -322,7 +325,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	// Run the list of nodes that we've been given and attempt to join with any we don't know
 	for _, peer := range joinReply.Nodes {
 		if existing := c.nodes.get(peer.ID); existing == nil {
-			c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Tracef("gossip: Joining unknown peer")
+			c.logger.Trace("joining unknown peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
 
 			req := &joinRequest{
 				nodeAddr: peer.AdvertiseAddr,
@@ -331,7 +334,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 			select {
 			case c.joinQueue <- req:
 			default:
-				c.config.Logger.Field("peer_id", peer.ID.String()).Field("address", peer.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+				c.logger.Warn("join queue full, dropping join request for node", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
 			}
 		}
 	}
@@ -380,7 +383,7 @@ func (c *Cluster) checkPeerConnectivity() {
 	// Trigger recovery if alive nodes <= 50% of seed peers
 	if aliveCount <= threshold {
 		reason := fmt.Sprintf("alive nodes (%d) <= 50%% of seed peers (%d/%d)", aliveCount, threshold, seedPeerCount)
-		c.config.Logger.Warnf("gossip: Triggering peer recovery - %s", reason)
+		c.logger.Warn("triggering peer recovery", "reason", reason)
 		c.lastPeerRecovery = time.Now()
 
 		for _, peer := range c.seedPeers {
@@ -391,17 +394,17 @@ func (c *Cluster) checkPeerConnectivity() {
 			select {
 			case c.joinQueue <- req:
 			default:
-				c.config.Logger.Field("address", peer).Warnf("gossip: Join queue full, dropping join request for node")
+				c.logger.Warn("join queue full, dropping join request for node", "address", peer)
 			}
 		}
 	} else {
-		c.config.Logger.Tracef("gossip: Cluster health good: %d alive nodes > %d threshold (50%% of %d seed peers)", aliveCount, threshold, seedPeerCount)
+		c.logger.Trace("cluster health good", "alive_nodes", aliveCount, "threshold", threshold, "seed_peers", seedPeerCount)
 	}
 }
 
 // Marks the local node as leaving and broadcasts this state to the cluster
 func (c *Cluster) Leave() {
-	c.config.Logger.Debugf("gossip: Local node is leaving the cluster")
+	c.logger.Debug("local node is leaving the cluster")
 
 	// Update our local node state to leaving
 	c.nodes.updateState(c.localNode.ID, NodeLeaving)
@@ -412,7 +415,7 @@ func (c *Cluster) Leave() {
 	// Give some time for the leave messages to be sent before shutting down
 	time.Sleep(100 * time.Millisecond)
 
-	c.config.Logger.Debugf("gossip: Leave message broadcast completed")
+	c.logger.Debug("leave message broadcast completed")
 }
 
 func (c *Cluster) acceptPackets() {
@@ -475,7 +478,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	if h != nil {
 		err := h.dispatch(c, senderNode, packet)
 		if err != nil {
-			c.config.Logger.Err(err).Warnf("gossip: Error dispatching packet: %d", packet.MessageType)
+			c.logger.Warn("error dispatching packet", "error", err, "message_type", packet.MessageType)
 		}
 	}
 }
@@ -574,12 +577,12 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 			&peerResponseStates,
 		)
 		if err != nil {
-			c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Failed to exchange state with node")
+			c.logger.Warn("failed to exchange state with node", "node_id", node.ID.String())
 			c.nodes.updateState(node.ID, NodeSuspect)
 		} else {
 			if node.observedState == NodeSuspect {
 				c.nodes.updateState(node.ID, NodeAlive)
-				c.Logger().Field("node_id", node.ID.String()).Warnf("gossip: Node recovered from suspect")
+				c.logger.Warn("node recovered from suspect", "node_id", node.ID.String())
 			}
 			node.updateLastActivity()
 
@@ -610,15 +613,15 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			select {
 			case c.joinQueue <- req:
 			default:
-				c.config.Logger.Field("peer_id", state.ID.String()).Field("address", state.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+				c.logger.Warn("join queue full, dropping join request for node", "peer_id", state.ID.String(), "address", state.AdvertiseAddr)
 			}
 		} else {
 			// Node exists locally, need to merge states intelligently
-			c.config.Logger.Tracef("gossip: Merging state for existing node: %s", state.ID.String())
+			c.logger.Trace("merging state for existing node", "node_id", state.ID.String())
 
 			// Update advertise address if it has changed (but log it)
 			if localNode.advertiseAddr != state.AdvertiseAddr {
-				c.config.Logger.Debugf("gossip: Node %s advertise address changed: %s -> %s", state.ID.String(), localNode.advertiseAddr, state.AdvertiseAddr)
+				c.logger.Debug("node advertise address changed", "node_id", state.ID.String(), "old_address", localNode.advertiseAddr, "new_address", state.AdvertiseAddr)
 				localNode.advertiseAddr = state.AdvertiseAddr
 				localNode.address.Clear() // Force re-resolution
 			}
@@ -656,7 +659,7 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 		// Successfully queued
 	default:
 		// Queue full, log and skip this message
-		c.config.Logger.Warnf("gossip: Broadcast queue is full, skipping message")
+		c.logger.Warn("broadcast queue is full, skipping message")
 
 		item.packet.Release()
 		item.packet = nil
@@ -678,11 +681,9 @@ func (c *Cluster) broadcastWorker() {
 
 			for _, node := range item.peers {
 				if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
-					c.config.Logger.Err(err).Debugf("gossip:Failed to send packet to peers")
+					c.logger.Debug("failed to send packet to peers", "error", err)
 				}
-			}
-
-			// Release the broadcast item back to the pool
+			} // Release the broadcast item back to the pool
 			item.packet.Release()
 			item.packet = nil
 			c.broadcastQItemPool.Put(item)
@@ -880,7 +881,7 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		c.gossipInterval = newInterval
 		c.gossipTicker.Reset(c.gossipInterval)
 
-		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("gossip: interval increased")
+		c.logger.Debug("interval increased", "duration", duration.String(), "new_interval", c.gossipInterval.String())
 	} else if c.gossipInterval > c.config.GossipInterval && duration < time.Duration(float64(c.gossipInterval)*0.8) {
 		// If handlers are fast and we're above original interval, gradually return to base
 
@@ -893,7 +894,7 @@ func (c *Cluster) adjustGossipInterval(duration time.Duration) {
 		}
 
 		c.gossipTicker.Reset(c.gossipInterval)
-		c.config.Logger.Field("duration", duration.String()).Field("newInterval", c.gossipInterval.String()).Debugf("gossip: interval decreased")
+		c.logger.Debug("interval decreased", "duration", duration.String(), "new_interval", c.gossipInterval.String())
 	}
 }
 
@@ -920,8 +921,8 @@ func (c *Cluster) gossipMetadata() {
 	)
 }
 
-func (c *Cluster) Logger() Logger {
-	return c.config.Logger
+func (c *Cluster) Logger() logger.Logger {
+	return c.logger
 }
 
 func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
@@ -963,7 +964,7 @@ func (c *Cluster) cleanupNodes() {
 	for _, node := range leavingNodes {
 		if now.Sub(node.observedStateTime.Time()) > c.config.LeavingNodeTimeout {
 			c.nodes.updateState(node.ID, NodeDead)
-			c.config.Logger.Debugf("gossip: Moved leaving node to dead: %s", node.ID.String())
+			c.logger.Debug("moved leaving node to dead", "node_id", node.ID.String())
 		}
 	}
 
@@ -971,7 +972,7 @@ func (c *Cluster) cleanupNodes() {
 	for _, node := range deadNodes {
 		if now.Sub(node.observedStateTime.Time()) > c.config.NodeRetentionTime {
 			c.nodes.remove(node.ID)
-			c.config.Logger.Debugf("gossip: Removed dead node: %s", node.ID.String())
+			c.logger.Debug("removed dead node", "node_id", node.ID.String())
 		}
 	}
 }

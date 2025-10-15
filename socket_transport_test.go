@@ -12,13 +12,14 @@ import (
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/gossip/hlc"
+	"github.com/paularlott/logger"
 )
 
 func TestSocketTransport_NewSocketTransport(t *testing.T) {
 	config := &Config{
-		BindAddr:                  "127.0.0.1:0",
+		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 		MsgCodec:                 codec.NewJsonCodec(),
 	}
 
@@ -46,7 +47,7 @@ func TestSocketTransport_NewSocketTransport(t *testing.T) {
 
 func TestSocketTransport_PacketSerialization(t *testing.T) {
 	config := &Config{
-		MsgCodec:       codec.NewJsonCodec(),
+		MsgCodec:        codec.NewJsonCodec(),
 		CompressMinSize: 100,
 	}
 
@@ -83,8 +84,8 @@ func TestSocketTransport_PacketSerialization(t *testing.T) {
 
 func TestSocketTransport_PacketWithCompression(t *testing.T) {
 	config := &Config{
-		MsgCodec:       codec.NewJsonCodec(),
-		Compressor:     compression.NewSnappyCompressor(),
+		MsgCodec:        codec.NewJsonCodec(),
+		Compressor:      compression.NewSnappyCompressor(),
 		CompressMinSize: 10,
 	}
 
@@ -205,9 +206,9 @@ func TestSocketTransport_ReplyExpectedFlag(t *testing.T) {
 
 func TestSocketTransport_SendReceive(t *testing.T) {
 	config1 := &Config{
-		BindAddr:                  "127.0.0.1:0",
+		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 		MsgCodec:                 codec.NewJsonCodec(),
 		TCPDeadline:              5 * time.Second,
 		UDPDeadline:              5 * time.Second,
@@ -217,9 +218,9 @@ func TestSocketTransport_SendReceive(t *testing.T) {
 	}
 
 	config2 := &Config{
-		BindAddr:                  "127.0.0.1:0",
+		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
-		Logger:                   NewNullLogger(),
+		Logger:                   logger.NewNullLogger(),
 		MsgCodec:                 codec.NewJsonCodec(),
 		TCPDeadline:              5 * time.Second,
 		UDPDeadline:              5 * time.Second,

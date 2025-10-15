@@ -22,7 +22,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		return nil, err
 	}
 
-	c.config.Logger.Field("sender_id", joinMsg.ID.String()).Tracef("gossip: handleJoin")
+	c.logger.Trace("handleJoin", "sender_id", joinMsg.ID.String())
 
 	// Check the protocol version and application version, reject if not compatible
 	accepted := true
@@ -91,18 +91,18 @@ func (c *Cluster) calculateJoinResponseSize(totalAlive int) int {
 }
 
 func (c *Cluster) handleNodeLeave(sender *Node, packet *Packet) error {
-	c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handleNodeLeave")
+	c.logger.Trace("handleNodeLeave", "sender_id", sender.ID.String())
 
 	// Update the node's state to leaving
 	if c.nodes.updateState(sender.ID, NodeLeaving) {
-		c.config.Logger.Field("nodeId", sender.ID.String()).Debugf("gossip: Node is leaving the cluster")
+		c.logger.Debug("node is leaving the cluster", "nodeId", sender.ID.String())
 	}
 
 	return nil
 }
 
 func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}, error) {
-	c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handlePushPullState")
+	c.logger.Trace("handlePushPullState", "sender_id", sender.ID.String())
 
 	var peerStates []exchangeNodeState
 	err := packet.Unmarshal(&peerStates)
@@ -133,8 +133,6 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 }
 
 func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
-	//c.config.Logger.Field("sender_id", sender.ID.String()).Tracef("gossip: handleMetadataUpdate")
-
 	var metadataUpdate metadataUpdateMessage
 	err := packet.Unmarshal(&metadataUpdate)
 	if err != nil {
@@ -146,7 +144,7 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	}
 
 	if metadataUpdate.NodeState != sender.observedState {
-		c.config.Logger.Debugf("gossip: Updating node %s state from %v to %v via metadata", sender.ID.String(), sender.observedState, metadataUpdate.NodeState)
+		c.logger.Debug("updating node state via metadata", "node_id", sender.ID.String(), "old_state", sender.observedState, "new_state", metadataUpdate.NodeState)
 		c.nodes.updateState(sender.ID, metadataUpdate.NodeState)
 	}
 
@@ -160,7 +158,7 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 		return nil, err
 	}
 
-	c.config.Logger.Field("sender_id", pingMsg.SenderID.String()).Tracef("gossip: handlePing")
+	c.logger.Trace("handlePing", "sender_id", pingMsg.SenderID.String())
 
 	// If we don't know the sender, add them to our cluster view
 	if sender == nil {
@@ -170,9 +168,9 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 
 		select {
 		case c.joinQueue <- req:
-			c.config.Logger.Tracef("gossip: Added unknown node from ping: %s", pingMsg.SenderID.String())
+			c.logger.Trace("added unknown node from ping", "sender_id", pingMsg.SenderID.String())
 		default:
-			c.config.Logger.Field("peer_id", pingMsg.SenderID.String()).Field("address", pingMsg.AdvertiseAddr).Warnf("gossip: Join queue full, dropping join request for node")
+			c.logger.Warn("join queue full, dropping join request for node", "peer_id", pingMsg.SenderID.String(), "address", pingMsg.AdvertiseAddr)
 		}
 	}
 
