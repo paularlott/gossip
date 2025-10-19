@@ -88,7 +88,7 @@ func TestHTTPTransport_ReplyExpectedFlag(t *testing.T) {
 		t.Fatalf("Failed to serialize packet with reply: %v", err)
 	}
 
-	flags := uint16(dataWithReply[0])<<8 | uint16(dataWithReply[1])
+	flags := uint16(dataWithReply[0]) | uint16(dataWithReply[1])<<8
 	if flags&replyExpectedFlag == 0 {
 		t.Error("Expected reply flag to be set")
 	}
@@ -98,7 +98,7 @@ func TestHTTPTransport_ReplyExpectedFlag(t *testing.T) {
 		t.Fatalf("Failed to serialize packet without reply: %v", err)
 	}
 
-	flags2 := uint16(dataNoReply[0])<<8 | uint16(dataNoReply[1])
+	flags2 := uint16(dataNoReply[0]) | uint16(dataNoReply[1])<<8
 	if flags2&replyExpectedFlag != 0 {
 		t.Error("Expected reply flag to be unset")
 	}
@@ -175,7 +175,7 @@ func TestHTTPTransport_HandleGossipRequest_WithReply(t *testing.T) {
 	}
 
 	// Test that reply flag is properly detected
-	flags := uint16(data[0])<<8 | uint16(data[1])
+	flags := uint16(data[0]) | uint16(data[1])<<8
 	if flags&replyExpectedFlag == 0 {
 		t.Error("Expected reply flag to be set")
 	}

@@ -542,13 +542,12 @@ func (st *SocketTransport) packetToBuffer(packet *Packet, replyExpected bool) ([
 
 	var buf bytes.Buffer
 
-	err = binary.Write(&buf, binary.BigEndian, headerSize)
+	err = binary.Write(&buf, binary.LittleEndian, headerSize)
 	if err != nil {
 		return nil, err
 	}
 
 	var payloadBuf bytes.Buffer
-
 	_, err = payloadBuf.Write(headerBytes)
 	if err != nil {
 		return nil, err
@@ -584,7 +583,7 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 		return nil, false, fmt.Errorf("packet too small")
 	}
 
-	flags := binary.BigEndian.Uint16(data[:2])
+	flags := binary.LittleEndian.Uint16(data[:2])
 	isCompressed := flags&compressionFlag != 0
 	replyExpected := flags&replyExpectedFlag != 0
 	headerSize := flags & headerSizeMask
@@ -641,7 +640,7 @@ func (st *SocketTransport) writeRawPacket(conn net.Conn, rawPacket []byte) error
 	}
 
 	var writeBuffer bytes.Buffer
-	err = binary.Write(&writeBuffer, binary.BigEndian, uint32(len(rawPacket)))
+	err = binary.Write(&writeBuffer, binary.LittleEndian, uint32(len(rawPacket)))
 	if err != nil {
 		return err
 	}
@@ -678,7 +677,7 @@ func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, bool, error) {
 		return nil, false, err
 	}
 
-	dataLen := binary.BigEndian.Uint32(lengthBytes)
+	dataLen := binary.LittleEndian.Uint32(lengthBytes)
 
 	if dataLen > uint32(st.config.TCPMaxPacketSize) {
 		return nil, false, fmt.Errorf("packet size too large: %d bytes", dataLen)

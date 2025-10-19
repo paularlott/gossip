@@ -212,7 +212,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	flags := binary.BigEndian.Uint16(body[:2])
+	flags := binary.LittleEndian.Uint16(body[:2])
 	replyExpected := flags&replyExpectedFlag != 0
 
 	if replyExpected {
@@ -353,7 +353,7 @@ func (ht *HTTPTransport) packetToBuffer(packet *Packet, replyExpected bool) ([]b
 
 	var buf bytes.Buffer
 
-	err = binary.Write(&buf, binary.BigEndian, headerSize)
+	err = binary.Write(&buf, binary.LittleEndian, headerSize)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func (ht *HTTPTransport) packetFromBuffer(data []byte) (*Packet, error) {
 		return nil, fmt.Errorf("packet too small")
 	}
 
-	flags := binary.BigEndian.Uint16(data[:2])
+	flags := binary.LittleEndian.Uint16(data[:2])
 	headerSize := flags & headerSizeMask
 
 	if len(data) < int(headerSize)+2 {
