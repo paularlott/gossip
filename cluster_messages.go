@@ -7,14 +7,19 @@ import (
 )
 
 func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
-	return c.createPacketWithTarget(sender, nil, msgType, ttl, payload)
+	return c.createPacketWithTargetAndTag(sender, nil, nil, msgType, ttl, payload)
 }
 
 func (c *Cluster) createPacketWithTarget(sender NodeID, target *NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
+	return c.createPacketWithTargetAndTag(sender, target, nil, msgType, ttl, payload)
+}
+
+func (c *Cluster) createPacketWithTargetAndTag(sender NodeID, target *NodeID, tag *string, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
 	packet := NewPacket()
 	packet.MessageType = msgType
 	packet.SenderID = sender
 	packet.TargetNodeID = target
+	packet.Tag = tag
 	packet.MessageID = MessageID(hlc.Now())
 	packet.TTL = ttl
 	packet.codec = c.config.MsgCodec
@@ -31,11 +36,19 @@ func (c *Cluster) createPacketWithTarget(sender NodeID, target *NodeID, msgType 
 }
 
 func (c *Cluster) sendMessage(peers []*Node, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
-	return c.sendMessageWithTarget(peers, nil, transportType, ttl, msgType, data)
+	return c.sendMessageWithTargetAndTag(peers, nil, nil, transportType, ttl, msgType, data)
 }
 
 func (c *Cluster) sendMessageWithTarget(peers []*Node, target *NodeID, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
-	packet, err := c.createPacketWithTarget(c.localNode.ID, target, msgType, ttl, data)
+	return c.sendMessageWithTargetAndTag(peers, target, nil, transportType, ttl, msgType, data)
+}
+
+func (c *Cluster) sendMessageWithTag(peers []*Node, tag *string, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
+	return c.sendMessageWithTargetAndTag(peers, nil, tag, transportType, ttl, msgType, data)
+}
+
+func (c *Cluster) sendMessageWithTargetAndTag(peers []*Node, target *NodeID, tag *string, transportType TransportType, ttl uint8, msgType MessageType, data interface{}) error {
+	packet, err := c.createPacketWithTargetAndTag(c.localNode.ID, target, tag, msgType, ttl, data)
 	if err != nil {
 		return err
 	}
@@ -57,6 +70,20 @@ func (c *Cluster) SendReliable(msgType MessageType, data interface{}) error {
 		return fmt.Errorf("invalid message type")
 	}
 	return c.sendMessage(nil, TransportReliable, c.getMaxTTL(), msgType, data)
+}
+
+func (c *Cluster) SendTagged(tag string, msgType MessageType, data interface{}) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageWithTag(nil, &tag, TransportBestEffort, c.getMaxTTL(), msgType, data)
+}
+
+func (c *Cluster) SendTaggedReliable(tag string, msgType MessageType, data interface{}) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendMessageWithTag(nil, &tag, TransportReliable, c.getMaxTTL(), msgType, data)
 }
 
 func (c *Cluster) SendTo(dstNode *Node, msgType MessageType, data interface{}) error {

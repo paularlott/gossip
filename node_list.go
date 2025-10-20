@@ -345,7 +345,14 @@ func (nl *nodeList) getCachedNodesInStates(states []NodeState) []*Node {
 }
 
 // GetRandomNodesInStates returns up to k random nodes in the specified states, excluding specified IDs
+// If tag is not nil, only nodes with the specified tag are returned
 func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs []NodeID) []*Node {
+	return nl.getRandomNodesInStatesWithTag(k, states, excludeIDs, nil)
+}
+
+// getRandomNodesInStatesWithTag returns up to k random nodes in the specified states, excluding specified IDs
+// If tag is not nil, only nodes with the specified tag are returned
+func (nl *nodeList) getRandomNodesInStatesWithTag(k int, states []NodeState, excludeIDs []NodeID, tag *string) []*Node {
 	if len(states) == 0 || k <= 0 {
 		return []*Node{}
 	}
@@ -353,40 +360,55 @@ func (nl *nodeList) getRandomNodesInStates(k int, states []NodeState, excludeIDs
 	// Get cached nodes for these states
 	allCandidates := nl.getCachedNodesInStates(states)
 
-	// Apply exclusions (not cached since excludeIDs vary)
+	// Build exclusion set for O(1) lookup
+	var excludeSet map[NodeID]struct{}
 	if len(excludeIDs) > 0 {
-		excludeSet := make(map[NodeID]struct{}, len(excludeIDs))
+		excludeSet = make(map[NodeID]struct{}, len(excludeIDs))
 		for _, id := range excludeIDs {
 			excludeSet[id] = struct{}{}
 		}
+	}
 
-		// Filter out excluded nodes
-		filtered := allCandidates[:0] // reuse slice
-		for _, node := range allCandidates {
-			if _, excluded := excludeSet[node.ID]; !excluded {
-				filtered = append(filtered, node)
+	// Filter nodes based on exclusions and tag
+	filtered := make([]*Node, 0, len(allCandidates))
+	for _, node := range allCandidates {
+		// Skip excluded nodes
+		if excludeSet != nil {
+			if _, excluded := excludeSet[node.ID]; excluded {
+				continue
 			}
 		}
-		allCandidates = filtered
+
+		// Skip nodes without the tag if tag filter is specified
+		if tag != nil && !node.HasTag(*tag) {
+			continue
+		}
+
+		filtered = append(filtered, node)
 	}
 
 	// Return all if we don't have enough
-	if len(allCandidates) <= k {
-		return allCandidates
+	if len(filtered) <= k {
+		return filtered
 	}
 
 	// Fisher-Yates shuffle and take first k
-	for i := len(allCandidates) - 1; i > 0; i-- {
+	for i := len(filtered) - 1; i > 0; i-- {
 		j := rand.Intn(i + 1)
-		allCandidates[i], allCandidates[j] = allCandidates[j], allCandidates[i]
+		filtered[i], filtered[j] = filtered[j], filtered[i]
 	}
 
-	return allCandidates[:k]
+	return filtered[:k]
 }
 
 // GetRandomNodes returns up to k random live nodes (Alive or Suspect)
 func (nl *nodeList) getRandomNodes(k int, excludeIDs []NodeID) []*Node {
 	return nl.getRandomNodesInStates(k, []NodeState{NodeAlive, NodeSuspect}, excludeIDs)
+}
+
+// GetRandomNodesWithTag returns up to k random live nodes (Alive or Suspect) that have the specified tag
+func (nl *nodeList) getRandomNodesWithTag(k int, tag string, excludeIDs []NodeID) []*Node {
+	return nl.getRandomNodesInStatesWithTag(k, []NodeState{NodeAlive, NodeSuspect}, excludeIDs, &tag)
 }
 
 // GetAliveCount returns the number of nodes with state NodeAlive
@@ -430,6 +452,20 @@ func (nl *nodeList) getAllInStates(states []NodeState) []*Node {
 // getAll returns all nodes in the cluster
 func (nl *nodeList) getAll() []*Node {
 	return nl.getCachedNodesInStates([]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead})
+}
+
+// getByTag returns all nodes that have the specified tag
+func (nl *nodeList) getByTag(tag string) []*Node {
+	allNodes := nl.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
+
+	filteredNodes := make([]*Node, 0)
+	for _, node := range allNodes {
+		if node.HasTag(tag) {
+			filteredNodes = append(filteredNodes, node)
+		}
+	}
+
+	return filteredNodes
 }
 
 // Add event handler registration methods

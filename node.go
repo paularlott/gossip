@@ -44,6 +44,7 @@ type Node struct {
 	observedState      NodeState     // The local view of the node's state
 	observedStateTime  hlc.Timestamp // Local timestamp for the node's state (updated by the node)
 	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)
+	tags               []string      // Tags for tag-based message routing (immutable after creation)
 	Metadata           MetadataReader
 	metadata           *Metadata
 	ProtocolVersion    uint16
@@ -52,6 +53,10 @@ type Node struct {
 }
 
 func newNode(id NodeID, advertiseAddr string) *Node {
+	return newNodeWithTags(id, advertiseAddr, nil)
+}
+
+func newNodeWithTags(id NodeID, advertiseAddr string, tags []string) *Node {
 	metadata := NewMetadata()
 
 	now := hlc.Now()
@@ -62,6 +67,7 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 		observedState:     NodeAlive,
 		observedStateTime: now,
 		lastMessageTime:   now,
+		tags:              tags,
 		Metadata:          metadata,
 		metadata:          metadata,
 	}
@@ -70,10 +76,14 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 }
 
 func (n *Node) updateLastActivity() {
+	n.mu.Lock()
 	n.lastMessageTime = hlc.Now()
+	n.mu.Unlock()
 }
 
 func (n *Node) getLastActivity() hlc.Timestamp {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	return n.lastMessageTime
 }
 
@@ -115,4 +125,25 @@ func (node *Node) Address() *Address {
 // AdvertiseAddr returns the node's advertise address string
 func (node *Node) AdvertiseAddr() string {
 	return node.advertiseAddr
+}
+
+// GetTags returns a copy of the node's tags
+func (node *Node) GetTags() []string {
+	if node.tags == nil {
+		return []string{}
+	}
+	// Return a copy to prevent external modification
+	tagsCopy := make([]string, len(node.tags))
+	copy(tagsCopy, node.tags)
+	return tagsCopy
+}
+
+// HasTag returns true if the node has the specified tag
+func (node *Node) HasTag(tag string) bool {
+	for _, t := range node.tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }

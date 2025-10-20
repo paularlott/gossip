@@ -113,7 +113,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		shutdownContext:     ctx,
 		cancelFunc:          cancel,
 		msgHistory:          newMessageHistory(config),
-		localNode:           newNode(NodeID(u), config.AdvertiseAddr),
+		localNode:           newNodeWithTags(NodeID(u), config.AdvertiseAddr, config.Tags),
 		handlers:            newHandlerRegistry(),
 		broadcastQueue:      make(chan *broadcastQItem, config.SendQueueSize),
 		gossipEventHandlers: NewEventHandlers[GossipHandler](),
@@ -293,6 +293,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		ID:                 c.localNode.ID,
 		AdvertiseAddr:      c.localNode.advertiseAddr,
 		State:              c.localNode.observedState,
+		Tags:               c.localNode.GetTags(),
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
@@ -315,8 +316,8 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		return
 	}
 
-	node.ID = joinReply.NodeID
-	node.advertiseAddr = joinReply.AdvertiseAddr
+	// Create node with tags from join reply
+	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
 
 	// Update the copy of the nodes metadata
@@ -326,6 +327,10 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	for _, peer := range joinReply.Nodes {
 		if existing := c.nodes.get(peer.ID); existing == nil {
 			c.logger.Trace("joining unknown peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
+
+			// Create a preliminary node with tags from the join reply
+			prelimNode := newNodeWithTags(peer.ID, peer.AdvertiseAddr, peer.Tags)
+			c.nodes.addIfNotExists(prelimNode)
 
 			req := &joinRequest{
 				nodeAddr: peer.AdvertiseAddr,
@@ -447,6 +452,9 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		return
 	}
 
+	// If message has a tag and we don't have that tag, ignore it (but still forward)
+	hasTag := packet.Tag == nil || c.localNode.HasTag(*packet.Tag)
+
 	// Record the message in the message history
 	c.msgHistory.recordMessage(packet.SenderID, packet.MessageID)
 
@@ -456,7 +464,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		senderNode.updateLastActivity()
 	}
 
-	// Forward packets
+	// Forward packets to nodes with matching tags
 	if !packet.CanReply() {
 		var transportType TransportType
 		if packet.conn != nil {
@@ -465,6 +473,12 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			transportType = TransportBestEffort
 		}
 		c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+	}
+
+	// If we don't have the tag, skip processing
+	if !hasTag {
+		packet.Release()
+		return
 	}
 
 	// If we don't know the sender then unless it's a join message ignore it
@@ -676,7 +690,16 @@ func (c *Cluster) broadcastWorker() {
 
 			// Get the peer subset to send the packet to
 			if item.peers == nil {
-				item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
+				if item.packet.Tag != nil {
+					// For tagged messages, only send to nodes with that tag
+					item.peers = c.nodes.getRandomNodesWithTag(c.CalcFanOut(), *item.packet.Tag, item.excludePeers)
+					if len(item.peers) == 0 {
+						c.logger.Debug("no nodes found with tag, message not forwarded", "tag", *item.packet.Tag)
+					}
+				} else {
+					// For untagged messages, send to all nodes
+					item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
+				}
 			}
 
 			for _, node := range item.peers {
@@ -709,6 +732,10 @@ func (c *Cluster) Nodes() []*Node {
 
 func (c *Cluster) AliveNodes() []*Node {
 	return c.nodes.getAllInStates([]NodeState{NodeAlive})
+}
+
+func (c *Cluster) GetNodesByTag(tag string) []*Node {
+	return c.nodes.getByTag(tag)
 }
 
 func (c *Cluster) GetNode(id NodeID) *Node {
@@ -916,7 +943,7 @@ func (c *Cluster) gossipMetadata() {
 		metadataUpdateMessage{
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 			Metadata:          c.localNode.metadata.GetAll(),
-			NodeState:         c.localNode.observedState,
+			NodeState:         c.localNode.GetObservedState(),
 		},
 	)
 }
