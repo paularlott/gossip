@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"math/rand"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,17 +42,29 @@ type nodeList struct {
 
 // Add cache key generation
 func stateSetToKey(states []NodeState) string {
-	if len(states) == 0 {
+	// Fast paths for common cases
+	switch len(states) {
+	case 0:
 		return ""
+	case 1:
+		return strconv.Itoa(int(states[0]))
+	case 2:
+		// Fast path for 2 states (most common: NodeAlive, NodeSuspect)
+		a, b := states[0], states[1]
+		if a > b {
+			a, b = b, a
+		}
+		return strconv.Itoa(int(a)) + "," + strconv.Itoa(int(b))
 	}
 
-	// Sort states for consistent key
+	// General case for 3+ states (rare)
 	sorted := make([]NodeState, len(states))
 	copy(sorted, states)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 
 	// Build key string
 	var key strings.Builder
+	key.Grow(len(states) * 3) // Pre-allocate: ~2 digits + comma per state
 	for i, state := range sorted {
 		if i > 0 {
 			key.WriteByte(',')
@@ -370,7 +383,17 @@ func (nl *nodeList) getRandomNodesInStatesWithTag(k int, states []NodeState, exc
 	}
 
 	// Filter nodes based on exclusions and tag
-	filtered := make([]*Node, 0, len(allCandidates))
+	// Pre-allocate with estimated capacity to reduce reallocations
+	estimatedCapacity := k
+	if tag != nil {
+		// If filtering by tag, we'll likely find fewer nodes
+		estimatedCapacity = min(k*2, len(allCandidates)/10)
+	}
+	if estimatedCapacity > len(allCandidates) {
+		estimatedCapacity = len(allCandidates)
+	}
+	filtered := make([]*Node, 0, estimatedCapacity)
+
 	for _, node := range allCandidates {
 		// Skip excluded nodes
 		if excludeSet != nil {
@@ -389,7 +412,7 @@ func (nl *nodeList) getRandomNodesInStatesWithTag(k int, states []NodeState, exc
 
 	// Return all if we don't have enough
 	if len(filtered) <= k {
-		return filtered
+		return slices.Clip(filtered)
 	}
 
 	// Fisher-Yates shuffle and take first k
@@ -398,7 +421,7 @@ func (nl *nodeList) getRandomNodesInStatesWithTag(k int, states []NodeState, exc
 		filtered[i], filtered[j] = filtered[j], filtered[i]
 	}
 
-	return filtered[:k]
+	return slices.Clip(filtered[:k])
 }
 
 // GetRandomNodes returns up to k random live nodes (Alive or Suspect)
@@ -456,16 +479,19 @@ func (nl *nodeList) getAll() []*Node {
 
 // getByTag returns all nodes that have the specified tag
 func (nl *nodeList) getByTag(tag string) []*Node {
-	allNodes := nl.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
+	// Get cached nodes in alive/suspect states
+	allNodes := nl.getCachedNodesInStates([]NodeState{NodeAlive, NodeSuspect})
 
-	filteredNodes := make([]*Node, 0)
+	// Filter by tag without shuffling (we want all matching nodes)
+	filtered := make([]*Node, 0, len(allNodes)/10) // Estimate ~10% will match
 	for _, node := range allNodes {
 		if node.HasTag(tag) {
-			filteredNodes = append(filteredNodes, node)
+			filtered = append(filtered, node)
 		}
 	}
 
-	return filteredNodes
+	// Trim unused capacity to avoid returning slice with excess memory
+	return slices.Clip(filtered)
 }
 
 // Add event handler registration methods

@@ -52,11 +52,9 @@ type Node struct {
 	mu                 sync.RWMutex // Protects observedState reads
 }
 
-func newNode(id NodeID, advertiseAddr string) *Node {
-	return newNodeWithTags(id, advertiseAddr, nil)
-}
-
-func newNodeWithTags(id NodeID, advertiseAddr string, tags []string) *Node {
+// newNode creates a new node with optional tags
+// Use newNode(id, addr) for no tags, or newNode(id, addr, tags...) for tags
+func newNode(id NodeID, advertiseAddr string, tags ...string) *Node {
 	metadata := NewMetadata()
 
 	now := hlc.Now()
@@ -73,6 +71,12 @@ func newNodeWithTags(id NodeID, advertiseAddr string, tags []string) *Node {
 	}
 
 	return n
+}
+
+// newNodeWithTags is deprecated, use newNode with variadic tags instead
+// Kept for backward compatibility during transition
+func newNodeWithTags(id NodeID, advertiseAddr string, tags []string) *Node {
+	return newNode(id, advertiseAddr, tags...)
 }
 
 func (n *Node) updateLastActivity() {
@@ -127,7 +131,10 @@ func (node *Node) AdvertiseAddr() string {
 	return node.advertiseAddr
 }
 
-// GetTags returns a copy of the node's tags
+// GetTags returns a copy of the node's tags.
+// Tags are immutable (set at node creation), but we return a defensive copy
+// to prevent accidental modification by callers.
+// Note: For performance-critical paths, consider using HasTag() instead of GetTags()
 func (node *Node) GetTags() []string {
 	if node.tags == nil {
 		return []string{}
