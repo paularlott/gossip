@@ -786,6 +786,10 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
+func (c *Cluster) HandleFuncWithResponse(msgType MessageType, replyHandler ReplyHandler) error {
+	return c.HandleFuncWithReply(msgType, replyHandler)
+}
+
 func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
 	if msgType < ReservedMsgsStart {
 		return false
