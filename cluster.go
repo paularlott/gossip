@@ -316,6 +316,8 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		return
 	}
 
+	c.logger.Debug("received join reply", "peer_id", joinReply.NodeID.String(), "peer_tags", joinReply.Tags)
+
 	// Create node with tags from join reply
 	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
@@ -693,9 +695,6 @@ func (c *Cluster) broadcastWorker() {
 				if item.packet.Tag != nil {
 					// For tagged messages, only send to nodes with that tag
 					item.peers = c.nodes.getRandomNodesWithTag(c.CalcFanOut(), *item.packet.Tag, item.excludePeers)
-					if len(item.peers) == 0 {
-						c.logger.Debug("no nodes found with tag, message not forwarded", "tag", *item.packet.Tag)
-					}
 				} else {
 					// For untagged messages, send to all nodes
 					item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
