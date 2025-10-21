@@ -88,6 +88,11 @@ func (ts Timestamp) Counter() uint16 {
 	return uint16(uint64(ts) & counterMask)
 }
 
+// Uint64 returns the raw 64-bit encoded value of the timestamp.
+func (ts Timestamp) Uint64() uint64 {
+	return uint64(ts)
+}
+
 var defaultClock = NewClock()
 
 // Now returns a new Timestamp from the default Clock.
