@@ -61,7 +61,7 @@ func HandleCLIInput(c *gossip.Cluster) {
 			handleShowmetaCommand(c, args)
 
 		case "whoami":
-			fmt.Printf("Local node ID: %s (%s)\n", c.LocalNode().ID.String(), c.LocalNode().AdvertiseAddr())
+			fmt.Printf("Local node ID: %s (%s)\n", c.LocalNode().ID.String(), c.LocalNode().AdvertisedAddr())
 
 		case "exit":
 			os.Exit(0)
@@ -136,7 +136,7 @@ func handlePeersCommand(c *gossip.Cluster) {
 			metaKV = append(metaKV, fmt.Sprintf("%s = %s", k, v))
 		}
 
-		data = append(data, []string{p.ID.String(), p.AdvertiseAddr(), p.GetObservedState().String(), strings.Join(metaKV, ", ")})
+		data = append(data, []string{p.ID.String(), p.AdvertisedAddr(), p.GetObservedState().String(), strings.Join(metaKV, ", ")})
 	}
 
 	PrintTable(data)

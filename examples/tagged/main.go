@@ -160,7 +160,7 @@ func main() {
 					}
 					fmt.Printf("  - %s: %s | Tags: %v%s\n",
 						node.ID.String()[:8],
-						node.AdvertiseAddr(),
+						node.AdvertisedAddr(),
 						node.GetTags(),
 						isLocal)
 				}
@@ -178,7 +178,7 @@ func main() {
 					}
 					fmt.Printf("  - %s: %s | Tags: %v%s\n",
 						node.ID.String()[:8],
-						node.AdvertiseAddr(),
+						node.AdvertisedAddr(),
 						node.GetTags(),
 						isLocal)
 				}

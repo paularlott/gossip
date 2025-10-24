@@ -287,11 +287,11 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		return nil
 	}
 
-	if node.AdvertiseAddr() == "" {
+	if node.AdvertisedAddr() == "" {
 		return fmt.Errorf("no advertise address available")
 	}
 
-	uri := node.AdvertiseAddr()
+	uri := node.AdvertisedAddr()
 
 	var err error
 	var u *url.URL

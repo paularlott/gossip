@@ -316,7 +316,7 @@ func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
 		node.Address().Clear()
 	}
 
-	addrs, err := st.resolveAddress(node.AdvertiseAddr())
+	addrs, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil || len(addrs) == 0 {
 		return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
@@ -350,7 +350,7 @@ func (st *SocketTransport) dialPeer(node *Node) (net.Conn, error) {
 		node.Address().Clear()
 	}
 
-	addrs, err := st.resolveAddress(node.AdvertiseAddr())
+	addrs, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil || len(addrs) == 0 {
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
@@ -376,17 +376,17 @@ func (st *SocketTransport) ensureNodeAddressResolved(node *Node) error {
 		return nil
 	}
 
-	if node.AdvertiseAddr() == "" {
+	if node.AdvertisedAddr() == "" {
 		return fmt.Errorf("no advertise address available")
 	}
 
-	addresses, err := st.resolveAddress(node.AdvertiseAddr())
+	addresses, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil {
-		return fmt.Errorf("failed to resolve address %s: %v", node.AdvertiseAddr(), err)
+		return fmt.Errorf("failed to resolve address %s: %v", node.AdvertisedAddr(), err)
 	}
 
 	if len(addresses) == 0 {
-		return fmt.Errorf("no addresses resolved for %s", node.AdvertiseAddr())
+		return fmt.Errorf("no addresses resolved for %s", node.AdvertisedAddr())
 	}
 
 	*node.Address() = addresses[0]

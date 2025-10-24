@@ -127,7 +127,7 @@ func (node *Node) Address() *Address {
 }
 
 // AdvertiseAddr returns the node's advertise address string
-func (node *Node) AdvertiseAddr() string {
+func (node *Node) AdvertisedAddr() string {
 	return node.advertiseAddr
 }
 
