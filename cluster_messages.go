@@ -6,10 +6,6 @@ import (
 	"github.com/paularlott/gossip/hlc"
 )
 
-func (c *Cluster) createPacket(sender NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
-	return c.createPacketWithTargetAndTag(sender, nil, nil, msgType, ttl, payload)
-}
-
 func (c *Cluster) createPacketWithTarget(sender NodeID, target *NodeID, msgType MessageType, ttl uint8, payload interface{}) (*Packet, error) {
 	return c.createPacketWithTargetAndTag(sender, target, nil, msgType, ttl, payload)
 }

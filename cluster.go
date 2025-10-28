@@ -702,8 +702,10 @@ func (c *Cluster) broadcastWorker() {
 			}
 
 			for _, node := range item.peers {
-				if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
-					c.logger.Debug("failed to send packet to peers", "error", err)
+				if node.ID != c.localNode.ID { // Make sure to exclude the local node
+					if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
+						c.logger.Debug("failed to send packet to peers", "error", err)
+					}
 				}
 			} // Release the broadcast item back to the pool
 			item.packet.Release()
