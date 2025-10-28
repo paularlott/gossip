@@ -96,7 +96,14 @@ func (p *Packet) CanReply() bool {
 }
 
 // SendReply sends a reply packet using the available reply mechanism
-func (p *Packet) SendReply() error {
+func (p *Packet) SendReply() (err error) {
+	// Recover from panic if channel is closed
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("reply channel closed")
+		}
+	}()
+
 	if p.replyChan != nil {
 		select {
 		case p.replyChan <- p:
