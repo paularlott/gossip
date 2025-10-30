@@ -560,9 +560,10 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 
 	// Get a random selection of nodes, excluding specified nodes
+	// Include dead nodes in the gossip to prevent resurrection
 	randomNodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead},
 		exclude,
 	)
 
@@ -617,11 +618,19 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 		localNode := c.nodes.get(state.ID)
 		if localNode == nil {
-			// Skip dead or leaving nodes when creating new nodes
+			// We don't know about this node yet
+			// For dead/leaving nodes, we need to store them as tombstones to prevent resurrection
+			// by other nodes that might gossip them as alive
 			if state.State == NodeDead || state.State == NodeLeaving {
+				c.logger.Trace("storing tombstone for unknown node", "node_id", state.ID.String(), "state", state.State.String())
+				node := newNode(state.ID, state.AdvertiseAddr)
+				node.observedState = state.State
+				node.observedStateTime = state.StateTimestamp
+				c.nodes.addOrUpdate(node)
 				continue
 			}
 
+			// For alive nodes, attempt to join them
 			req := &joinRequest{
 				nodeAddr: state.AdvertiseAddr,
 			}
@@ -644,8 +653,9 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 			// If the remote state timestamp is newer then we need to consider what's being reported
 			if state.StateTimestamp.After(localNode.observedStateTime) && state.State != localNode.observedState {
-				if state.State == NodeLeaving {
-					c.nodes.updateState(localNode.ID, NodeLeaving)
+				// Accept state transitions to Leaving or Dead
+				if state.State == NodeLeaving || state.State == NodeDead {
+					c.nodes.updateState(localNode.ID, state.State)
 				}
 			}
 		}

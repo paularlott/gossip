@@ -116,9 +116,10 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	c.combineStates(peerStates)
 
 	// Get a random selection of nodes
+	// Include dead nodes to propagate tombstones and prevent resurrection
 	nodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead},
 		[]NodeID{sender.ID},
 	)
 
