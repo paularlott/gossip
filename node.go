@@ -49,7 +49,7 @@ type Node struct {
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
-	mu                 sync.RWMutex // Protects observedState reads
+	mu                 sync.RWMutex // Protects observedState, lastMessageTime, and address
 }
 
 // newNode creates a new node with optional tags
@@ -121,9 +121,32 @@ func (node *Node) Removed() bool {
 	return node.observedState == NodeRemoved
 }
 
-// Address returns a pointer to the node's resolved address
-func (node *Node) Address() *Address {
-	return &node.address
+// GetAddress returns a copy of the node's resolved address (thread-safe)
+func (node *Node) GetAddress() Address {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.address
+}
+
+// SetAddress sets the node's resolved address (thread-safe)
+func (node *Node) SetAddress(addr Address) {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.address = addr
+}
+
+// ClearAddress clears the node's resolved address (thread-safe)
+func (node *Node) ClearAddress() {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.address.Clear()
+}
+
+// IsAddressEmpty checks if the node's address is empty (thread-safe)
+func (node *Node) IsAddressEmpty() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.address.IsEmpty()
 }
 
 // AdvertiseAddr returns the node's advertise address string

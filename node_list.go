@@ -257,7 +257,7 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 	shard.mutex.Unlock()
 
 	// Clear cached resolved address to force re-resolution later
-	node.address.Clear()
+	node.ClearAddress()
 
 	nl.updateCountersForStateChange(oldState, newState)
 	nl.notifyNodeStateChanged(node, oldState)

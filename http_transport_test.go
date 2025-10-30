@@ -358,7 +358,8 @@ func TestHTTPTransport_NodeAddressResolution(t *testing.T) {
 	}
 
 	expectedURL := "http://example.com:8080"
-	actualURL := strings.TrimSuffix(node.Address().URL, "/")
+	addr := node.GetAddress()
+	actualURL := strings.TrimSuffix(addr.URL, "/")
 	if actualURL != expectedURL {
 		t.Errorf("Expected URL to be set to %s, got %s", expectedURL, actualURL)
 	}

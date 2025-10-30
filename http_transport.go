@@ -94,10 +94,11 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 	ctx, cancel := context.WithTimeout(context.Background(), ht.client.Timeout)
 	defer cancel()
 
+	addr := node.GetAddress()
 	// Fire and forget HTTP POST
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, addr.URL, bytes.NewReader(rawPacket))
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return err
 	}
 
@@ -109,7 +110,7 @@ func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *P
 
 	resp, err := ht.client.Do(req)
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return err
 	}
 	resp.Body.Close()
@@ -134,9 +135,10 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 	ctx, cancel := context.WithTimeout(context.Background(), ht.client.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.Address().URL, bytes.NewReader(rawPacket))
+	addr := node.GetAddress()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, addr.URL, bytes.NewReader(rawPacket))
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return nil, err
 	}
 
@@ -148,7 +150,7 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 
 	resp, err := ht.client.Do(req)
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -283,7 +285,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 }
 
 func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
-	if !node.Address().IsEmpty() {
+	if !node.IsAddressEmpty() {
 		return nil
 	}
 
@@ -336,7 +338,7 @@ func (ht *HTTPTransport) ensureNodeAddressResolved(node *Node) error {
 		uri = "https://" + uri
 	}
 
-	*node.Address() = Address{URL: uri}
+	node.SetAddress(Address{URL: uri})
 	return nil
 }
 

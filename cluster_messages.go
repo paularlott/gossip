@@ -120,7 +120,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 
 	responsePacket, err := c.transport.SendWithReply(dstNode, packet)
 	if err != nil {
-		dstNode.Address().Clear()
+		dstNode.ClearAddress()
 		return err
 	}
 	defer responsePacket.Release()
@@ -129,7 +129,7 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	if responsePayload != nil {
 		err = responsePacket.Unmarshal(responsePayload)
 		if err != nil {
-			dstNode.Address().Clear()
+			dstNode.ClearAddress()
 			return err
 		}
 	}

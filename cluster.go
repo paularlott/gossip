@@ -648,7 +648,7 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			if localNode.advertiseAddr != state.AdvertiseAddr {
 				c.logger.Debug("node advertise address changed", "node_id", state.ID.String(), "old_address", localNode.advertiseAddr, "new_address", state.AdvertiseAddr)
 				localNode.advertiseAddr = state.AdvertiseAddr
-				localNode.address.Clear() // Force re-resolution
+				localNode.ClearAddress() // Force re-resolution
 			}
 
 			// If the remote state timestamp is newer then we need to consider what's being reported
