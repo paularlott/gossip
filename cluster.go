@@ -113,7 +113,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		shutdownContext:     ctx,
 		cancelFunc:          cancel,
 		msgHistory:          newMessageHistory(config),
-		localNode:           newNode(NodeID(u), config.AdvertiseAddr),
+		localNode:           newNodeWithTags(NodeID(u), config.AdvertiseAddr, config.Tags),
 		handlers:            newHandlerRegistry(),
 		broadcastQueue:      make(chan *broadcastQItem, config.SendQueueSize),
 		gossipEventHandlers: NewEventHandlers[GossipHandler](),
@@ -293,6 +293,7 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		ID:                 c.localNode.ID,
 		AdvertiseAddr:      c.localNode.advertiseAddr,
 		State:              c.localNode.observedState,
+		Tags:               c.localNode.GetTags(),
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
@@ -315,8 +316,10 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		return
 	}
 
-	node.ID = joinReply.NodeID
-	node.advertiseAddr = joinReply.AdvertiseAddr
+	c.logger.Debug("received join reply", "peer_id", joinReply.NodeID.String(), "peer_tags", joinReply.Tags)
+
+	// Create node with tags from join reply
+	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
 
 	// Update the copy of the nodes metadata
@@ -326,6 +329,10 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	for _, peer := range joinReply.Nodes {
 		if existing := c.nodes.get(peer.ID); existing == nil {
 			c.logger.Trace("joining unknown peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
+
+			// Create a preliminary node with tags from the join reply
+			prelimNode := newNodeWithTags(peer.ID, peer.AdvertiseAddr, peer.Tags)
+			c.nodes.addIfNotExists(prelimNode)
 
 			req := &joinRequest{
 				nodeAddr: peer.AdvertiseAddr,
@@ -447,6 +454,9 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		return
 	}
 
+	// If message has a tag and we don't have that tag, ignore it (but still forward)
+	hasTag := packet.Tag == nil || c.localNode.HasTag(*packet.Tag)
+
 	// Record the message in the message history
 	c.msgHistory.recordMessage(packet.SenderID, packet.MessageID)
 
@@ -456,7 +466,7 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		senderNode.updateLastActivity()
 	}
 
-	// Forward packets
+	// Forward packets to nodes with matching tags
 	if !packet.CanReply() {
 		var transportType TransportType
 		if packet.conn != nil {
@@ -465,6 +475,12 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 			transportType = TransportBestEffort
 		}
 		c.enqueuePacketForBroadcast(packet.AddRef(), transportType, []NodeID{c.localNode.ID, packet.SenderID}, nil)
+	}
+
+	// If we don't have the tag, skip processing
+	if !hasTag {
+		packet.Release()
+		return
 	}
 
 	// If we don't know the sender then unless it's a join message ignore it
@@ -544,9 +560,10 @@ func (c *Cluster) getMaxTTL() uint8 {
 func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 
 	// Get a random selection of nodes, excluding specified nodes
+	// Include dead nodes in the gossip to prevent resurrection
 	randomNodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead},
 		exclude,
 	)
 
@@ -601,11 +618,19 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 		localNode := c.nodes.get(state.ID)
 		if localNode == nil {
-			// Skip dead or leaving nodes when creating new nodes
+			// We don't know about this node yet
+			// For dead/leaving nodes, we need to store them as tombstones to prevent resurrection
+			// by other nodes that might gossip them as alive
 			if state.State == NodeDead || state.State == NodeLeaving {
+				c.logger.Trace("storing tombstone for unknown node", "node_id", state.ID.String(), "state", state.State.String())
+				node := newNode(state.ID, state.AdvertiseAddr)
+				node.observedState = state.State
+				node.observedStateTime = state.StateTimestamp
+				c.nodes.addOrUpdate(node)
 				continue
 			}
 
+			// For alive nodes, attempt to join them
 			req := &joinRequest{
 				nodeAddr: state.AdvertiseAddr,
 			}
@@ -623,13 +648,14 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			if localNode.advertiseAddr != state.AdvertiseAddr {
 				c.logger.Debug("node advertise address changed", "node_id", state.ID.String(), "old_address", localNode.advertiseAddr, "new_address", state.AdvertiseAddr)
 				localNode.advertiseAddr = state.AdvertiseAddr
-				localNode.address.Clear() // Force re-resolution
+				localNode.ClearAddress() // Force re-resolution
 			}
 
 			// If the remote state timestamp is newer then we need to consider what's being reported
 			if state.StateTimestamp.After(localNode.observedStateTime) && state.State != localNode.observedState {
-				if state.State == NodeLeaving {
-					c.nodes.updateState(localNode.ID, NodeLeaving)
+				// Accept state transitions to Leaving or Dead
+				if state.State == NodeLeaving || state.State == NodeDead {
+					c.nodes.updateState(localNode.ID, state.State)
 				}
 			}
 		}
@@ -676,12 +702,20 @@ func (c *Cluster) broadcastWorker() {
 
 			// Get the peer subset to send the packet to
 			if item.peers == nil {
-				item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
+				if item.packet.Tag != nil {
+					// For tagged messages, only send to nodes with that tag
+					item.peers = c.nodes.getRandomNodesWithTag(c.CalcFanOut(), *item.packet.Tag, item.excludePeers)
+				} else {
+					// For untagged messages, send to all nodes
+					item.peers = c.nodes.getRandomNodes(c.CalcFanOut(), item.excludePeers)
+				}
 			}
 
 			for _, node := range item.peers {
-				if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
-					c.logger.Debug("failed to send packet to peers", "error", err)
+				if node.ID != c.localNode.ID { // Make sure to exclude the local node
+					if err := c.transport.Send(item.transportType, node, item.packet); err != nil {
+						c.logger.Debug("failed to send packet to peers", "error", err)
+					}
 				}
 			} // Release the broadcast item back to the pool
 			item.packet.Release()
@@ -709,6 +743,10 @@ func (c *Cluster) Nodes() []*Node {
 
 func (c *Cluster) AliveNodes() []*Node {
 	return c.nodes.getAllInStates([]NodeState{NodeAlive})
+}
+
+func (c *Cluster) GetNodesByTag(tag string) []*Node {
+	return c.nodes.getByTag(tag)
 }
 
 func (c *Cluster) GetNode(id NodeID) *Node {
@@ -758,6 +796,10 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	}
 	c.handlers.registerHandlerWithReply(msgType, replyHandler)
 	return nil
+}
+
+func (c *Cluster) HandleFuncWithResponse(msgType MessageType, replyHandler ReplyHandler) error {
+	return c.HandleFuncWithReply(msgType, replyHandler)
 }
 
 func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {
@@ -916,7 +958,7 @@ func (c *Cluster) gossipMetadata() {
 		metadataUpdateMessage{
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 			Metadata:          c.localNode.metadata.GetAll(),
-			NodeState:         c.localNode.observedState,
+			NodeState:         c.localNode.GetObservedState(),
 		},
 	)
 }

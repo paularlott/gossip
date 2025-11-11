@@ -38,7 +38,8 @@ var (
 type Packet struct {
 	MessageType  MessageType `msgpack:"mt" json:"mt"`
 	SenderID     NodeID      `msgpack:"si" json:"si"`
-	TargetNodeID *NodeID     `msgpack:"ti,omitempty" json:"ti,omitempty"` // Optional: for direct messages
+	TargetNodeID *NodeID     `msgpack:"ti,omitempty" json:"ti,omitempty"`   // Optional: for direct messages
+	Tag          *string     `msgpack:"tag,omitempty" json:"tag,omitempty"` // Optional: for tag-based routing
 	MessageID    MessageID   `msgpack:"mi" json:"mi"`
 	TTL          uint8       `msgpack:"ttl" json:"ttl"`
 	payload      []byte
@@ -75,6 +76,7 @@ func (p *Packet) Release() {
 		p.replyChan = nil
 		p.SenderID = EmptyNodeID
 		p.TargetNodeID = nil
+		p.Tag = nil
 
 		packetPool.Put(p)
 	}
@@ -94,7 +96,14 @@ func (p *Packet) CanReply() bool {
 }
 
 // SendReply sends a reply packet using the available reply mechanism
-func (p *Packet) SendReply() error {
+func (p *Packet) SendReply() (err error) {
+	// Recover from panic if channel is closed
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("reply channel closed")
+		}
+	}()
+
 	if p.replyChan != nil {
 		select {
 		case p.replyChan <- p:
@@ -137,6 +146,7 @@ type joinMessage struct {
 	ProtocolVersion    uint16                 `msgpack:"pv" json:"pv"`
 	ApplicationVersion string                 `msgpack:"av" json:"av"`
 	State              NodeState              `msgpack:"s" json:"s"`
+	Tags               []string               `msgpack:"tags,omitempty" json:"tags,omitempty"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
 }
@@ -146,14 +156,16 @@ type joinReplyMessage struct {
 	RejectReason      string                 `msgpack:"rr" json:"rr"`
 	NodeID            NodeID                 `msgpack:"id" json:"id"`
 	AdvertiseAddr     string                 `msgpack:"addr" json:"addr"`
+	Tags              []string               `msgpack:"tags,omitempty" json:"tags,omitempty"`
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	Nodes             []joinNode             `msgpack:"nodes" json:"nodes"`
 }
 
 type joinNode struct {
-	ID            NodeID `msgpack:"id" json:"id"`
-	AdvertiseAddr string `msgpack:"addr" json:"addr"`
+	ID            NodeID   `msgpack:"id" json:"id"`
+	AdvertiseAddr string   `msgpack:"addr" json:"addr"`
+	Tags          []string `msgpack:"tags,omitempty" json:"tags,omitempty"`
 }
 
 type exchangeNodeState struct {

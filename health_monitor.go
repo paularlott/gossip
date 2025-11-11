@@ -214,7 +214,7 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 }
 
 func (hm *HealthMonitor) pingNode(node *Node) bool {
-	node.Address().Clear() // Force re-resolution
+	node.ClearAddress() // Force re-resolution
 
 	pingMessage := &pingMessage{
 		SenderID:      hm.cluster.localNode.ID,
@@ -230,7 +230,7 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 	// If we got a response, update our view of the node's address if needed
 	if pongMessage.AdvertiseAddr != "" && pongMessage.AdvertiseAddr != node.advertiseAddr {
 		node.advertiseAddr = pongMessage.AdvertiseAddr
-		node.Address().Clear() // Force re-resolution
+		node.ClearAddress() // Force re-resolution
 		hm.cluster.logger.Trace("updated node address", "node_id", node.ID.String(), "new_address", pongMessage.AdvertiseAddr)
 	}
 

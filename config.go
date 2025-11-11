@@ -10,10 +10,11 @@ import (
 )
 
 type Config struct {
-	NodeID             string // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
-	BindAddr           string // BindAddr is the address and port to bind to or the path for http transports
-	AdvertiseAddr      string // Advertised address and port or URL for the node
-	ApplicationVersion string // ApplicationVersion is the version of the application, used for compatibility checks
+	NodeID             string   // NodeID is the unique identifier for the node in the cluster, "" to generate a new one
+	BindAddr           string   // BindAddr is the address and port to bind to or the path for http transports
+	AdvertiseAddr      string   // Advertised address and port or URL for the node
+	ApplicationVersion string   // ApplicationVersion is the version of the application, used for compatibility checks
+	Tags               []string // Tags for tag-based message routing
 
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	Transport                Transport               // Transport layer to communicate over UDP or TCP

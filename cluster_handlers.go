@@ -38,7 +38,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		rejectReason = fmt.Sprintf("incompatible application version: %s", joinMsg.ApplicationVersion)
 	} else if sender == nil {
 		// Check add the peer to our list of known peers unless it already exists
-		node = newNode(joinMsg.ID, joinMsg.AdvertiseAddr)
+		node = newNodeWithTags(joinMsg.ID, joinMsg.AdvertiseAddr, joinMsg.Tags)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
 		node.observedState = joinMsg.State
@@ -46,6 +46,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		node = c.nodes.addIfNotExists(node)
 	} else {
 		node = sender
+		// Tags are immutable and set at node creation, cannot update existing node tags
 		c.nodes.updateState(node.ID, joinMsg.State)
 	}
 
@@ -58,6 +59,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		RejectReason:      rejectReason,
 		NodeID:            c.localNode.ID,
 		AdvertiseAddr:     c.localNode.advertiseAddr,
+		Tags:              c.localNode.GetTags(),
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
 		Nodes:             []joinNode{},
@@ -70,6 +72,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 			reply.Nodes = append(reply.Nodes, joinNode{
 				ID:            n.ID,
 				AdvertiseAddr: n.advertiseAddr,
+				Tags:          n.GetTags(),
 			})
 		}
 	}
@@ -113,9 +116,10 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 	c.combineStates(peerStates)
 
 	// Get a random selection of nodes
+	// Include dead nodes to propagate tombstones and prevent resurrection
 	nodes := c.nodes.getRandomNodesInStates(
-		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()),
-		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving},
+		c.CalcPayloadSize(c.nodes.getAliveCount()+c.nodes.getLeavingCount()+c.nodes.getSuspectCount()+c.nodes.getDeadCount()),
+		[]NodeState{NodeAlive, NodeSuspect, NodeLeaving, NodeDead},
 		[]NodeID{sender.ID},
 	)
 
@@ -143,8 +147,9 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		c.nodes.notifyMetadataChanged(sender)
 	}
 
-	if metadataUpdate.NodeState != sender.observedState {
-		c.logger.Debug("updating node state via metadata", "node_id", sender.ID.String(), "old_state", sender.observedState, "new_state", metadataUpdate.NodeState)
+	senderState := sender.GetObservedState()
+	if metadataUpdate.NodeState != senderState {
+		c.logger.Debug("updating node state via metadata", "node_id", sender.ID.String(), "old_state", senderState, "new_state", metadataUpdate.NodeState)
 		c.nodes.updateState(sender.ID, metadataUpdate.NodeState)
 	}
 

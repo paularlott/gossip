@@ -44,14 +44,17 @@ type Node struct {
 	observedState      NodeState     // The local view of the node's state
 	observedStateTime  hlc.Timestamp // Local timestamp for the node's state (updated by the node)
 	lastMessageTime    hlc.Timestamp // When we last received any message from this node (passive liveness check)
+	tags               []string      // Tags for tag-based message routing (immutable after creation)
 	Metadata           MetadataReader
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
-	mu                 sync.RWMutex // Protects observedState reads
+	mu                 sync.RWMutex // Protects observedState, lastMessageTime, and address
 }
 
-func newNode(id NodeID, advertiseAddr string) *Node {
+// newNode creates a new node with optional tags
+// Use newNode(id, addr) for no tags, or newNode(id, addr, tags...) for tags
+func newNode(id NodeID, advertiseAddr string, tags ...string) *Node {
 	metadata := NewMetadata()
 
 	now := hlc.Now()
@@ -62,6 +65,7 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 		observedState:     NodeAlive,
 		observedStateTime: now,
 		lastMessageTime:   now,
+		tags:              tags,
 		Metadata:          metadata,
 		metadata:          metadata,
 	}
@@ -69,11 +73,21 @@ func newNode(id NodeID, advertiseAddr string) *Node {
 	return n
 }
 
+// newNodeWithTags is deprecated, use newNode with variadic tags instead
+// Kept for backward compatibility during transition
+func newNodeWithTags(id NodeID, advertiseAddr string, tags []string) *Node {
+	return newNode(id, advertiseAddr, tags...)
+}
+
 func (n *Node) updateLastActivity() {
+	n.mu.Lock()
 	n.lastMessageTime = hlc.Now()
+	n.mu.Unlock()
 }
 
 func (n *Node) getLastActivity() hlc.Timestamp {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	return n.lastMessageTime
 }
 
@@ -107,12 +121,59 @@ func (node *Node) Removed() bool {
 	return node.observedState == NodeRemoved
 }
 
-// Address returns a pointer to the node's resolved address
-func (node *Node) Address() *Address {
-	return &node.address
+// GetAddress returns a copy of the node's resolved address (thread-safe)
+func (node *Node) GetAddress() Address {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.address
+}
+
+// SetAddress sets the node's resolved address (thread-safe)
+func (node *Node) SetAddress(addr Address) {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.address = addr
+}
+
+// ClearAddress clears the node's resolved address (thread-safe)
+func (node *Node) ClearAddress() {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.address.Clear()
+}
+
+// IsAddressEmpty checks if the node's address is empty (thread-safe)
+func (node *Node) IsAddressEmpty() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.address.IsEmpty()
 }
 
 // AdvertiseAddr returns the node's advertise address string
-func (node *Node) AdvertiseAddr() string {
+func (node *Node) AdvertisedAddr() string {
 	return node.advertiseAddr
+}
+
+// GetTags returns a copy of the node's tags.
+// Tags are immutable (set at node creation), but we return a defensive copy
+// to prevent accidental modification by callers.
+// Note: For performance-critical paths, consider using HasTag() instead of GetTags()
+func (node *Node) GetTags() []string {
+	if node.tags == nil {
+		return []string{}
+	}
+	// Return a copy to prevent external modification
+	tagsCopy := make([]string, len(node.tags))
+	copy(tagsCopy, node.tags)
+	return tagsCopy
+}
+
+// HasTag returns true if the node has the specified tag
+func (node *Node) HasTag(tag string) bool {
+	for _, t := range node.tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }

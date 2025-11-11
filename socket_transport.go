@@ -24,6 +24,7 @@ type SocketTransport struct {
 	udpListener   *net.UDPConn
 	packetChannel chan *Packet
 	resolver      Resolver
+	udpBufferPool sync.Pool // Pool for UDP packet buffers
 }
 
 func NewSocketTransport(config *Config) *SocketTransport {
@@ -40,6 +41,13 @@ func NewSocketTransport(config *Config) *SocketTransport {
 		logger:        lgr,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
 		resolver:      config.Resolver,
+		udpBufferPool: sync.Pool{
+			New: func() interface{} {
+				// Allocate max UDP packet size (64KB)
+				buf := make([]byte, 65535)
+				return &buf
+			},
+		},
 	}
 
 	if st.resolver == nil {
@@ -165,13 +173,13 @@ func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, e
 	defer conn.Close()
 
 	if err := st.writePacket(conn, packet, true); err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return nil, err
 	}
 
 	replyPacket, _, err := st.readPacket(conn)
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return nil, err
 	}
 
@@ -198,11 +206,16 @@ func (st *SocketTransport) tcpListen(ctx context.Context, wg *sync.WaitGroup) {
 func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	buf := make([]byte, 65535)
-
 	for {
+		// Get buffer from pool
+		bufPtr := st.udpBufferPool.Get().(*[]byte)
+		buf := *bufPtr
+
 		n, _, err := st.udpListener.ReadFromUDP(buf)
 		if err != nil {
+			// Return buffer to pool before handling error
+			st.udpBufferPool.Put(bufPtr)
+
 			if st.isNetClosedError(err) {
 				return
 			}
@@ -211,8 +224,12 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 		}
 
 		if n > 0 {
+			// Make a copy of the received data
 			packetData := make([]byte, n)
 			copy(packetData, buf[:n])
+
+			// Return buffer to pool immediately after copying
+			st.udpBufferPool.Put(bufPtr)
 
 			go func() {
 				packet, _, err := st.packetFromBuffer(packetData)
@@ -228,6 +245,9 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 				case st.packetChannel <- packet:
 				}
 			}()
+		} else {
+			// No data received, return buffer to pool
+			st.udpBufferPool.Put(bufPtr)
 		}
 	}
 }
@@ -292,7 +312,7 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 func (st *SocketTransport) sendTCP(node *Node, rawPacket []byte) error {
 	conn, err := st.dialPeer(node)
 	if err != nil {
-		node.Address().Clear()
+		node.ClearAddress()
 		return err
 	}
 	defer conn.Close()
@@ -309,14 +329,15 @@ func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
 		return err
 	}
 
-	if node.Address().IP != nil {
-		if err := tryWrite(*node.Address()); err == nil {
+	addr := node.GetAddress()
+	if addr.IP != nil {
+		if err := tryWrite(addr); err == nil {
 			return nil
 		}
-		node.Address().Clear()
+		node.ClearAddress()
 	}
 
-	addrs, err := st.resolveAddress(node.AdvertiseAddr())
+	addrs, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil || len(addrs) == 0 {
 		return fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
@@ -324,7 +345,7 @@ func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
 	var sendErr error
 	for _, addr := range addrs {
 		if err := tryWrite(addr); err == nil {
-			*node.Address() = addr
+			node.SetAddress(addr)
 			return nil
 		} else if sendErr == nil {
 			sendErr = err
@@ -343,14 +364,15 @@ func (st *SocketTransport) dialPeer(node *Node) (net.Conn, error) {
 		return net.DialTimeout("tcp", tcpAddr.String(), st.config.TCPDialTimeout)
 	}
 
-	if node.Address().IP != nil {
-		if conn, err := tryDial(*node.Address()); err == nil {
+	addr := node.GetAddress()
+	if addr.IP != nil {
+		if conn, err := tryDial(addr); err == nil {
 			return conn, nil
 		}
-		node.Address().Clear()
+		node.ClearAddress()
 	}
 
-	addrs, err := st.resolveAddress(node.AdvertiseAddr())
+	addrs, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil || len(addrs) == 0 {
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
@@ -358,7 +380,7 @@ func (st *SocketTransport) dialPeer(node *Node) (net.Conn, error) {
 	var firstErr error
 	for _, addr := range addrs {
 		if conn, err := tryDial(addr); err == nil {
-			*node.Address() = addr
+			node.SetAddress(addr)
 			return conn, nil
 		} else if firstErr == nil {
 			firstErr = err
@@ -372,24 +394,24 @@ func (st *SocketTransport) isNetClosedError(err error) bool {
 }
 
 func (st *SocketTransport) ensureNodeAddressResolved(node *Node) error {
-	if !node.Address().IsEmpty() {
+	if !node.IsAddressEmpty() {
 		return nil
 	}
 
-	if node.AdvertiseAddr() == "" {
+	if node.AdvertisedAddr() == "" {
 		return fmt.Errorf("no advertise address available")
 	}
 
-	addresses, err := st.resolveAddress(node.AdvertiseAddr())
+	addresses, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil {
-		return fmt.Errorf("failed to resolve address %s: %v", node.AdvertiseAddr(), err)
+		return fmt.Errorf("failed to resolve address %s: %v", node.AdvertisedAddr(), err)
 	}
 
 	if len(addresses) == 0 {
-		return fmt.Errorf("no addresses resolved for %s", node.AdvertiseAddr())
+		return fmt.Errorf("no addresses resolved for %s", node.AdvertisedAddr())
 	}
 
-	*node.Address() = addresses[0]
+	node.SetAddress(addresses[0])
 	return nil
 }
 
