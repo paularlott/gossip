@@ -275,7 +275,7 @@ func (le *LeaderElection) electLeader() {
 		With("leaderId", candidateNode.ID.String()).
 		With("term", le.currentTerm).
 		With("isLocal", le.isLeader).
-		Debug("New leader elected (quorum: %d/%d)", numEligible, requiredQuorum)
+		Debug("New leader elected", "quorum_eligible", numEligible, "quorum_required", requiredQuorum)
 
 	// Dispatch events based on state changes
 	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
