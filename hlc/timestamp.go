@@ -99,3 +99,9 @@ var defaultClock = NewClock()
 func Now() Timestamp {
 	return defaultClock.Now()
 }
+
+// FromTime converts a time.Time to an HLC Timestamp with counter set to 0.
+func FromTime(t time.Time) Timestamp {
+	relMicro := uint64(t.UnixMicro() - epochUnixMicro)
+	return Timestamp(relMicro << CounterBits)
+}
