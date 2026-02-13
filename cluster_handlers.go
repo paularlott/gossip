@@ -51,7 +51,9 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 	}
 
 	if node != nil {
-		node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false)
+		if node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false) {
+			c.nodes.notifyMetadataChanged(node)
+		}
 	}
 
 	reply := &joinReplyMessage{

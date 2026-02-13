@@ -322,8 +322,14 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
 
-	// Update the copy of the nodes metadata
-	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, false)
+	// Update the copy of the nodes metadata and notify so that NodeGroups
+	// (which filter by metadata criteria) can evaluate the node.
+	// addIfNotExists fires state change notification before metadata is set,
+	// so without this explicit notification, metadata-filtered groups would
+	// never see the node.
+	if node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, false) {
+		c.nodes.notifyMetadataChanged(node)
+	}
 
 	// Run the list of nodes that we've been given and attempt to join with any we don't know
 	// or any we have marked as dead/leaving (they may have recovered)
