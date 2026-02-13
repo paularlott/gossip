@@ -123,6 +123,10 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 		dstNode.ClearAddress()
 		return err
 	}
+	if responsePacket == nil {
+		dstNode.ClearAddress()
+		return fmt.Errorf("nil response from peer")
+	}
 	defer responsePacket.Release()
 
 	// Unmarshal the response payload

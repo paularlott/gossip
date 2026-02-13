@@ -214,7 +214,9 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 }
 
 func (hm *HealthMonitor) pingNode(node *Node) bool {
-	node.ClearAddress() // Force re-resolution
+	// Don't clear the address preemptively - let the transport resolve on demand.
+	// Clearing before every ping forces DNS re-resolution which can timeout and
+	// cause false suspect/dead transitions, especially in Nomad/Consul environments.
 
 	pingMessage := &pingMessage{
 		SenderID:      hm.cluster.localNode.ID,

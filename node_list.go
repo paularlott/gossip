@@ -141,19 +141,14 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 
 /**
  * Add the node if it doesn't exist, if adding a node then it returns the added node; else the existing node.
+ * Does NOT update state, counters, or fire notifications for existing nodes - use updateState() for that.
  */
 func (nl *nodeList) addIfNotExists(node *Node) *Node {
 	shard := nl.getShard(node.ID)
 	shard.mutex.Lock()
 
 	if existing, exists := shard.nodes[node.ID]; exists {
-		oldState := existing.observedState
 		shard.mutex.Unlock()
-
-		if oldState != node.observedState {
-			nl.updateCountersForStateChange(oldState, node.observedState)
-			nl.notifyNodeStateChanged(existing, oldState)
-		}
 		return existing
 	}
 

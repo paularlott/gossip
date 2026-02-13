@@ -117,7 +117,7 @@ func (ng *NodeGroup) handleNodeStateChange(node *Node, prevState NodeState) {
 
 // handleNodeMetadataChange processes node metadata changes
 func (ng *NodeGroup) handleNodeMetadataChange(node *Node) {
-	if !node.Alive() {
+	if !node.Alive() && !node.Suspect() {
 		return
 	}
 

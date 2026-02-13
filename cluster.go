@@ -326,13 +326,19 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	node.metadata.update(joinReply.Metadata, joinReply.MetadataTimestamp, false)
 
 	// Run the list of nodes that we've been given and attempt to join with any we don't know
+	// or any we have marked as dead/leaving (they may have recovered)
 	for _, peer := range joinReply.Nodes {
-		if existing := c.nodes.get(peer.ID); existing == nil {
-			c.logger.Trace("joining unknown peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
+		existing := c.nodes.get(peer.ID)
+		if existing == nil || existing.DeadOrLeft() {
+			if existing == nil {
+				c.logger.Trace("joining unknown peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
 
-			// Create a preliminary node with tags from the join reply
-			prelimNode := newNodeWithTags(peer.ID, peer.AdvertiseAddr, peer.Tags)
-			c.nodes.addIfNotExists(prelimNode)
+				// Create a preliminary node with tags from the join reply
+				prelimNode := newNodeWithTags(peer.ID, peer.AdvertiseAddr, peer.Tags)
+				c.nodes.addIfNotExists(prelimNode)
+			} else {
+				c.logger.Trace("re-joining dead/leaving peer", "peer_id", peer.ID.String(), "address", peer.AdvertiseAddr)
+			}
 
 			req := &joinRequest{
 				nodeAddr: peer.AdvertiseAddr,
@@ -349,9 +355,25 @@ func (c *Cluster) joinPeer(peerAddr string) {
 
 func (c *Cluster) peerRecoveryManager() {
 	go func() {
-		// Initial delay with jitter
-		jitter := time.Duration(rand.Int63n(int64(c.config.PeerRecoveryInterval / 4)))
-		time.Sleep(jitter)
+		// Do a fast initial seed peer recovery shortly after startup.
+		// This handles simultaneous restarts where initial Join() calls fail
+		// because peers haven't started yet. We retry seed peers after a short
+		// delay instead of waiting for the full PeerRecoveryInterval (30s).
+		initialDelay := 3*time.Second + time.Duration(rand.Int63n(int64(2*time.Second)))
+		select {
+		case <-time.After(initialDelay):
+			c.retrySeedPeers()
+		case <-c.shutdownContext.Done():
+			return
+		}
+
+		// Then do another fast retry to catch any stragglers
+		select {
+		case <-time.After(5*time.Second + time.Duration(rand.Int63n(int64(2*time.Second)))):
+			c.retrySeedPeers()
+		case <-c.shutdownContext.Done():
+			return
+		}
 
 		c.peerRecoveryTicker = time.NewTicker(c.config.PeerRecoveryInterval)
 		defer c.peerRecoveryTicker.Stop()
@@ -406,6 +428,33 @@ func (c *Cluster) checkPeerConnectivity() {
 		}
 	} else {
 		c.logger.Trace("cluster health good", "alive_nodes", aliveCount, "threshold", threshold, "seed_peers", seedPeerCount)
+	}
+}
+
+// retrySeedPeers attempts to re-join all seed peers that aren't currently alive.
+// Used during initial startup to handle simultaneous cluster restarts.
+func (c *Cluster) retrySeedPeers() {
+	if len(c.seedPeers) == 0 {
+		return
+	}
+
+	for _, peer := range c.seedPeers {
+		req := &joinRequest{
+			nodeAddr: peer,
+		}
+
+		select {
+		case c.joinQueue <- req:
+		default:
+			c.logger.Warn("join queue full, dropping seed peer retry", "address", peer)
+		}
+	}
+
+	// Also do an early state exchange with any known alive peers
+	// to speed up cluster convergence after simultaneous restarts
+	candidates := c.GetCandidates()
+	if len(candidates) > 0 {
+		c.exchangeState(candidates, []NodeID{c.localNode.ID})
 	}
 }
 
@@ -653,8 +702,23 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 
 			// If the remote state timestamp is newer then we need to consider what's being reported
 			if state.StateTimestamp.After(localNode.observedStateTime) && state.State != localNode.observedState {
-				// Accept state transitions to Leaving or Dead
-				if state.State == NodeLeaving || state.State == NodeDead {
+				// Accept state transitions when remote has newer information.
+				// For Alive/Suspect transitions from Dead, also attempt a join to
+				// re-establish a direct connection with the recovered node.
+				if state.State == NodeAlive || state.State == NodeSuspect {
+					if localNode.observedState == NodeDead || localNode.observedState == NodeLeaving {
+						// Node recovered according to a peer with newer info - accept and re-join
+						c.nodes.updateState(localNode.ID, state.State)
+						c.logger.Debug("node recovered via state exchange", "node_id", state.ID.String(), "new_state", state.State.String())
+
+						req := &joinRequest{nodeAddr: state.AdvertiseAddr}
+						select {
+						case c.joinQueue <- req:
+						default:
+						}
+					}
+				} else {
+					// Accept transitions to Leaving or Dead
 					c.nodes.updateState(localNode.ID, state.State)
 				}
 			}

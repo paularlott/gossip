@@ -128,7 +128,7 @@ func (dng *DataNodeGroup[T]) handleNodeStateChange(node *Node, prevState NodeSta
 
 // handleNodeMetadataChange processes node metadata changes
 func (dng *DataNodeGroup[T]) handleNodeMetadataChange(node *Node) {
-	if !node.Alive() {
+	if !node.Alive() && !node.Suspect() {
 		return
 	}
 
