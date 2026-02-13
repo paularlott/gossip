@@ -693,11 +693,14 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			// Node exists locally, need to merge states intelligently
 			c.logger.Trace("merging state for existing node", "node_id", state.ID.String())
 
-			// Update advertise address if it has changed (but log it)
+			// Don't update advertise addresses from state exchange gossip.
+			// State exchange is secondhand information — node A tells us about
+			// node B's address. The authoritative source for a node's address
+			// is the node itself, communicated directly via join or ping/pong.
+			// Accepting address changes from gossip causes stale addresses to
+			// overwrite correct ones during rolling deploys or address changes.
 			if localNode.advertiseAddr != state.AdvertiseAddr {
-				c.logger.Debug("node advertise address changed", "node_id", state.ID.String(), "old_address", localNode.advertiseAddr, "new_address", state.AdvertiseAddr)
-				localNode.advertiseAddr = state.AdvertiseAddr
-				localNode.ClearAddress() // Force re-resolution
+				c.logger.Debug("ignoring address change from gossip (not authoritative)", "node_id", state.ID.String(), "current_address", localNode.advertiseAddr, "gossip_address", state.AdvertiseAddr)
 			}
 
 			// If the remote state timestamp is newer then we need to consider what's being reported

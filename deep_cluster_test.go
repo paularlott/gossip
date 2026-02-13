@@ -169,7 +169,7 @@ func TestCombineStatesUnknownNodeLeaving(t *testing.T) {
 	}
 }
 
-func TestCombineStatesAddressChange(t *testing.T) {
+func TestCombineStatesAddressChangeIgnoredFromGossip(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
 	config.MsgCodec = codec.NewJsonCodec()
@@ -198,7 +198,9 @@ func TestCombineStatesAddressChange(t *testing.T) {
 
 	time.Sleep(1 * time.Millisecond)
 
-	// Simulate address change via state exchange
+	// Simulate address change via state exchange — should be IGNORED
+	// because state exchange is secondhand gossip and not authoritative.
+	// Address changes should only come from the node itself (join/ping).
 	remoteStates := []exchangeNodeState{
 		{
 			ID:             nodeID,
@@ -211,8 +213,8 @@ func TestCombineStatesAddressChange(t *testing.T) {
 	cluster.combineStates(remoteStates)
 
 	updatedNode := cluster.nodes.get(nodeID)
-	if updatedNode.advertiseAddr != "127.0.0.1:9999" {
-		t.Errorf("Expected address to be updated to 127.0.0.1:9999, got %s", updatedNode.advertiseAddr)
+	if updatedNode.advertiseAddr != "127.0.0.1:8001" {
+		t.Errorf("Expected address to remain 127.0.0.1:8001 (gossip should not overwrite), got %s", updatedNode.advertiseAddr)
 	}
 }
 

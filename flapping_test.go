@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -465,13 +466,13 @@ func TestDataNodeGroupSuspectMetadata(t *testing.T) {
 		"role": "gateway",
 	}, hlc.Now(), false)
 
-	updateCount := 0
+	var updateCount int64
 	dng := NewDataNodeGroup[int](
 		cluster,
 		map[string]string{"role": "gateway"},
 		&DataNodeGroupOptions[int]{
 			OnNodeUpdated: func(n *Node, data *int) {
-				updateCount++
+				atomic.AddInt64(&updateCount, 1)
 			},
 		},
 	)
@@ -488,7 +489,7 @@ func TestDataNodeGroupSuspectMetadata(t *testing.T) {
 	}
 
 	// Update metadata while suspect - this should trigger OnNodeUpdated
-	updateCount = 0
+	atomic.StoreInt64(&updateCount, 0)
 	node.metadata.update(map[string]interface{}{
 		"role":    "gateway",
 		"version": "2.0",
@@ -500,7 +501,7 @@ func TestDataNodeGroupSuspectMetadata(t *testing.T) {
 	// Give async handler time to fire
 	time.Sleep(20 * time.Millisecond)
 
-	if updateCount == 0 {
+	if atomic.LoadInt64(&updateCount) == 0 {
 		t.Error("Expected OnNodeUpdated to fire for suspect node metadata change")
 	}
 }
