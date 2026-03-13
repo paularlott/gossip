@@ -3,6 +3,7 @@ package gossip
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -51,7 +52,9 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 		MaxIdleConnsPerHost:   10,               // Max idle connections per host
 		MaxConnsPerHost:       50,               // Max total connections per host
 		DisableKeepAlives:     false,            // Enable connection reuse
-		ForceAttemptHTTP2:     true,             // Try HTTP/2
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: config.InsecureSkipVerify,
+		},
 	}
 
 	// Create logger with transport group

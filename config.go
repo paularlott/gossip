@@ -63,6 +63,7 @@ type Config struct {
 	JoinQueueSize            int                     // Queue depth for joining tasks (e.g., 100)
 	NumJoinWorkers           int                     // Number of workers for joining tasks (e.g., 2 - 3)
 	PeerRecoveryInterval     time.Duration           // How often to check peer connectivity (default: 30s)
+	InsecureSkipVerify       bool                    // Skip TLS certificate verification for HTTPS connections
 }
 
 func DefaultConfig() *Config {
