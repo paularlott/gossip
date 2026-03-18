@@ -2,7 +2,7 @@
 
 package codec
 
-import shamaton "github.com/shamaton/msgpack/v2"
+import shamaton "github.com/shamaton/msgpack/v3"
 
 type ShamatonMsgpackCodec struct{}
 
