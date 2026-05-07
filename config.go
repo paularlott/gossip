@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"context"
+	"net"
 	"time"
 
 	"github.com/paularlott/gossip/codec"
@@ -64,6 +66,9 @@ type Config struct {
 	NumJoinWorkers           int                     // Number of workers for joining tasks (e.g., 2 - 3)
 	PeerRecoveryInterval     time.Duration           // How often to check peer connectivity (default: 30s)
 	InsecureSkipVerify       bool                    // Skip TLS certificate verification for HTTPS connections
+
+	DialFunc   func(ctx context.Context, network, addr string) (net.Conn, error) // Custom dial function for TCP connections (e.g. tsnet.Server.Dial), defaults to net.Dialer with TCPDialTimeout
+	ListenFunc func(network, addr string) (net.Listener, error)                  // Custom listen function for TCP connections (e.g. tsnet.Server.Listen), defaults to net.ListenTCP. Automatically sets ForceReliableTransport to true
 }
 
 func DefaultConfig() *Config {

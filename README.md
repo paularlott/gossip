@@ -118,6 +118,11 @@ config.Compressor = compression.NewSnappyCompressor()  // Enable payload compres
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
 config.Transport = gossip.NewSocketTransport(config)   // Socket based transport
 
+// Custom dialer/listener (e.g. for overlay networks like Tailscale tsnet)
+config.DialFunc = srv.Dial       // Custom TCP dial function, defaults to net.DialTimeout
+config.ListenFunc = srv.Listen   // Custom TCP listen function, defaults to net.ListenTCP
+                                 // Setting ListenFunc automatically enables ForceReliableTransport
+
 // Logging
 config.Logger = logger.NewNullLogger()                 // Default: no logging
 ```

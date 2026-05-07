@@ -20,7 +20,7 @@ import (
 type SocketTransport struct {
 	config        *Config
 	logger        logger.Logger
-	tcpListener   *net.TCPListener
+	tcpListener   net.Listener
 	udpListener   *net.UDPConn
 	packetChannel chan *Packet
 	resolver      Resolver
@@ -58,6 +58,11 @@ func NewSocketTransport(config *Config) *SocketTransport {
 }
 
 func (st *SocketTransport) Start(ctx context.Context, wg *sync.WaitGroup) error {
+	// Custom listeners (e.g. tsnet) don't support UDP, force reliable transport
+	if st.config.ListenFunc != nil {
+		st.config.ForceReliableTransport = true
+	}
+
 	bindAddress, err := st.parseBindAddress(st.config.BindAddr)
 	if err != nil {
 		return err
@@ -69,7 +74,11 @@ func (st *SocketTransport) Start(ctx context.Context, wg *sync.WaitGroup) error 
 		IP:   bindAddress.IP,
 		Port: int(bindAddress.Port),
 	}
-	st.tcpListener, err = net.ListenTCP("tcp", tcpAddr)
+	if st.config.ListenFunc != nil {
+		st.tcpListener, err = st.config.ListenFunc("tcp", tcpAddr.String())
+	} else {
+		st.tcpListener, err = net.ListenTCP("tcp", tcpAddr)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create TCP listener: %w", err)
 	}
@@ -361,6 +370,11 @@ func (st *SocketTransport) dialPeer(node *Node) (net.Conn, error) {
 
 	tryDial := func(addr Address) (net.Conn, error) {
 		tcpAddr := &net.TCPAddr{IP: addr.IP, Port: addr.Port}
+		if st.config.DialFunc != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), st.config.TCPDialTimeout)
+			defer cancel()
+			return st.config.DialFunc(ctx, "tcp", tcpAddr.String())
+		}
 		return net.DialTimeout("tcp", tcpAddr.String(), st.config.TCPDialTimeout)
 	}
 
