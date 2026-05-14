@@ -1,6 +1,7 @@
 package leader
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/paularlott/gossip"
@@ -36,6 +37,7 @@ type LeaderEventHandler func(EventType, gossip.NodeID)
 type leaderEventHandlers struct {
 	logger   logger.Logger
 	handlers atomic.Value
+	mu       sync.Mutex
 }
 
 func newLeaderEventHandlers(logger logger.Logger) *leaderEventHandlers {
@@ -47,6 +49,9 @@ func newLeaderEventHandlers(logger logger.Logger) *leaderEventHandlers {
 }
 
 func (h *leaderEventHandlers) add(eventType EventType, handler LeaderEventHandler) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	currentHandlers := h.handlers.Load().(map[EventType][]LeaderEventHandler)
 
 	// Create a copy of the handlers map
@@ -73,7 +78,7 @@ func (h *leaderEventHandlers) dispatch(eventType EventType, leaderID gossip.Node
 
 	// Call each handler with panic recovery
 	for _, handler := range eventHandlers {
-		go func(evtHandler LeaderEventHandler) {
+		func(evtHandler LeaderEventHandler) {
 			defer func() {
 				if r := recover(); r != nil {
 					// Log panic but don't crash the application

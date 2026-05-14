@@ -28,10 +28,17 @@ type LeaderElection struct {
 	cancel        context.CancelFunc
 	eventHandlers *leaderEventHandlers
 	nodeGroup     *gossip.NodeGroup
+	stateHandler  gossip.HandlerID
+	startStopMu   sync.Mutex
+	wg            sync.WaitGroup
+	started       bool
+	stopped       bool
 }
 
 // NewLeaderElection creates a new leader election manager
 func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection {
+	config = normalizeConfig(config)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	election := &LeaderElection{
@@ -45,8 +52,10 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	}
 
 	// Register event listeners
-	cluster.HandleNodeStateChangeFunc(election.handleNodeStateChange)
-	cluster.HandleFunc(config.HeartbeatMessageType, election.handleLeaderHeartbeat)
+	election.stateHandler = cluster.HandleNodeStateChangeFunc(election.handleNodeStateChange)
+	if err := cluster.HandleFunc(config.HeartbeatMessageType, election.handleLeaderHeartbeat); err != nil {
+		panic(err)
+	}
 
 	if len(config.MetadataCriteria) > 0 {
 		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria, nil)
@@ -55,21 +64,59 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	return election
 }
 
+func normalizeConfig(config *Config) *Config {
+	defaults := DefaultConfig()
+	if config == nil {
+		return defaults
+	}
+
+	normalized := *config
+
+	if normalized.LeaderCheckInterval <= 0 {
+		normalized.LeaderCheckInterval = defaults.LeaderCheckInterval
+	}
+	if normalized.LeaderTimeout <= 0 {
+		normalized.LeaderTimeout = defaults.LeaderTimeout
+	}
+	if normalized.LeaderTimeout < normalized.LeaderCheckInterval {
+		normalized.LeaderTimeout = normalized.LeaderCheckInterval
+	}
+	if normalized.HeartbeatMessageType < gossip.ReservedMsgsStart {
+		normalized.HeartbeatMessageType = defaults.HeartbeatMessageType
+	}
+	if normalized.QuorumPercentage <= 0 || normalized.QuorumPercentage > 100 {
+		normalized.QuorumPercentage = defaults.QuorumPercentage
+	}
+
+	return &normalized
+}
+
 func (le *LeaderElection) HandleEventFunc(eventType EventType, handler LeaderEventHandler) {
 	le.eventHandlers.add(eventType, handler)
 }
 
 // Start the election check process
 func (le *LeaderElection) Start() {
+	le.startStopMu.Lock()
+	defer le.startStopMu.Unlock()
+
+	if le.started || le.stopped {
+		return
+	}
+
+	le.started = true
+
 	// Kick off initial election
 	le.checkAndElectLeader()
 
 	// Start periodic checks in a goroutine
+	le.wg.Add(1)
 	go le.runElectionLoop()
 }
 
 // runElectionLoop runs the periodic election checks
 func (le *LeaderElection) runElectionLoop() {
+	defer le.wg.Done()
 	ticker := time.NewTicker(le.config.LeaderCheckInterval)
 	defer ticker.Stop()
 
@@ -85,10 +132,21 @@ func (le *LeaderElection) runElectionLoop() {
 
 // Stop terminates the leader election process
 func (le *LeaderElection) Stop() {
+	le.startStopMu.Lock()
+	if le.stopped {
+		le.startStopMu.Unlock()
+		return
+	}
+	le.stopped = true
+	le.startStopMu.Unlock()
+
 	le.cancel()
+	le.wg.Wait()
 	if le.nodeGroup != nil {
 		le.nodeGroup.Close()
 	}
+	le.cluster.RemoveNodeStateChangeHandler(le.stateHandler)
+	le.cluster.UnregisterMessageType(le.config.HeartbeatMessageType)
 }
 
 // getEligibleNodes returns nodes that are eligible for leader election
@@ -118,7 +176,7 @@ func (le *LeaderElection) checkAndElectLeader() {
 	// First, check if there's already a valid leader
 	if le.HasLeader() {
 		// If we are the leader then send a heartbeat
-		if le.isLeader {
+		if le.IsLeader() {
 			le.sendLeaderHeartbeat()
 		}
 		return
@@ -274,7 +332,7 @@ func (le *LeaderElection) electLeader() {
 	le.cluster.Logger().
 		With("leaderId", candidateNode.ID.String()).
 		With("term", le.currentTerm).
-		With("isLocal", le.isLeader).
+		With("isLocal", le.IsLeader()).
 		Debug("New leader elected", "quorum_eligible", numEligible, "quorum_required", requiredQuorum)
 
 	// Dispatch events based on state changes
@@ -295,7 +353,7 @@ func (le *LeaderElection) electLeader() {
 	}
 
 	// If we're the leader, announce ourselves immediately
-	if le.isLeader {
+	if le.IsLeader() {
 		le.sendLeaderHeartbeat()
 	}
 }
@@ -313,7 +371,10 @@ func (le *LeaderElection) sendLeaderHeartbeat() {
 		LeaderTime: leaderTime,
 		Term:       currentTerm,
 	}
-	le.cluster.Send(le.config.HeartbeatMessageType, &msg)
+	if err := le.cluster.Send(le.config.HeartbeatMessageType, &msg); err != nil {
+		le.cluster.Logger().WithError(err).Warn("failed to send leader heartbeat")
+		return
+	}
 
 	le.lock.Lock()
 	le.leaderTime = leaderTime
@@ -323,6 +384,12 @@ func (le *LeaderElection) sendLeaderHeartbeat() {
 
 // handleLeaderHeartbeat is called to process incoming heartbeat messages
 func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gossip.Packet) error {
+	select {
+	case <-le.ctx.Done():
+		return nil
+	default:
+	}
+
 	if sender == nil {
 		return nil
 	}
@@ -413,6 +480,12 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 
 // handleNodeStateChange is called when any node's state changes
 func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gossip.NodeState) {
+	select {
+	case <-le.ctx.Done():
+		return
+	default:
+	}
+
 	le.cluster.Logger().
 		With("nodeId", node.ID.String()).
 		With("prevState", prevState.String()).
@@ -447,6 +520,10 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 	if numNodes == 0 {
 		return 0 // Cannot have quorum with zero nodes
+	}
+
+	if le.config.QuorumPercentage <= 0 {
+		return 0
 	}
 
 	// Calculate quorum: (total_nodes * percentage + 99) / 100 for ceiling division.
