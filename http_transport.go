@@ -223,6 +223,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 	if replyExpected {
 		replyChan := make(chan *Packet, 1)
 		packet.SetReplyChan(replyChan)
+		defer close(replyChan)
 
 		select {
 		case ht.packetChannel <- packet:
@@ -242,31 +243,9 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 
 			case <-time.After(transportMaxWaitTime):
 				w.WriteHeader(http.StatusNoContent)
-
-				// Try to drain any reply that might arrive to prevent leak
-				go func() {
-					select {
-					case replyPacket := <-replyChan:
-						replyPacket.Release()
-					case <-time.After(1 * time.Second):
-						// Give up after 1 second
-					}
-					close(replyChan)
-				}()
-
 				return
 
 			case <-r.Context().Done():
-				// Client disconnected, drain any pending reply
-				go func() {
-					select {
-					case replyPacket := <-replyChan:
-						replyPacket.Release()
-					case <-time.After(1 * time.Second):
-						// Give up after 1 second
-					}
-					close(replyChan)
-				}()
 				return
 			}
 
@@ -274,8 +253,6 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Server busy", http.StatusServiceUnavailable)
 			packet.Release()
 		}
-
-		close(replyChan)
 	} else {
 		select {
 		case ht.packetChannel <- packet:
@@ -391,6 +368,7 @@ func (ht *HTTPTransport) packetFromBuffer(data []byte) (*Packet, error) {
 	packet := NewPacket()
 	err := ht.config.MsgCodec.Unmarshal(data[2:2+headerSize], &packet)
 	if err != nil {
+		packet.Release()
 		return nil, err
 	}
 

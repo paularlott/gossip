@@ -134,7 +134,7 @@ func (hm *HealthMonitor) retryDeadNodes() {
 	deadNodes := hm.cluster.nodes.getAllInStates([]NodeState{NodeDead})
 	for _, node := range deadNodes {
 		// Only retry dead nodes that haven't been dead too long
-		timeSinceDead := hlc.Now().Time().Sub(node.observedStateTime.Time())
+		timeSinceDead := hlc.Now().Time().Sub(node.GetObservedStateTime().Time())
 		if timeSinceDead < hm.cluster.config.MaxDeadNodeRetryTime {
 			hm.enqueueHealthCheck(node.ID, DeadNodeRetry)
 		}
@@ -195,7 +195,7 @@ func (hm *HealthMonitor) processHealthCheck(task HealthCheckTask) {
 			hm.cluster.logger.Debug("node recovered from suspect", "node_id", node.ID.String())
 		} else {
 			// Still no response, check if should mark as dead
-			timeSinceSuspect := hlc.Now().Time().Sub(node.observedStateTime.Time())
+			timeSinceSuspect := hlc.Now().Time().Sub(node.GetObservedStateTime().Time())
 			if timeSinceSuspect > hm.cluster.config.DeadNodeTimeout {
 				hm.cluster.nodes.updateState(node.ID, NodeDead)
 				hm.cluster.logger.Debug("marked suspect node as dead", "node_id", node.ID.String())
@@ -220,7 +220,7 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 
 	pingMessage := &pingMessage{
 		SenderID:      hm.cluster.localNode.ID,
-		AdvertiseAddr: hm.cluster.localNode.advertiseAddr,
+		AdvertiseAddr: hm.cluster.localNode.AdvertisedAddr(),
 	}
 
 	pongMessage := &pongMessage{}
@@ -230,8 +230,8 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 	}
 
 	// If we got a response, update our view of the node's address if needed
-	if pongMessage.AdvertiseAddr != "" && pongMessage.AdvertiseAddr != node.advertiseAddr {
-		node.advertiseAddr = pongMessage.AdvertiseAddr
+	if pongMessage.AdvertiseAddr != "" && pongMessage.AdvertiseAddr != node.AdvertisedAddr() {
+		node.SetAdvertisedAddr(pongMessage.AdvertiseAddr)
 		node.ClearAddress() // Force re-resolution
 		hm.cluster.logger.Trace("updated node address", "node_id", node.ID.String(), "new_address", pongMessage.AdvertiseAddr)
 	}

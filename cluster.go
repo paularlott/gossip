@@ -46,6 +46,7 @@ type Cluster struct {
 	peerRecoveryTicker   *time.Ticker
 	healthMonitor        *HealthMonitor
 	joinQueue            chan *joinRequest
+	peerRecoveryMu       sync.RWMutex
 }
 
 type broadcastQItem struct {
@@ -84,6 +85,14 @@ func NewCluster(config *Config) (*Cluster, error) {
 		return nil, fmt.Errorf("missing Transport")
 	}
 
+	if config.MsgHistoryShardCount <= 0 || config.MsgHistoryShardCount&(config.MsgHistoryShardCount-1) != 0 {
+		return nil, fmt.Errorf("MsgHistoryShardCount must be a positive power of two")
+	}
+
+	if config.NodeShardCount <= 0 || config.NodeShardCount&(config.NodeShardCount-1) != 0 {
+		return nil, fmt.Errorf("NodeShardCount must be a positive power of two")
+	}
+
 	// Check the encrypt key, it must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 	if len(config.EncryptionKey) != 0 && len(config.EncryptionKey) != 16 && len(config.EncryptionKey) != 24 && len(config.EncryptionKey) != 32 {
 		return nil, fmt.Errorf("invalid encrypt key length: must be 0, 16, 24, or 32 bytes")
@@ -106,12 +115,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, baseCancel := context.WithCancel(context.Background())
 	cluster := &Cluster{
 		config:              config,
 		logger:              config.Logger.WithGroup("gossip"),
 		shutdownContext:     ctx,
-		cancelFunc:          cancel,
 		msgHistory:          newMessageHistory(config),
 		localNode:           newNodeWithTags(NodeID(u), config.AdvertiseAddr, config.Tags),
 		handlers:            newHandlerRegistry(),
@@ -121,6 +129,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 		transport:           config.Transport,
 		seedPeers:           make([]string, 0),
 		joinQueue:           make(chan *joinRequest, config.JoinQueueSize),
+	}
+	cluster.cancelFunc = func() {
+		baseCancel()
+		cluster.shutdownWg.Wait()
 	}
 
 	cluster.nodes = newNodeList(cluster)
@@ -144,7 +156,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 		cluster.sendMessage(nil, TransportBestEffort, cluster.getMaxTTL(), metadataUpdateMsg, metadataUpdateMessage{
 			MetadataTimestamp: ts,
 			Metadata:          data,
-			NodeState:         cluster.localNode.observedState,
+			NodeState:         cluster.localNode.GetObservedState(),
 		})
 	})
 
@@ -195,7 +207,7 @@ func (c *Cluster) Start() {
 func (c *Cluster) Stop() {
 	c.logger.Info("starting cluster shutdown")
 
-	if c.localNode.observedState != NodeLeaving {
+	if c.localNode.GetObservedState() != NodeLeaving {
 		c.Leave()
 	}
 
@@ -211,6 +223,19 @@ func (c *Cluster) Stop() {
 	c.shutdownWg.Wait()
 
 	c.logger.Info("cluster stopped")
+}
+
+func (c *Cluster) waitForJitter(delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+
+	select {
+	case <-time.After(delay):
+		return true
+	case <-c.shutdownContext.Done():
+		return false
+	}
 }
 
 func (c *Cluster) joinWorker() {
@@ -230,8 +255,9 @@ func (c *Cluster) Join(peers []string) error {
 	joinList := make([]string, 0, len(peers))
 
 	// If http then we have to compare at the domain / port level
-	if strings.HasPrefix(c.localNode.advertiseAddr, "http://") || strings.HasPrefix(c.localNode.advertiseAddr, "https://") {
-		self, err := url.Parse(c.localNode.advertiseAddr)
+	localAdvertiseAddr := c.localNode.AdvertisedAddr()
+	if strings.HasPrefix(localAdvertiseAddr, "http://") || strings.HasPrefix(localAdvertiseAddr, "https://") {
+		self, err := url.Parse(localAdvertiseAddr)
 		if err != nil {
 			return fmt.Errorf("invalid advertise address: %v", err)
 		}
@@ -283,7 +309,9 @@ func (c *Cluster) Join(peers []string) error {
 	wg.Wait()
 
 	// Remember the peers so we can use them for recovery
+	c.peerRecoveryMu.Lock()
 	c.seedPeers = append(c.seedPeers, joinList...)
+	c.peerRecoveryMu.Unlock()
 
 	return nil
 }
@@ -291,8 +319,8 @@ func (c *Cluster) Join(peers []string) error {
 func (c *Cluster) joinPeer(peerAddr string) {
 	joinMsg := &joinMessage{
 		ID:                 c.localNode.ID,
-		AdvertiseAddr:      c.localNode.advertiseAddr,
-		State:              c.localNode.observedState,
+		AdvertiseAddr:      c.localNode.AdvertisedAddr(),
+		State:              c.localNode.GetObservedState(),
 		Tags:               c.localNode.GetTags(),
 		MetadataTimestamp:  c.localNode.metadata.GetTimestamp(),
 		Metadata:           c.localNode.metadata.GetAll(),
@@ -360,26 +388,24 @@ func (c *Cluster) joinPeer(peerAddr string) {
 }
 
 func (c *Cluster) peerRecoveryManager() {
+	c.shutdownWg.Add(1)
 	go func() {
+		defer c.shutdownWg.Done()
 		// Do a fast initial seed peer recovery shortly after startup.
 		// This handles simultaneous restarts where initial Join() calls fail
 		// because peers haven't started yet. We retry seed peers after a short
 		// delay instead of waiting for the full PeerRecoveryInterval (30s).
 		initialDelay := 3*time.Second + time.Duration(rand.Int63n(int64(2*time.Second)))
-		select {
-		case <-time.After(initialDelay):
-			c.retrySeedPeers()
-		case <-c.shutdownContext.Done():
+		if !c.waitForJitter(initialDelay) {
 			return
 		}
+		c.retrySeedPeers()
 
 		// Then do another fast retry to catch any stragglers
-		select {
-		case <-time.After(5*time.Second + time.Duration(rand.Int63n(int64(2*time.Second)))):
-			c.retrySeedPeers()
-		case <-c.shutdownContext.Done():
+		if !c.waitForJitter(5*time.Second + time.Duration(rand.Int63n(int64(2*time.Second)))) {
 			return
 		}
+		c.retrySeedPeers()
 
 		c.peerRecoveryTicker = time.NewTicker(c.config.PeerRecoveryInterval)
 		defer c.peerRecoveryTicker.Stop()
@@ -396,18 +422,23 @@ func (c *Cluster) peerRecoveryManager() {
 }
 
 func (c *Cluster) checkPeerConnectivity() {
+	c.peerRecoveryMu.RLock()
+	seedPeers := append([]string(nil), c.seedPeers...)
+	lastPeerRecovery := c.lastPeerRecovery
+	c.peerRecoveryMu.RUnlock()
+
 	// Skip if no seed peers configured
-	if len(c.seedPeers) == 0 {
+	if len(seedPeers) == 0 {
 		return
 	}
 
 	// Skip if we recently attempted recovery (prevent spam)
-	if time.Since(c.lastPeerRecovery) < c.config.PeerRecoveryInterval/2 {
+	if time.Since(lastPeerRecovery) < c.config.PeerRecoveryInterval/2 {
 		return
 	}
 
 	aliveCount := c.nodes.getAliveCount()
-	seedPeerCount := len(c.seedPeers)
+	seedPeerCount := len(seedPeers)
 
 	// Calculate the threshold (50% of seed peers)
 	threshold := seedPeerCount / 2
@@ -419,9 +450,11 @@ func (c *Cluster) checkPeerConnectivity() {
 	if aliveCount <= threshold {
 		reason := fmt.Sprintf("alive nodes (%d) <= 50%% of seed peers (%d/%d)", aliveCount, threshold, seedPeerCount)
 		c.logger.Warn("triggering peer recovery", "reason", reason)
+		c.peerRecoveryMu.Lock()
 		c.lastPeerRecovery = time.Now()
+		c.peerRecoveryMu.Unlock()
 
-		for _, peer := range c.seedPeers {
+		for _, peer := range seedPeers {
 			req := &joinRequest{
 				nodeAddr: peer,
 			}
@@ -440,11 +473,15 @@ func (c *Cluster) checkPeerConnectivity() {
 // retrySeedPeers attempts to re-join all seed peers that aren't currently alive.
 // Used during initial startup to handle simultaneous cluster restarts.
 func (c *Cluster) retrySeedPeers() {
-	if len(c.seedPeers) == 0 {
+	c.peerRecoveryMu.RLock()
+	seedPeers := append([]string(nil), c.seedPeers...)
+	c.peerRecoveryMu.RUnlock()
+
+	if len(seedPeers) == 0 {
 		return
 	}
 
-	for _, peer := range c.seedPeers {
+	for _, peer := range seedPeers {
 		req := &joinRequest{
 			nodeAddr: peer,
 		}
@@ -630,11 +667,12 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 	// Create the state exchange message
 	var peerStates []exchangeNodeState
 	for _, n := range randomNodes {
+		state, stateTS := n.GetStateSnapshot()
 		peerStates = append(peerStates, exchangeNodeState{
 			ID:             n.ID,
-			AdvertiseAddr:  n.advertiseAddr,
-			State:          n.observedState,
-			StateTimestamp: n.observedStateTime,
+			AdvertiseAddr:  n.AdvertisedAddr(),
+			State:          state,
+			StateTimestamp: stateTS,
 		})
 	}
 
@@ -652,7 +690,7 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 			c.logger.Warn("failed to exchange state with node", "node_id", node.ID.String())
 			c.nodes.updateState(node.ID, NodeSuspect)
 		} else {
-			if node.observedState == NodeSuspect {
+			if node.GetObservedState() == NodeSuspect {
 				c.nodes.updateState(node.ID, NodeAlive)
 				c.logger.Warn("node recovered from suspect", "node_id", node.ID.String())
 			}
@@ -679,8 +717,10 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			if state.State == NodeDead || state.State == NodeLeaving {
 				c.logger.Trace("storing tombstone for unknown node", "node_id", state.ID.String(), "state", state.State.String())
 				node := newNode(state.ID, state.AdvertiseAddr)
+				node.mu.Lock()
 				node.observedState = state.State
 				node.observedStateTime = state.StateTimestamp
+				node.mu.Unlock()
 				c.nodes.addOrUpdate(node)
 				continue
 			}
@@ -705,19 +745,22 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 			// is the node itself, communicated directly via join or ping/pong.
 			// Accepting address changes from gossip causes stale addresses to
 			// overwrite correct ones during rolling deploys or address changes.
-			if localNode.advertiseAddr != state.AdvertiseAddr {
-				c.logger.Debug("ignoring address change from gossip (not authoritative)", "node_id", state.ID.String(), "current_address", localNode.advertiseAddr, "gossip_address", state.AdvertiseAddr)
+			currentState, currentTS := localNode.GetStateSnapshot()
+			currentAddr := localNode.AdvertisedAddr()
+
+			if currentAddr != state.AdvertiseAddr {
+				c.logger.Debug("ignoring address change from gossip (not authoritative)", "node_id", state.ID.String(), "current_address", currentAddr, "gossip_address", state.AdvertiseAddr)
 			}
 
 			// If the remote state timestamp is newer then we need to consider what's being reported
-			if state.StateTimestamp.After(localNode.observedStateTime) && state.State != localNode.observedState {
+			if state.StateTimestamp.After(currentTS) && state.State != currentState {
 				// Accept state transitions when remote has newer information.
 				// For Alive/Suspect transitions from Dead, also attempt a join to
 				// re-establish a direct connection with the recovered node.
 				if state.State == NodeAlive || state.State == NodeSuspect {
-					if localNode.observedState == NodeDead || localNode.observedState == NodeLeaving {
+					if currentState == NodeDead || currentState == NodeLeaving {
 						// Node recovered according to a peer with newer info - accept and re-join
-						c.nodes.updateState(localNode.ID, state.State)
+						c.nodes.updateStateWithTimestamp(localNode.ID, state.State, state.StateTimestamp)
 						c.logger.Debug("node recovered via state exchange", "node_id", state.ID.String(), "new_state", state.State.String())
 
 						req := &joinRequest{nodeAddr: state.AdvertiseAddr}
@@ -728,7 +771,7 @@ func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 					}
 				} else {
 					// Accept transitions to Leaving or Dead
-					c.nodes.updateState(localNode.ID, state.State)
+					c.nodes.updateStateWithTimestamp(localNode.ID, state.State, state.StateTimestamp)
 				}
 			}
 		}
@@ -916,10 +959,14 @@ func (c *Cluster) RemoveGossipHandler(id HandlerID) bool {
 }
 
 func (c *Cluster) metadataGossipManager() {
+	c.shutdownWg.Add(1)
 	go func() {
+		defer c.shutdownWg.Done()
 		// Small jitter
 		jitter := time.Duration(rand.Int63n(int64(c.config.MetadataGossipInterval / 4)))
-		time.Sleep(jitter)
+		if !c.waitForJitter(jitter) {
+			return
+		}
 
 		ticker := time.NewTicker(c.config.MetadataGossipInterval)
 		defer ticker.Stop()
@@ -936,10 +983,14 @@ func (c *Cluster) metadataGossipManager() {
 }
 
 func (c *Cluster) stateGossipManager() {
+	c.shutdownWg.Add(1)
 	go func() {
+		defer c.shutdownWg.Done()
 		// Larger jitter for state sync
 		jitter := time.Duration(rand.Int63n(int64(c.config.StateGossipInterval / 2)))
-		time.Sleep(jitter)
+		if !c.waitForJitter(jitter) {
+			return
+		}
 
 		ticker := time.NewTicker(c.config.StateGossipInterval)
 		defer ticker.Stop()
@@ -956,10 +1007,14 @@ func (c *Cluster) stateGossipManager() {
 }
 
 func (c *Cluster) gossipManager() {
+	c.shutdownWg.Add(1)
 	go func() {
+		defer c.shutdownWg.Done()
 		// Add jitter to prevent all nodes syncing at the same time
 		jitter := time.Duration(rand.Int63n(int64(c.config.GossipInterval / 2)))
-		time.Sleep(jitter)
+		if !c.waitForJitter(jitter) {
+			return
+		}
 
 		c.gossipInterval = c.config.GossipInterval
 		c.gossipTicker = time.NewTicker(c.config.GossipInterval)
@@ -1049,10 +1104,14 @@ func (c *Cluster) NodesToIDs(nodes []*Node) []NodeID {
 }
 
 func (c *Cluster) nodeCleanupManager() {
+	c.shutdownWg.Add(1)
 	go func() {
+		defer c.shutdownWg.Done()
 		// Add jitter to prevent all nodes cleaning up at the same time
 		jitter := time.Duration(rand.Int63n(int64(c.config.NodeCleanupInterval / 4)))
-		time.Sleep(jitter)
+		if !c.waitForJitter(jitter) {
+			return
+		}
 
 		ticker := time.NewTicker(c.config.NodeCleanupInterval)
 		defer ticker.Stop()
@@ -1077,7 +1136,7 @@ func (c *Cluster) cleanupNodes() {
 
 	// Move old leaving nodes to dead
 	for _, node := range leavingNodes {
-		if now.Sub(node.observedStateTime.Time()) > c.config.LeavingNodeTimeout {
+		if now.Sub(node.GetObservedStateTime().Time()) > c.config.LeavingNodeTimeout {
 			c.nodes.updateState(node.ID, NodeDead)
 			c.logger.Debug("moved leaving node to dead", "node_id", node.ID.String())
 		}
@@ -1085,7 +1144,7 @@ func (c *Cluster) cleanupNodes() {
 
 	// Remove old dead nodes
 	for _, node := range deadNodes {
-		if now.Sub(node.observedStateTime.Time()) > c.config.NodeRetentionTime {
+		if now.Sub(node.GetObservedStateTime().Time()) > c.config.NodeRetentionTime {
 			c.nodes.remove(node.ID)
 			c.logger.Debug("removed dead node", "node_id", node.ID.String())
 		}

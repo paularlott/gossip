@@ -117,13 +117,14 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 			return false
 		}
 
-		oldState := existing.observedState
+		oldState, _ := existing.GetStateSnapshot()
+		newState, _ := node.GetStateSnapshot()
 		shard.nodes[node.ID] = node
 
 		shard.mutex.Unlock()
 
-		if oldState != node.observedState {
-			nl.updateCountersForStateChange(oldState, node.observedState)
+		if oldState != newState {
+			nl.updateCountersForStateChange(oldState, newState)
 			nl.notifyNodeStateChanged(node, oldState)
 		}
 		return true
@@ -134,7 +135,8 @@ func (nl *nodeList) add(node *Node, updateExisting bool) bool {
 
 	shard.mutex.Unlock()
 
-	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
+	newState, _ := node.GetStateSnapshot()
+	nl.updateCountersForStateChange(NodeUnknown, newState)
 	nl.notifyNodeStateChanged(node, NodeUnknown)
 	return true
 }
@@ -155,7 +157,8 @@ func (nl *nodeList) addIfNotExists(node *Node) *Node {
 	shard.nodes[node.ID] = node
 	shard.mutex.Unlock()
 
-	nl.updateCountersForStateChange(NodeUnknown, node.observedState)
+	newState, _ := node.GetStateSnapshot()
+	nl.updateCountersForStateChange(NodeUnknown, newState)
 	nl.notifyNodeStateChanged(node, NodeUnknown)
 
 	return node
@@ -187,8 +190,9 @@ func (nl *nodeList) removeIfInState(nodeID NodeID, states []NodeState) bool {
 
 	var matchedState NodeState
 	var found bool
+	currentState, _ := node.GetStateSnapshot()
 	for _, s := range states {
-		if node.observedState == s {
+		if currentState == s {
 			matchedState = s
 			found = true
 			break
@@ -256,6 +260,42 @@ func (nl *nodeList) updateState(nodeID NodeID, newState NodeState) bool {
 
 	nl.updateCountersForStateChange(oldState, newState)
 	nl.notifyNodeStateChanged(node, oldState)
+
+	return true
+}
+
+// updateStateWithTimestamp updates a node's state with a supplied timestamp.
+// The update is rejected if the timestamp is not newer than the current state timestamp.
+func (nl *nodeList) updateStateWithTimestamp(nodeID NodeID, newState NodeState, ts hlc.Timestamp) bool {
+	shard := nl.getShard(nodeID)
+
+	shard.mutex.Lock()
+	node, exists := shard.nodes[nodeID]
+	if !exists {
+		shard.mutex.Unlock()
+		return false
+	}
+
+	node.mu.Lock()
+	oldState := node.observedState
+	oldTS := node.observedStateTime
+	if !ts.After(oldTS) {
+		node.mu.Unlock()
+		shard.mutex.Unlock()
+		return false
+	}
+
+	node.observedState = newState
+	node.observedStateTime = ts
+	node.mu.Unlock()
+	shard.mutex.Unlock()
+
+	node.ClearAddress()
+
+	if oldState != newState {
+		nl.updateCountersForStateChange(oldState, newState)
+		nl.notifyNodeStateChanged(node, oldState)
+	}
 
 	return true
 }
@@ -336,7 +376,8 @@ func (nl *nodeList) getCachedNodesInStates(states []NodeState) []*Node {
 	for _, shard := range nl.shards {
 		shard.mutex.RLock()
 		for _, node := range shard.nodes {
-			if _, ok := stateSet[node.observedState]; ok {
+			state, _ := node.GetStateSnapshot()
+			if _, ok := stateSet[state]; ok {
 				allNodes = append(allNodes, node)
 			}
 		}
@@ -377,46 +418,34 @@ func (nl *nodeList) getRandomNodesInStatesWithTag(k int, states []NodeState, exc
 		}
 	}
 
-	// Filter nodes based on exclusions and tag
-	// Pre-allocate with estimated capacity to reduce reallocations
-	estimatedCapacity := k
-	if tag != nil {
-		// If filtering by tag, we'll likely find fewer nodes
-		estimatedCapacity = min(k*2, len(allCandidates)/10)
-	}
-	if estimatedCapacity > len(allCandidates) {
-		estimatedCapacity = len(allCandidates)
-	}
-	filtered := make([]*Node, 0, estimatedCapacity)
+	// Use reservoir sampling to avoid allocating and shuffling the full candidate set
+	result := make([]*Node, 0, min(k, len(allCandidates)))
+	matchingCount := 0
 
 	for _, node := range allCandidates {
-		// Skip excluded nodes
 		if excludeSet != nil {
 			if _, excluded := excludeSet[node.ID]; excluded {
 				continue
 			}
 		}
 
-		// Skip nodes without the tag if tag filter is specified
 		if tag != nil && !node.HasTag(*tag) {
 			continue
 		}
 
-		filtered = append(filtered, node)
+		matchingCount++
+		if len(result) < k {
+			result = append(result, node)
+			continue
+		}
+
+		j := rand.Intn(matchingCount)
+		if j < k {
+			result[j] = node
+		}
 	}
 
-	// Return all if we don't have enough
-	if len(filtered) <= k {
-		return slices.Clip(filtered)
-	}
-
-	// Fisher-Yates shuffle and take first k
-	for i := len(filtered) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
-		filtered[i], filtered[j] = filtered[j], filtered[i]
-	}
-
-	return slices.Clip(filtered[:k])
+	return slices.Clip(result)
 }
 
 // GetRandomNodes returns up to k random live nodes (Alive or Suspect)
@@ -508,13 +537,13 @@ func (nl *nodeList) RemoveMetadataChangeHandler(id HandlerID) bool {
 
 func (nl *nodeList) notifyNodeStateChanged(node *Node, prevState NodeState) {
 	nl.stateChangeHandlers.ForEach(func(handler NodeStateChangeHandler) {
-		go handler(node, prevState)
+		handler(node, prevState)
 	})
 }
 
 func (nl *nodeList) notifyMetadataChanged(node *Node) {
 	nl.metadataChangeHandlers.ForEach(func(handler NodeMetadataChangeHandler) {
-		go handler(node)
+		handler(node)
 	})
 }
 

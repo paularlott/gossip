@@ -233,27 +233,22 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 		}
 
 		if n > 0 {
-			// Make a copy of the received data
 			packetData := make([]byte, n)
 			copy(packetData, buf[:n])
-
-			// Return buffer to pool immediately after copying
 			st.udpBufferPool.Put(bufPtr)
 
-			go func() {
-				packet, _, err := st.packetFromBuffer(packetData)
-				if err != nil {
-					st.logger.WithError(err).Error("failed to decode UDP packet")
-					return
-				}
+			packet, _, err := st.packetFromBuffer(packetData)
+			if err != nil {
+				st.logger.WithError(err).Error("failed to decode UDP packet")
+				continue
+			}
 
-				select {
-				case <-ctx.Done():
-					packet.Release()
-					return
-				case st.packetChannel <- packet:
-				}
-			}()
+			select {
+			case <-ctx.Done():
+				packet.Release()
+				return
+			case st.packetChannel <- packet:
+			}
 		} else {
 			// No data received, return buffer to pool
 			st.udpBufferPool.Put(bufPtr)
@@ -275,39 +270,35 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 		replyChan := make(chan *Packet, 1)
 		packet.SetReplyChan(replyChan)
 
-		go func() {
-			defer close(replyChan)
+		select {
+		case <-ctx.Done():
+			packet.Release()
+			close(replyChan)
+			return
+		case st.packetChannel <- packet:
+		}
 
+		defer close(replyChan)
+
+		select {
+		case replyPacket := <-replyChan:
+			if replyPacket != nil {
+				if err := st.writePacket(conn, replyPacket, false); err != nil {
+					st.logger.WithError(err).Error("failed to write reply packet")
+				}
+				replyPacket.Release()
+			}
+		case <-time.After(st.config.TCPDeadline):
+		case <-ctx.Done():
 			select {
 			case replyPacket := <-replyChan:
 				if replyPacket != nil {
-					if err := st.writePacket(conn, replyPacket, false); err != nil {
-						st.logger.WithError(err).Error("failed to write reply packet")
-					}
 					replyPacket.Release()
 				}
-			case <-time.After(st.config.TCPDeadline):
-				// Timeout - try to drain any late reply
-				select {
-				case replyPacket := <-replyChan:
-					if replyPacket != nil {
-						replyPacket.Release()
-					}
-				case <-time.After(100 * time.Millisecond):
-					// Give up
-				}
-			case <-ctx.Done():
-				// Context cancelled - try to drain any pending reply
-				select {
-				case replyPacket := <-replyChan:
-					if replyPacket != nil {
-						replyPacket.Release()
-					}
-				case <-time.After(100 * time.Millisecond):
-					// Give up
-				}
+			default:
 			}
-		}()
+		}
+		return
 	}
 
 	select {

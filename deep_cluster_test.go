@@ -1367,6 +1367,24 @@ func TestNewClusterValidation(t *testing.T) {
 		}
 	}
 
+	config = DefaultConfig()
+	config.Transport = &mockTransport{}
+	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgHistoryShardCount = 3
+	_, err = NewCluster(config)
+	if err == nil {
+		t.Error("Expected error for non-power-of-two MsgHistoryShardCount")
+	}
+
+	config = DefaultConfig()
+	config.Transport = &mockTransport{}
+	config.MsgCodec = codec.NewJsonCodec()
+	config.NodeShardCount = 3
+	_, err = NewCluster(config)
+	if err == nil {
+		t.Error("Expected error for non-power-of-two NodeShardCount")
+	}
+
 	// Cipher without key
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
@@ -1398,6 +1416,38 @@ func TestNewClusterValidation(t *testing.T) {
 	}
 	if cluster.localNode.ID.String() != config.NodeID {
 		t.Error("NodeID should match config")
+	}
+}
+
+func TestClusterStartStopCancelsManagersDuringJitter(t *testing.T) {
+	config := DefaultConfig()
+	config.Transport = &mockTransport{}
+	config.MsgCodec = codec.NewJsonCodec()
+	config.GossipInterval = time.Second
+	config.MetadataGossipInterval = time.Second
+	config.StateGossipInterval = 2 * time.Second
+	config.NodeCleanupInterval = time.Second
+	config.PeerRecoveryInterval = 2 * time.Second
+	config.HealthCheckInterval = time.Second
+	config.SuspectRetryInterval = time.Second
+	config.DeadNodeRetryInterval = time.Second
+
+	cluster, err := NewCluster(config)
+	if err != nil {
+		t.Fatalf("Failed to create cluster: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		cluster.Start()
+		cluster.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("cluster stop should not block on manager jitter sleeps")
 	}
 }
 

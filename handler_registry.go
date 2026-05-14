@@ -47,7 +47,11 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 				return err
 			}
 
-			return packet.SendReply()
+			if err := packet.SendReply(); err != nil {
+				packet.Release()
+				return err
+			}
+			return nil
 		}
 		return nil
 	} else if mh.handler != nil {

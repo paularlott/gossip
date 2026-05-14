@@ -41,7 +41,9 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		node = newNodeWithTags(joinMsg.ID, joinMsg.AdvertiseAddr, joinMsg.Tags)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
 		node.ApplicationVersion = joinMsg.ApplicationVersion
+		node.mu.Lock()
 		node.observedState = joinMsg.State
+		node.mu.Unlock()
 
 		node = c.nodes.addIfNotExists(node)
 	} else {
@@ -60,7 +62,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		Accepted:          accepted,
 		RejectReason:      rejectReason,
 		NodeID:            c.localNode.ID,
-		AdvertiseAddr:     c.localNode.advertiseAddr,
+		AdvertiseAddr:     c.localNode.AdvertisedAddr(),
 		Tags:              c.localNode.GetTags(),
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
@@ -73,7 +75,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		for _, n := range nodes {
 			reply.Nodes = append(reply.Nodes, joinNode{
 				ID:            n.ID,
-				AdvertiseAddr: n.advertiseAddr,
+				AdvertiseAddr: n.AdvertisedAddr(),
 				Tags:          n.GetTags(),
 			})
 		}
@@ -127,11 +129,12 @@ func (c *Cluster) handlePushPullState(sender *Node, packet *Packet) (interface{}
 
 	var localStates []exchangeNodeState
 	for _, n := range nodes {
+		state, stateTS := n.GetStateSnapshot()
 		localStates = append(localStates, exchangeNodeState{
 			ID:             n.ID,
-			AdvertiseAddr:  n.advertiseAddr,
-			State:          n.observedState,
-			StateTimestamp: n.observedStateTime,
+			AdvertiseAddr:  n.AdvertisedAddr(),
+			State:          state,
+			StateTimestamp: stateTS,
 		})
 	}
 
@@ -183,8 +186,8 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 
 	return &pongMessage{
 		NodeID:            c.localNode.ID,
-		AdvertiseAddr:     c.localNode.advertiseAddr,
-		NodeState:         c.localNode.observedState,
+		AdvertiseAddr:     c.localNode.AdvertisedAddr(),
+		NodeState:         c.localNode.GetObservedState(),
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
 	}, nil

@@ -151,7 +151,30 @@ func (node *Node) IsAddressEmpty() bool {
 
 // AdvertiseAddr returns the node's advertise address string
 func (node *Node) AdvertisedAddr() string {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
 	return node.advertiseAddr
+}
+
+// SetAdvertisedAddr updates the node's advertised address.
+func (node *Node) SetAdvertisedAddr(addr string) {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.advertiseAddr = addr
+}
+
+// GetObservedStateTime returns the timestamp associated with the current observed state.
+func (node *Node) GetObservedStateTime() hlc.Timestamp {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.observedStateTime
+}
+
+// GetStateSnapshot returns the node state and its timestamp atomically.
+func (node *Node) GetStateSnapshot() (NodeState, hlc.Timestamp) {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.observedState, node.observedStateTime
 }
 
 // GetTags returns a copy of the node's tags.

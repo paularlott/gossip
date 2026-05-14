@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -8,12 +9,29 @@ import (
 	"github.com/paularlott/logger"
 )
 
+func getFreeTCPAddress(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to allocate free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Failed to release free port: %v", err)
+	}
+	return addr
+}
+
 // TestTagTransferOnJoin verifies that node tags are properly transferred when nodes join the cluster
 func TestTagTransferOnJoin(t *testing.T) {
+	addr1 := getFreeTCPAddress(t)
+	addr2 := getFreeTCPAddress(t)
+
 	// Create first cluster with tags
 	config1 := DefaultConfig()
-	config1.BindAddr = "127.0.0.1:18001"
-	config1.AdvertiseAddr = "127.0.0.1:18001"
+	config1.BindAddr = addr1
+	config1.AdvertiseAddr = addr1
 	config1.Tags = []string{"taga", "tagb"}
 	config1.Transport = NewSocketTransport(config1)
 	config1.MsgCodec = codec.NewShamatonMsgpackCodec()
@@ -36,8 +54,8 @@ func TestTagTransferOnJoin(t *testing.T) {
 
 	// Create second cluster with different tags
 	config2 := DefaultConfig()
-	config2.BindAddr = "127.0.0.1:18002"
-	config2.AdvertiseAddr = "127.0.0.1:18002"
+	config2.BindAddr = addr2
+	config2.AdvertiseAddr = addr2
 	config2.Tags = []string{"tagb", "tagc"}
 	config2.Transport = NewSocketTransport(config2)
 	config2.MsgCodec = codec.NewShamatonMsgpackCodec()
@@ -59,7 +77,7 @@ func TestTagTransferOnJoin(t *testing.T) {
 	}
 
 	// Join cluster2 to cluster1
-	err = cluster2.Join([]string{"127.0.0.1:18001"})
+	err = cluster2.Join([]string{addr1})
 	if err != nil {
 		t.Fatalf("Failed to join clusters: %v", err)
 	}

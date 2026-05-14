@@ -24,6 +24,8 @@ type messageHistory struct {
 	shards          []*historyShard
 	shutdownContext context.Context
 	cancelFunc      context.CancelFunc
+	wg              sync.WaitGroup
+	stopOnce        sync.Once
 }
 
 func newMessageHistory(config *Config) *messageHistory {
@@ -50,7 +52,10 @@ func newMessageHistory(config *Config) *messageHistory {
 }
 
 func (mh *messageHistory) stop() {
-	mh.cancelFunc()
+	mh.stopOnce.Do(func() {
+		mh.cancelFunc()
+		mh.wg.Wait()
+	})
 }
 
 func (mh *messageHistory) getShard(messageID MessageID) *historyShard {
@@ -81,7 +86,9 @@ func (mh *messageHistory) contains(nodeID NodeID, messageID MessageID) bool {
 }
 
 func (mh *messageHistory) pruneHistory() {
+	mh.wg.Add(1)
 	go func() {
+		defer mh.wg.Done()
 		pruneTimer := time.NewTicker(mh.config.MsgHistoryGCInterval)
 		defer pruneTimer.Stop()
 

@@ -734,15 +734,20 @@ func TestSocketTransport_SendWithReplyIntegration(t *testing.T) {
 
 	// Handler goroutine: read packet and send reply
 	go func() {
-		packet := <-st1.packetChannel
+		packet, ok := <-st1.packetChannel
+		if !ok || packet == nil {
+			return
+		}
 		if packet.CanReply() {
 			// Modify the received packet to be the reply and send it back
 			// SendReply() sends the packet itself into the reply channel
 			packet.SetCodec(config1.MsgCodec)
 			replyPayload, _ := config1.MsgCodec.Marshal("pong")
 			packet.SetPayload(replyPayload)
+			packet.AddRef()
 			packet.SendReply()
 		}
+		packet.Release()
 	}()
 
 	// Second transport sends with reply
