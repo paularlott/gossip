@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/codec/shamaton"
 	"github.com/paularlott/gossip/compression"
 	"github.com/paularlott/gossip/encryption"
 	"github.com/paularlott/logger"
@@ -75,6 +76,13 @@ func DefaultConfig() *Config {
 	return &Config{
 		BindAddr:      "127.0.0.1:8000",
 		AdvertiseAddr: "",
+
+		// MsgCodec defaults to shamaton-msgpack so DefaultConfig returns a fully
+		// working config and so consumers of this library and any embedding
+		// application (e.g. Scriptling's msgpack library) agree on the same
+		// wire format by default. Callers needing a different codec (JSON,
+		// vmihailenco, hashicorp) can override this field after construction.
+		MsgCodec: shamaton.New(),
 
 		CompressMinSize:          256,
 		BearerToken:              "",

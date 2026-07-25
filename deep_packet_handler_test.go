@@ -28,7 +28,7 @@ func TestPacketPayloadAndCodec(t *testing.T) {
 	p := NewPacket()
 	defer p.Release()
 
-	c := codec.NewJsonCodec()
+	c := codec.NewJSONCodec()
 	p.SetCodec(c)
 
 	if p.Codec() != c {
@@ -57,7 +57,7 @@ func TestPacketCodecAccessor(t *testing.T) {
 	p := NewPacket()
 	defer p.Release()
 
-	c := codec.NewJsonCodec()
+	c := codec.NewJSONCodec()
 	p.SetCodec(c)
 	if p.Codec() != c {
 		t.Error("Codec() should return what was set")
@@ -140,7 +140,7 @@ func TestHandlerRegistryBasic(t *testing.T) {
 	}
 
 	// Unregistered type returns nil
-	if hr.getHandler(UserMsg + 1) != nil {
+	if hr.getHandler(UserMsg+1) != nil {
 		t.Error("Unregistered handler should return nil")
 	}
 
@@ -208,7 +208,7 @@ func TestMsgHandlerDispatchFireAndForget(t *testing.T) {
 	}
 
 	packet := NewPacket()
-	packet.SetCodec(codec.NewJsonCodec())
+	packet.SetCodec(codec.NewJSONCodec())
 
 	err := mh.dispatch(nil, nil, packet)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestMsgHandlerDispatchHandlerError(t *testing.T) {
 	}
 
 	packet := NewPacket()
-	packet.SetCodec(codec.NewJsonCodec())
+	packet.SetCodec(codec.NewJSONCodec())
 
 	err := mh.dispatch(nil, nil, packet)
 	if err == nil || err.Error() != "handler error" {
@@ -238,7 +238,7 @@ func TestMsgHandlerDispatchHandlerError(t *testing.T) {
 func TestMsgHandlerDispatchReplyWithChannel(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestMsgHandlerDispatchReplyHandlerErrorDeep(t *testing.T) {
 	}
 
 	packet := NewPacket()
-	packet.SetCodec(codec.NewJsonCodec())
+	packet.SetCodec(codec.NewJSONCodec())
 
 	err := mh.dispatch(nil, nil, packet)
 	if err == nil || err.Error() != "reply handler error" {
@@ -297,7 +297,7 @@ func TestMsgHandlerDispatchReplyNilReplyData(t *testing.T) {
 
 	replyCh := make(chan *Packet, 1)
 	packet := NewPacket()
-	packet.SetCodec(codec.NewJsonCodec())
+	packet.SetCodec(codec.NewJSONCodec())
 	packet.SetReplyChan(replyCh)
 
 	err := mh.dispatch(nil, nil, packet)
@@ -318,7 +318,7 @@ func TestMsgHandlerDispatchNoHandlerDeep(t *testing.T) {
 	mh := &msgHandler{} // no handler or replyHandler
 
 	packet := NewPacket()
-	packet.SetCodec(codec.NewJsonCodec())
+	packet.SetCodec(codec.NewJSONCodec())
 
 	err := mh.dispatch(nil, nil, packet)
 	if err == nil {
@@ -329,7 +329,7 @@ func TestMsgHandlerDispatchNoHandlerDeep(t *testing.T) {
 func TestMsgHandlerDispatchReplyNoCanReply(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestMessageTypeConstants(t *testing.T) {
 func TestHandleJoinWithTags(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Tags = []string{"web"}
 
 	cluster, err := NewCluster(config)
@@ -432,7 +432,7 @@ func TestHandleJoinWithTags(t *testing.T) {
 func TestHandleJoinAppVersionCheckReject(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.ApplicationVersion = "2.0.0"
 	config.ApplicationVersionCheck = func(version string) bool {
 		return version == "2.0.0" // only accept exact match
@@ -483,7 +483,7 @@ func TestHandleJoinAppVersionCheckReject(t *testing.T) {
 func TestCreatePacketWithTargetAndTag(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

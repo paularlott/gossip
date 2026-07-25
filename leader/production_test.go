@@ -48,7 +48,7 @@ func newLeaderTestCluster(t *testing.T, transport gossip.Transport) *gossip.Clus
 	config := gossip.DefaultConfig()
 	config.NodeID = uuid.New().String()
 	config.Transport = transport
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Logger = logger.NewNullLogger()
 
 	cluster, err := gossip.NewCluster(config)
@@ -193,8 +193,8 @@ func TestLeaderElectionHandlerIgnoresCallbacksAfterStop(t *testing.T) {
 
 	packet := gossip.NewPacket()
 	defer packet.Release()
-	packet.SetCodec(codec.NewJsonCodec())
-	payload, err := codec.NewJsonCodec().Marshal(heartbeatMessage{
+	packet.SetCodec(codec.NewJSONCodec())
+	payload, err := codec.NewJSONCodec().Marshal(heartbeatMessage{
 		LeaderTime: time.Now(),
 		Term:       99,
 	})

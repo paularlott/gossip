@@ -28,9 +28,9 @@ func main() {
 	// Create configuration
 	config := gossip.DefaultConfig()
 	config.BindAddr = *bindAddr
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Transport = gossip.NewSocketTransport(config)
-	
+
 	// Configure health monitoring with faster intervals for demo
 	config.HealthCheckInterval = 2 * time.Second
 	config.SuspectTimeout = 1 * time.Second
@@ -48,9 +48,9 @@ func main() {
 
 	// Register node state change handler to monitor health events
 	cluster.HandleNodeStateChangeFunc(func(node *gossip.Node, newState gossip.NodeState) {
-		fmt.Printf("[%s] Node %s: -> %s\n", 
-			time.Now().Format("15:04:05"), 
-			node.ID.String()[:8], 
+		fmt.Printf("[%s] Node %s: -> %s\n",
+			time.Now().Format("15:04:05"),
+			node.ID.String()[:8],
 			newState.String())
 	})
 
@@ -79,10 +79,10 @@ func main() {
 				alive := cluster.NumAliveNodes()
 				suspect := cluster.NumSuspectNodes()
 				dead := cluster.NumDeadNodes()
-				
+
 				fmt.Printf("[%s] Cluster status: %d alive, %d suspect, %d dead\n",
 					time.Now().Format("15:04:05"), alive, suspect, dead)
-					
+
 				if alive > 1 || suspect > 0 || dead > 0 {
 					fmt.Printf("  Nodes:\n")
 					for _, node := range cluster.Nodes() {

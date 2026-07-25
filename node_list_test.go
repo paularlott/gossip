@@ -18,7 +18,7 @@ type testingInterface interface {
 func newTestCluster(t testingInterface) *Cluster {
 	config := DefaultConfig()
 	config.NodeShardCount = 4
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Transport = &mockTransport{}
 	cluster, err := NewCluster(config)
 	if err != nil {

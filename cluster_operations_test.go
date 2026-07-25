@@ -12,7 +12,7 @@ import (
 func TestClusterPublicAPIs(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestClusterPublicAPIs(t *testing.T) {
 func TestHandlerRegistration(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestHandlerRegistration(t *testing.T) {
 func TestEventHandlers(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -293,7 +293,7 @@ func TestAddressString(t *testing.T) {
 func TestClusterCalculationEdgeCases(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -341,7 +341,7 @@ func TestClusterCalculationEdgeCases(t *testing.T) {
 func TestBroadcastQueueFull(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SendQueueSize = 1 // Very small queue
 
 	cluster, err := NewCluster(config)
@@ -363,7 +363,7 @@ func TestBroadcastQueueFull(t *testing.T) {
 func TestJoinQueueFull(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 1 // Very small queue
 
 	cluster, err := NewCluster(config)

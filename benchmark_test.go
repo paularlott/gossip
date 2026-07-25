@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/codec/shamaton"
 	"github.com/paularlott/logger"
 )
 
@@ -14,7 +14,7 @@ func BenchmarkMessageBroadcast(b *testing.B) {
 	config := DefaultConfig()
 	config.BindAddr = "127.0.0.1:0"
 	config.Transport = NewSocketTransport(config)
-	config.MsgCodec = codec.NewShamatonMsgpackCodec()
+	config.MsgCodec = shamaton.New()
 	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)
@@ -41,7 +41,7 @@ func BenchmarkTaggedMessageBroadcast(b *testing.B) {
 	config.BindAddr = "127.0.0.1:0"
 	config.Tags = []string{"bench"}
 	config.Transport = NewSocketTransport(config)
-	config.MsgCodec = codec.NewShamatonMsgpackCodec()
+	config.MsgCodec = shamaton.New()
 	config.Logger = logger.NewNullLogger()
 
 	cluster, err := NewCluster(config)

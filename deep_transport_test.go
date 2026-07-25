@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression"
-	"github.com/paularlott/gossip/encryption"
+	"github.com/paularlott/gossip/compression/snappy"
+	"github.com/paularlott/gossip/encryption/aes"
 )
 
 // ============================================================================
@@ -42,7 +42,7 @@ func (r *mockResolver) LookupSRV(service string) ([]*net.TCPAddr, error) {
 
 func TestSocketTransport_ResolveAddressSRV(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{
 			{IP: net.ParseIP("10.0.0.1"), Port: 7946},
@@ -65,7 +65,7 @@ func TestSocketTransport_ResolveAddressSRV(t *testing.T) {
 
 func TestSocketTransport_ResolveAddressSRVError(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvErr: fmt.Errorf("SRV lookup failed"),
 	}
@@ -79,7 +79,7 @@ func TestSocketTransport_ResolveAddressSRVError(t *testing.T) {
 
 func TestSocketTransport_ResolveAddressSRVPreferIPv6(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.PreferIPv6 = true
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{
@@ -104,7 +104,7 @@ func TestSocketTransport_ResolveAddressSRVPreferIPv6(t *testing.T) {
 
 func TestSocketTransport_LookupIPDirectIP(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	addrs, err := st.lookupIP("127.0.0.1:8080")
@@ -121,7 +121,7 @@ func TestSocketTransport_LookupIPDirectIP(t *testing.T) {
 
 func TestSocketTransport_LookupIPNoPort(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	_, err := st.lookupIP("127.0.0.1")
@@ -132,7 +132,7 @@ func TestSocketTransport_LookupIPNoPort(t *testing.T) {
 
 func TestSocketTransport_LookupIPPortOnly(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	addrs, err := st.lookupIP("8080")
@@ -152,7 +152,7 @@ func TestSocketTransport_LookupIPPortOnly(t *testing.T) {
 
 func TestSocketTransport_LookupIPEmptyHost(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	addrs, err := st.lookupIP(":9000")
@@ -169,7 +169,7 @@ func TestSocketTransport_LookupIPEmptyHost(t *testing.T) {
 
 func TestSocketTransport_LookupIPInvalidPort(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	_, err := st.lookupIP("127.0.0.1:notaport")
@@ -180,7 +180,7 @@ func TestSocketTransport_LookupIPInvalidPort(t *testing.T) {
 
 func TestSocketTransport_LookupIPResolvesHostname(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		ips: []string{"192.168.1.1", "fd00::1"},
 	}
@@ -201,7 +201,7 @@ func TestSocketTransport_LookupIPResolvesHostname(t *testing.T) {
 
 func TestSocketTransport_LookupIPResolvesHostnamePreferIPv6(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.PreferIPv6 = true
 	config.Resolver = &mockResolver{
 		ips: []string{"192.168.1.1", "fd00::1"},
@@ -222,7 +222,7 @@ func TestSocketTransport_LookupIPResolvesHostnamePreferIPv6(t *testing.T) {
 
 func TestSocketTransport_LookupIPResolveError(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		ipErr: fmt.Errorf("DNS lookup failed"),
 	}
@@ -236,7 +236,7 @@ func TestSocketTransport_LookupIPResolveError(t *testing.T) {
 
 func TestSocketTransport_LookupSRVWithoutResolve(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{
 			{Port: 7946},
@@ -262,7 +262,7 @@ func TestSocketTransport_LookupSRVWithoutResolve(t *testing.T) {
 
 func TestSocketTransport_LookupSRVEmpty(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{},
 	}
@@ -280,7 +280,7 @@ func TestSocketTransport_LookupSRVEmpty(t *testing.T) {
 
 func TestSocketTransport_ParseBindAddressLeadingColon(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	addr, err := st.parseBindAddress(":8080")
@@ -294,7 +294,7 @@ func TestSocketTransport_ParseBindAddressLeadingColon(t *testing.T) {
 
 func TestSocketTransport_ParseBindAddressFull(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	addr, err := st.parseBindAddress("192.168.1.1:9000")
@@ -311,7 +311,7 @@ func TestSocketTransport_ParseBindAddressFull(t *testing.T) {
 
 func TestSocketTransport_ParseBindAddressInvalid(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	_, err := st.parseBindAddress("not[valid:address")
@@ -326,7 +326,7 @@ func TestSocketTransport_ParseBindAddressInvalid(t *testing.T) {
 
 func TestSocketTransport_EnsureNodeAddressResolvedAlreadyResolved(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	node := newNode(NodeID(uuid.New()), "127.0.0.1:8080")
@@ -340,7 +340,7 @@ func TestSocketTransport_EnsureNodeAddressResolvedAlreadyResolved(t *testing.T) 
 
 func TestSocketTransport_EnsureNodeAddressResolvedEmpty(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	node := newNode(NodeID(uuid.New()), "")
@@ -353,7 +353,7 @@ func TestSocketTransport_EnsureNodeAddressResolvedEmpty(t *testing.T) {
 
 func TestSocketTransport_EnsureNodeAddressResolved(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 	node := newNode(NodeID(uuid.New()), "127.0.0.1:8080")
@@ -373,7 +373,7 @@ func TestSocketTransport_EnsureNodeAddressResolved(t *testing.T) {
 
 func TestSocketTransport_PacketRoundTripPlain(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 
@@ -408,7 +408,7 @@ func TestSocketTransport_PacketRoundTripPlain(t *testing.T) {
 
 func TestSocketTransport_PacketRoundTripWithReplyFlag(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 
@@ -436,8 +436,8 @@ func TestSocketTransport_PacketRoundTripWithReplyFlag(t *testing.T) {
 
 func TestSocketTransport_PacketRoundTripWithCompression(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
-	config.Compressor = compression.NewSnappyCompressor()
+	config.MsgCodec = codec.NewJSONCodec()
+	config.Compressor = snappy.New()
 	config.CompressMinSize = 1
 
 	st := NewSocketTransport(config)
@@ -470,8 +470,8 @@ func TestSocketTransport_PacketRoundTripWithCompression(t *testing.T) {
 
 func TestSocketTransport_PacketRoundTripWithEncryption(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
-	config.Cipher = encryption.NewAESEncryptor()
+	config.MsgCodec = codec.NewJSONCodec()
+	config.Cipher = aes.New()
 	config.EncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 
 	st := NewSocketTransport(config)
@@ -500,10 +500,10 @@ func TestSocketTransport_PacketRoundTripWithEncryption(t *testing.T) {
 
 func TestSocketTransport_PacketRoundTripWithCompressionAndEncryption(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
-	config.Compressor = compression.NewSnappyCompressor()
+	config.MsgCodec = codec.NewJSONCodec()
+	config.Compressor = snappy.New()
 	config.CompressMinSize = 1
-	config.Cipher = encryption.NewAESEncryptor()
+	config.Cipher = aes.New()
 	config.EncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 
 	st := NewSocketTransport(config)
@@ -541,7 +541,7 @@ func TestSocketTransport_PacketRoundTripWithCompressionAndEncryption(t *testing.
 
 func TestSocketTransport_PacketFromBufferTooSmall(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 
@@ -553,7 +553,7 @@ func TestSocketTransport_PacketFromBufferTooSmall(t *testing.T) {
 
 func TestSocketTransport_PacketFromBufferTruncatedHeader(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	st := NewSocketTransport(config)
 
@@ -567,8 +567,8 @@ func TestSocketTransport_PacketFromBufferTruncatedHeader(t *testing.T) {
 
 func TestSocketTransport_PacketFromBufferBadDecryption(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
-	config.Cipher = encryption.NewAESEncryptor()
+	config.MsgCodec = codec.NewJSONCodec()
+	config.Cipher = aes.New()
 	config.EncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 
 	st := NewSocketTransport(config)
@@ -589,7 +589,7 @@ func TestSocketTransport_PacketFromBufferBadDecryption(t *testing.T) {
 
 func TestSocketTransport_TCPSendReceiveIntegration(t *testing.T) {
 	config1 := DefaultConfig()
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 	config1.BindAddr = ":0" // random port
 	config1.AdvertiseAddr = "127.0.0.1:0"
 
@@ -610,7 +610,7 @@ func TestSocketTransport_TCPSendReceiveIntegration(t *testing.T) {
 
 	// Create second transport to connect to first
 	config2 := DefaultConfig()
-	config2.MsgCodec = codec.NewJsonCodec()
+	config2.MsgCodec = codec.NewJSONCodec()
 
 	st2 := NewSocketTransport(config2)
 
@@ -649,7 +649,7 @@ func TestSocketTransport_TCPSendReceiveIntegration(t *testing.T) {
 
 func TestSocketTransport_UDPSendReceiveIntegration(t *testing.T) {
 	config1 := DefaultConfig()
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 	config1.BindAddr = ":0"
 	config1.AdvertiseAddr = "127.0.0.1:0"
 
@@ -670,7 +670,7 @@ func TestSocketTransport_UDPSendReceiveIntegration(t *testing.T) {
 
 	// Second transport
 	config2 := DefaultConfig()
-	config2.MsgCodec = codec.NewJsonCodec()
+	config2.MsgCodec = codec.NewJSONCodec()
 	config2.BindAddr = ":0"
 	config2.AdvertiseAddr = "127.0.0.1:0"
 	config2.UDPMaxPacketSize = 65535
@@ -714,7 +714,7 @@ func TestSocketTransport_UDPSendReceiveIntegration(t *testing.T) {
 
 func TestSocketTransport_SendWithReplyIntegration(t *testing.T) {
 	config1 := DefaultConfig()
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 	config1.BindAddr = ":0"
 	config1.AdvertiseAddr = "127.0.0.1:0"
 
@@ -752,7 +752,7 @@ func TestSocketTransport_SendWithReplyIntegration(t *testing.T) {
 
 	// Second transport sends with reply
 	config2 := DefaultConfig()
-	config2.MsgCodec = codec.NewJsonCodec()
+	config2.MsgCodec = codec.NewJSONCodec()
 
 	st2 := NewSocketTransport(config2)
 
@@ -780,7 +780,7 @@ func TestSocketTransport_SendWithReplyIntegration(t *testing.T) {
 
 func TestSocketTransport_ForceReliableTransport(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.ForceReliableTransport = true
 	config.BindAddr = ":0"
 	config.AdvertiseAddr = "127.0.0.1:0"
@@ -810,7 +810,7 @@ func TestSocketTransport_ForceReliableTransport(t *testing.T) {
 
 func TestSocketTransport_SendForcesReliableForLargePacket(t *testing.T) {
 	config1 := DefaultConfig()
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 	config1.BindAddr = ":0"
 	config1.AdvertiseAddr = "127.0.0.1:0"
 	config1.UDPMaxPacketSize = 10 // very small
@@ -830,7 +830,7 @@ func TestSocketTransport_SendForcesReliableForLargePacket(t *testing.T) {
 	actualPort := tcpAddr.Port
 
 	config2 := DefaultConfig()
-	config2.MsgCodec = codec.NewJsonCodec()
+	config2.MsgCodec = codec.NewJSONCodec()
 	config2.UDPMaxPacketSize = 10 // force large packets to TCP
 
 	st2 := NewSocketTransport(config2)
@@ -867,7 +867,7 @@ func TestSocketTransport_SendForcesReliableForLargePacket(t *testing.T) {
 
 func TestSocketTransport_DialPeerAllFail(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.TCPDialTimeout = 200 * time.Millisecond
 
 	st := NewSocketTransport(config)
@@ -883,7 +883,7 @@ func TestSocketTransport_DialPeerAllFail(t *testing.T) {
 
 func TestSocketTransport_SendUDPResolveFailed(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.BindAddr = ":0"
 	config.AdvertiseAddr = "127.0.0.1:0"
 	config.Resolver = &mockResolver{
@@ -924,7 +924,7 @@ func TestSocketTransport_SendUDPResolveFailed(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedEmptyAddr(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	node := newNode(NodeID(uuid.New()), "")
@@ -936,7 +936,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedEmptyAddr(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedHTTPS(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.BindAddr = "/gossip"
 	ht := NewHTTPTransport(config)
 
@@ -954,7 +954,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedHTTPS(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedSRV(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.BindAddr = "/gossip"
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{
@@ -977,7 +977,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedSRV(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedSRVError(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvErr: fmt.Errorf("SRV failed"),
 	}
@@ -992,7 +992,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedSRVError(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedSRVNoRecords(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Resolver = &mockResolver{
 		srvAddrs: []*net.TCPAddr{},
 	}
@@ -1007,7 +1007,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedSRVNoRecords(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedAlreadySet(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	node := newNode(NodeID(uuid.New()), "https://myhost:8443")
@@ -1021,7 +1021,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedAlreadySet(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedNoScheme(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.BindAddr = ""
 	ht := NewHTTPTransport(config)
 
@@ -1039,7 +1039,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedNoScheme(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedBadURL(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	node := newNode(NodeID(uuid.New()), "srv+://[bad url\\")
@@ -1051,7 +1051,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedBadURL(t *testing.T) {
 
 func TestHTTPTransport_EnsureNodeAddressResolvedBadNonSRVURL(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	node := newNode(NodeID(uuid.New()), "://[bad url\\")
@@ -1063,7 +1063,7 @@ func TestHTTPTransport_EnsureNodeAddressResolvedBadNonSRVURL(t *testing.T) {
 
 func TestHTTPTransport_PacketFromBufferTooSmall(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	_, err := ht.packetFromBuffer([]byte{0x01})
@@ -1074,7 +1074,7 @@ func TestHTTPTransport_PacketFromBufferTooSmall(t *testing.T) {
 
 func TestHTTPTransport_PacketFromBufferTruncatedHeader(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	data := []byte{0xFF, 0x3F, 0x00}
@@ -1086,7 +1086,7 @@ func TestHTTPTransport_PacketFromBufferTruncatedHeader(t *testing.T) {
 
 func TestHTTPTransport_PacketRoundTrip(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 
 	packet := NewPacket()
@@ -1234,7 +1234,7 @@ func TestAddressClear(t *testing.T) {
 
 func TestSocketTransportName(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	st := NewSocketTransport(config)
 	if st.Name() != "socket" {
 		t.Errorf("Expected 'socket', got %q", st.Name())
@@ -1243,7 +1243,7 @@ func TestSocketTransportName(t *testing.T) {
 
 func TestHTTPTransportName(t *testing.T) {
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	ht := NewHTTPTransport(config)
 	if ht.Name() != "http" {
 		t.Errorf("Expected 'http', got %q", ht.Name())

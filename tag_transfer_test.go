@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/codec/shamaton"
 	"github.com/paularlott/logger"
 )
 
@@ -34,7 +34,7 @@ func TestTagTransferOnJoin(t *testing.T) {
 	config1.AdvertiseAddr = addr1
 	config1.Tags = []string{"taga", "tagb"}
 	config1.Transport = NewSocketTransport(config1)
-	config1.MsgCodec = codec.NewShamatonMsgpackCodec()
+	config1.MsgCodec = shamaton.New()
 	config1.Logger = logger.NewNullLogger()
 
 	cluster1, err := NewCluster(config1)
@@ -58,7 +58,7 @@ func TestTagTransferOnJoin(t *testing.T) {
 	config2.AdvertiseAddr = addr2
 	config2.Tags = []string{"tagb", "tagc"}
 	config2.Transport = NewSocketTransport(config2)
-	config2.MsgCodec = codec.NewShamatonMsgpackCodec()
+	config2.MsgCodec = shamaton.New()
 	config2.Logger = logger.NewNullLogger()
 
 	cluster2, err := NewCluster(config2)

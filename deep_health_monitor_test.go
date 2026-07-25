@@ -26,10 +26,10 @@ func TestProcessHealthCheckDirectPingSuccess(t *testing.T) {
 			Metadata:          map[string]interface{}{},
 			NodeState:         NodeAlive,
 		},
-		codec: codec.NewJsonCodec(),
+		codec: codec.NewJSONCodec(),
 	}
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestProcessHealthCheckDirectPingSuccess(t *testing.T) {
 func TestProcessHealthCheckDirectPingFailure(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{} // fails SendWithReply
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -97,10 +97,10 @@ func TestProcessHealthCheckSuspectRetrySuccess(t *testing.T) {
 			Metadata:          map[string]interface{}{},
 			NodeState:         NodeAlive,
 		},
-		codec: codec.NewJsonCodec(),
+		codec: codec.NewJSONCodec(),
 	}
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestProcessHealthCheckSuspectRetrySuccess(t *testing.T) {
 func TestProcessHealthCheckSuspectRetryFailureNotYetDead(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.DeadNodeTimeout = 1 * time.Hour // long timeout so it stays suspect
 
 	cluster, err := NewCluster(config)
@@ -159,7 +159,7 @@ func TestProcessHealthCheckSuspectRetryFailureNotYetDead(t *testing.T) {
 func TestProcessHealthCheckSuspectRetryFailureMarkDead(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.DeadNodeTimeout = 1 * time.Millisecond
 
 	cluster, err := NewCluster(config)
@@ -203,10 +203,10 @@ func TestProcessHealthCheckDeadNodeRetrySuccess(t *testing.T) {
 			Metadata:          map[string]interface{}{},
 			NodeState:         NodeAlive,
 		},
-		codec: codec.NewJsonCodec(),
+		codec: codec.NewJSONCodec(),
 	}
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -235,7 +235,7 @@ func TestProcessHealthCheckDeadNodeRetrySuccess(t *testing.T) {
 func TestProcessHealthCheckDeadNodeRetryStillDead(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{} // fails
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -264,7 +264,7 @@ func TestProcessHealthCheckDeadNodeRetryStillDead(t *testing.T) {
 func TestProcessHealthCheckNonexistentNode(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -295,10 +295,10 @@ func TestPingNodeAddressUpdate(t *testing.T) {
 			Metadata:          map[string]interface{}{"key": "val"},
 			NodeState:         NodeAlive,
 		},
-		codec: codec.NewJsonCodec(),
+		codec: codec.NewJSONCodec(),
 	}
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -332,7 +332,7 @@ func TestPingNodeAddressUpdate(t *testing.T) {
 func TestEnqueueHealthCheckQueueFull(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.HealthCheckQueueDepth = 1
 
 	cluster, err := NewCluster(config)
@@ -359,7 +359,7 @@ func TestEnqueueHealthCheckQueueFull(t *testing.T) {
 func TestScanNodesSkipsLocalNode(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SuspectTimeout = 1 * time.Millisecond
 	config.HealthCheckQueueDepth = 100
 
@@ -383,7 +383,7 @@ func TestScanNodesSkipsLocalNode(t *testing.T) {
 func TestScanNodesEnqueuesSuspectCandidates(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SuspectTimeout = 1 * time.Millisecond
 	config.HealthCheckQueueDepth = 100
 
@@ -423,7 +423,7 @@ func TestScanNodesEnqueuesSuspectCandidates(t *testing.T) {
 func TestRetryDeadNodesWithinRetryWindow(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.MaxDeadNodeRetryTime = 1 * time.Hour
 	config.HealthCheckQueueDepth = 100
 
@@ -453,7 +453,7 @@ func TestRetryDeadNodesWithinRetryWindow(t *testing.T) {
 func TestRetryDeadNodesExceedsRetryWindow(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.MaxDeadNodeRetryTime = 1 * time.Millisecond
 	config.HealthCheckQueueDepth = 100
 
@@ -488,7 +488,7 @@ func TestRetryDeadNodesExceedsRetryWindow(t *testing.T) {
 func TestRetrySuspectNodes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.HealthCheckQueueDepth = 100
 
 	cluster, err := NewCluster(config)

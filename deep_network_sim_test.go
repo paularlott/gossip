@@ -112,7 +112,7 @@ func TestNetworkPartitionCausesNodeSuspect(t *testing.T) {
 	mt := newConfigurableMockTransport()
 	config := DefaultConfig()
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestNetworkPartitionAndRecovery(t *testing.T) {
 	mt := newConfigurableMockTransport()
 	config := DefaultConfig()
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 100
 
 	cluster, err := NewCluster(config)
@@ -195,7 +195,7 @@ func TestIntermittentSendFailures(t *testing.T) {
 	mt := newConfigurableMockTransport()
 	config := DefaultConfig()
 	config.Transport = mt
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SendQueueSize = 200
 
 	cluster, err := NewCluster(config)
@@ -268,7 +268,7 @@ func TestIntermittentSendFailures(t *testing.T) {
 func TestNodeFlappingRapidStateChanges(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -310,7 +310,7 @@ func TestNodeFlappingRapidStateChanges(t *testing.T) {
 func TestConcurrentStateChangesCounterConsistency(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestConcurrentStateChangesCounterConsistency(t *testing.T) {
 func TestSimultaneousRestartStateConvergence(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 100
 
 	cluster, err := NewCluster(config)
@@ -425,7 +425,7 @@ func TestSimultaneousRestartStateConvergence(t *testing.T) {
 func TestSplitBrainStateMerging(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 100
 
 	cluster, err := NewCluster(config)
@@ -495,7 +495,7 @@ func TestSplitBrainStateMerging(t *testing.T) {
 func TestBroadcastQueueOverflow(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SendQueueSize = 5 // small queue
 
 	cluster, err := NewCluster(config)
@@ -621,7 +621,7 @@ func TestConcurrentMetadataOperations(t *testing.T) {
 func TestConcurrentEventHandlerRegistrationAndNotification(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

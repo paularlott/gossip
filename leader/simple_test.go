@@ -9,7 +9,7 @@ import (
 
 func TestQuorumCalculationSimple(t *testing.T) {
 	config := DefaultConfig()
-	
+
 	tests := []struct {
 		nodes    int
 		expected int
@@ -22,12 +22,12 @@ func TestQuorumCalculationSimple(t *testing.T) {
 		{5, 3},
 		{10, 6},
 	}
-	
+
 	// Create a minimal election instance just for testing quorum calculation
 	election := &LeaderElection{
 		config: config,
 	}
-	
+
 	for _, test := range tests {
 		result := election.calculateQuorumForNodes(test.nodes)
 		assert.Equal(t, test.expected, result, "nodes: %d", test.nodes)
@@ -36,7 +36,7 @@ func TestQuorumCalculationSimple(t *testing.T) {
 
 func TestDefaultConfigSimple(t *testing.T) {
 	config := DefaultConfig()
-	
+
 	assert.Equal(t, 1*time.Second, config.LeaderCheckInterval)
 	assert.Equal(t, 3*time.Second, config.LeaderTimeout)
 	assert.Equal(t, 60, config.QuorumPercentage)
@@ -54,7 +54,7 @@ func TestEventTypeStringSimple(t *testing.T) {
 		{SteppedDownEvent, "Stepped Down"},
 		{EventType(999), "Unknown"},
 	}
-	
+
 	for _, test := range tests {
 		assert.Equal(t, test.expected, test.event.String())
 	}
@@ -62,7 +62,7 @@ func TestEventTypeStringSimple(t *testing.T) {
 
 func TestQuorumPercentageEdgeCases(t *testing.T) {
 	config := DefaultConfig()
-	
+
 	testCases := []struct {
 		percentage int
 		nodes      int
@@ -74,16 +74,16 @@ func TestQuorumPercentageEdgeCases(t *testing.T) {
 		{100, 3, 3}, // 100% of 3 = 3
 		{0, 3, 0},   // 0% should result in 0 quorum
 	}
-	
+
 	for _, tc := range testCases {
 		config.QuorumPercentage = tc.percentage
-		
+
 		election := &LeaderElection{
 			config: config,
 		}
-		
+
 		result := election.calculateQuorumForNodes(tc.nodes)
-		assert.Equal(t, tc.expected, result, 
+		assert.Equal(t, tc.expected, result,
 			"percentage: %d, nodes: %d", tc.percentage, tc.nodes)
 	}
 }

@@ -169,7 +169,7 @@ func (c *Cluster) Start() {
 	// Start the transport
 	if err := c.transport.Start(c.shutdownContext, &c.shutdownWg); err != nil {
 		c.logger.WithError(err).Error("failed to start transport")
-		panic("Failed to start cluster")
+		panic(fmt.Errorf("failed to start cluster: %w", err))
 	}
 
 	// Start the send workers

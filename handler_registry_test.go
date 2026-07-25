@@ -485,7 +485,7 @@ func BenchmarkMsgHandlerDispatchReply(b *testing.B) {
 	}
 
 	config := DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Transport = &mockTransport{}
 
 	cluster, err := NewCluster(config)

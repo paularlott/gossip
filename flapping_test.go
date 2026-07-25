@@ -18,7 +18,7 @@ import (
 func TestAddIfNotExistsDoesNotCorruptCounters(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestAddIfNotExistsDoesNotCorruptCounters(t *testing.T) {
 func TestCombineStatesPropagatesAlive(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestCombineStatesPropagatesAlive(t *testing.T) {
 func TestCombineStatesRejectsOlderAlive(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestCombineStatesRejectsOlderAlive(t *testing.T) {
 func TestCombineStatesStillAcceptsDead(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestCombineStatesStillAcceptsDead(t *testing.T) {
 func TestJoinReplyRejoinsDeadPeers(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 100
 
 	cluster, err := NewCluster(config)
@@ -234,7 +234,7 @@ func TestJoinReplyRejoinsDeadPeers(t *testing.T) {
 func TestCounterConsistencyAfterStateTransitions(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -326,7 +326,7 @@ func TestCounterConsistencyAfterStateTransitions(t *testing.T) {
 func TestCombineStatesFlappingResistance(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -403,7 +403,7 @@ func TestCombineStatesFlappingResistance(t *testing.T) {
 func TestCombineStatesRecoveryPropagation(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	// Simulate Node C's cluster
 	clusterC, err := NewCluster(config)
@@ -449,7 +449,7 @@ func TestCombineStatesRecoveryPropagation(t *testing.T) {
 func TestDataNodeGroupSuspectMetadata(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -512,7 +512,7 @@ func TestDataNodeGroupSuspectMetadata(t *testing.T) {
 func TestSimultaneousRestartConvergence(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -593,7 +593,7 @@ func TestSimultaneousRestartConvergence(t *testing.T) {
 func TestCombineStatesIgnoresLocalNode(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -623,7 +623,7 @@ func TestCombineStatesIgnoresLocalNode(t *testing.T) {
 func TestCombineStatesTombstonePreservation(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -660,7 +660,7 @@ func TestCombineStatesTombstonePreservation(t *testing.T) {
 func TestCombineStatesSuspectTransition(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -698,7 +698,7 @@ func TestCombineStatesSuspectTransition(t *testing.T) {
 func TestHandleJoinUpdatesDeadNodeState(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

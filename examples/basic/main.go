@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip"
-	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression"
-	"github.com/paularlott/gossip/encryption"
+	"github.com/paularlott/gossip/codec/shamaton"
+	"github.com/paularlott/gossip/compression/snappy"
+	"github.com/paularlott/gossip/encryption/aes"
 	"github.com/paularlott/gossip/examples/common"
 )
 
@@ -52,10 +52,10 @@ func main() {
 	config.AdvertiseAddr = advertiseAddr
 	config.BearerToken = "my-secret-token"
 	config.EncryptionKey = []byte("1234567890123456")
-	config.Cipher = encryption.NewAESEncryptor()
+	config.Cipher = aes.New()
 	config.Logger = common.GetLogger()
-	config.MsgCodec = codec.NewShamatonMsgpackCodec()
-	config.Compressor = compression.NewSnappyCompressor()
+	config.MsgCodec = shamaton.New()
+	config.Compressor = snappy.New()
 
 	var httpTransport *gossip.HTTPTransport
 	if *webPort > 0 {

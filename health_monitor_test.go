@@ -10,7 +10,7 @@ import (
 func TestHealthMonitorBasic(t *testing.T) {
 	config1 := DefaultConfig()
 	config1.BindAddr = "127.0.0.1:0"
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 	config1.Transport = NewSocketTransport(config1)
 	config1.HealthCheckInterval = 100 * time.Millisecond
 	config1.SuspectTimeout = 50 * time.Millisecond

@@ -8,8 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression"
-	"github.com/paularlott/gossip/encryption"
+	"github.com/paularlott/gossip/codec/hashicorp"
+	"github.com/paularlott/gossip/codec/shamaton"
+	"github.com/paularlott/gossip/codec/vmihailenco"
+	"github.com/paularlott/gossip/compression/snappy"
+	"github.com/paularlott/gossip/encryption/aes"
 	"github.com/paularlott/logger"
 )
 
@@ -64,9 +67,10 @@ func TestCodecImplementations(t *testing.T) {
 		name  string
 		codec codec.Serializer
 	}{
-		{"JSON", codec.NewJsonCodec()},
-		{"Shamaton", codec.NewShamatonMsgpackCodec()},
-		{"Vmihailenco", codec.NewVmihailencoMsgpackCodec()},
+		{"JSON", codec.NewJSONCodec()},
+		{"Shamaton", shamaton.New()},
+		{"Vmihailenco", vmihailenco.New()},
+		{"Hashicorp", hashicorp.New()},
 	}
 
 	testData := map[string]interface{}{
@@ -100,7 +104,7 @@ func TestCodecImplementations(t *testing.T) {
 
 // TestCompressionImplementations tests compression implementations
 func TestCompressionImplementations(t *testing.T) {
-	compressor := compression.NewSnappyCompressor()
+	compressor := snappy.New()
 
 	testData := []byte("This is a test string that should compress well when repeated. " +
 		"This is a test string that should compress well when repeated. " +
@@ -125,7 +129,7 @@ func TestCompressionImplementations(t *testing.T) {
 
 // TestEncryptionImplementations tests encryption implementations
 func TestEncryptionImplementations(t *testing.T) {
-	encryptor := encryption.NewAESEncryptor()
+	encryptor := aes.New()
 	key := []byte("12345678901234567890123456789012") // 32 bytes
 	testData := []byte("This is secret data that needs encryption")
 

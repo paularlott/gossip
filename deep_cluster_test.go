@@ -18,7 +18,7 @@ import (
 func TestExchangeStateUpdatesNodes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestExchangeStateUpdatesNodes(t *testing.T) {
 func TestExchangeStateExcludesNodes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestExchangeStateExcludesNodes(t *testing.T) {
 func TestCombineStatesUnknownNodeAlive(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 10
 
 	cluster, err := NewCluster(config)
@@ -107,7 +107,7 @@ func TestCombineStatesUnknownNodeAlive(t *testing.T) {
 func TestCombineStatesUnknownNodeDead(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestCombineStatesUnknownNodeDead(t *testing.T) {
 func TestCombineStatesUnknownNodeLeaving(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestCombineStatesUnknownNodeLeaving(t *testing.T) {
 func TestCombineStatesAddressChangeIgnoredFromGossip(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 10
 
 	cluster, err := NewCluster(config)
@@ -221,7 +221,7 @@ func TestCombineStatesAddressChangeIgnoredFromGossip(t *testing.T) {
 func TestCombineStatesOlderTimestampIgnored(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestCombineStatesOlderTimestampIgnored(t *testing.T) {
 func TestCombineStatesSameStateSameTimestamp(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -289,7 +289,7 @@ func TestCombineStatesSameStateSameTimestamp(t *testing.T) {
 func TestCheckPeerConnectivityNoSeedPeers(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -303,7 +303,7 @@ func TestCheckPeerConnectivityNoSeedPeers(t *testing.T) {
 func TestCheckPeerConnectivityBelowThreshold(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.PeerRecoveryInterval = 1 * time.Second
 	config.JoinQueueSize = 100
 
@@ -343,7 +343,7 @@ func TestCheckPeerConnectivityBelowThreshold(t *testing.T) {
 func TestCheckPeerConnectivityAboveThreshold(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.PeerRecoveryInterval = 1 * time.Second
 
 	cluster, err := NewCluster(config)
@@ -370,7 +370,7 @@ func TestCheckPeerConnectivityAboveThreshold(t *testing.T) {
 func TestCheckPeerConnectivityRecentRecoverySkipped(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.PeerRecoveryInterval = 30 * time.Second
 
 	cluster, err := NewCluster(config)
@@ -392,7 +392,7 @@ func TestCheckPeerConnectivityRecentRecoverySkipped(t *testing.T) {
 func TestRetrySeedPeersNoSeeds(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -406,7 +406,7 @@ func TestRetrySeedPeersNoSeeds(t *testing.T) {
 func TestRetrySeedPeersQueuesJoinRequests(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.JoinQueueSize = 100
 
 	cluster, err := NewCluster(config)
@@ -453,7 +453,7 @@ func TestRetrySeedPeersQueuesJoinRequests(t *testing.T) {
 func TestAdjustGossipIntervalIncrease(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = 5 * time.Second
 	config.GossipMaxInterval = 20 * time.Second
 
@@ -478,7 +478,7 @@ func TestAdjustGossipIntervalIncrease(t *testing.T) {
 func TestAdjustGossipIntervalCappedAtMax(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = 5 * time.Second
 	config.GossipMaxInterval = 10 * time.Second
 
@@ -502,7 +502,7 @@ func TestAdjustGossipIntervalCappedAtMax(t *testing.T) {
 func TestAdjustGossipIntervalDecrease(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = 5 * time.Second
 	config.GossipMaxInterval = 20 * time.Second
 
@@ -529,7 +529,7 @@ func TestAdjustGossipIntervalDecrease(t *testing.T) {
 func TestAdjustGossipIntervalNeverBelowBase(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = 5 * time.Second
 	config.GossipMaxInterval = 20 * time.Second
 
@@ -554,7 +554,7 @@ func TestAdjustGossipIntervalNeverBelowBase(t *testing.T) {
 func TestAdjustGossipIntervalNoChangeWhenAtBase(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = 5 * time.Second
 
 	cluster, err := NewCluster(config)
@@ -581,7 +581,7 @@ func TestAdjustGossipIntervalNoChangeWhenAtBase(t *testing.T) {
 func TestHandleFuncWithResponse(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -610,7 +610,7 @@ func TestHandleFuncWithResponse(t *testing.T) {
 func TestHandleFuncWithResponseInvalidType(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -635,7 +635,7 @@ func TestHandleFuncWithResponseInvalidType(t *testing.T) {
 func TestHandleFuncRegistration(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -659,7 +659,7 @@ func TestHandleFuncRegistration(t *testing.T) {
 func TestUnregisterMessageType(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -691,7 +691,7 @@ func TestUnregisterMessageType(t *testing.T) {
 func TestHandleIncomingPacketFromSelf(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -710,7 +710,7 @@ func TestHandleIncomingPacketFromSelf(t *testing.T) {
 func TestHandleIncomingPacketAlreadySeen(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -736,7 +736,7 @@ func TestHandleIncomingPacketAlreadySeen(t *testing.T) {
 func TestHandleIncomingPacketTargetedToOther(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -759,7 +759,7 @@ func TestHandleIncomingPacketTargetedToOther(t *testing.T) {
 func TestHandleIncomingPacketTagFiltering(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Tags = []string{"web"}
 
 	cluster, err := NewCluster(config)
@@ -805,7 +805,7 @@ func TestHandleIncomingPacketTagFiltering(t *testing.T) {
 func TestHandleIncomingPacketUnknownSenderNonJoin(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -846,7 +846,7 @@ func TestHandleIncomingPacketUnknownSenderNonJoin(t *testing.T) {
 func TestEnqueuePacketForBroadcastTTLZero(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -872,7 +872,7 @@ func TestEnqueuePacketForBroadcastTTLZero(t *testing.T) {
 func TestEnqueuePacketForBroadcastQueueFull(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.SendQueueSize = 1
 
 	cluster, err := NewCluster(config)
@@ -902,7 +902,7 @@ func TestEnqueuePacketForBroadcastQueueFull(t *testing.T) {
 func TestCleanupNodesLeavingToDeadTransition(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.LeavingNodeTimeout = 1 * time.Millisecond
 	config.NodeRetentionTime = 1 * time.Hour
 
@@ -929,7 +929,7 @@ func TestCleanupNodesLeavingToDeadTransition(t *testing.T) {
 func TestCleanupNodesDeadRemoval(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.LeavingNodeTimeout = 1 * time.Hour
 	config.NodeRetentionTime = 1 * time.Millisecond
 
@@ -959,7 +959,7 @@ func TestCleanupNodesDeadRemoval(t *testing.T) {
 func TestSendVariants(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1014,7 +1014,7 @@ func TestSendVariants(t *testing.T) {
 func TestSendToVariants(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1081,7 +1081,7 @@ func TestSendToVariants(t *testing.T) {
 func TestSendTaggedInvalidTypes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1103,7 +1103,7 @@ func TestSendTaggedInvalidTypes(t *testing.T) {
 func TestSendToWithResponseInvalidType(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1125,7 +1125,7 @@ func TestSendToWithResponseInvalidType(t *testing.T) {
 func TestClusterAccessors(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Tags = []string{"web", "api"}
 
 	cluster, err := NewCluster(config)
@@ -1207,7 +1207,7 @@ func TestClusterAccessors(t *testing.T) {
 func TestNodeStateChangeHandler(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1252,7 +1252,7 @@ func TestNodeStateChangeHandler(t *testing.T) {
 func TestNodeMetadataChangeHandler(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1290,7 +1290,7 @@ func TestNodeMetadataChangeHandler(t *testing.T) {
 func TestGossipHandler(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1338,7 +1338,7 @@ func TestNewClusterValidation(t *testing.T) {
 
 	// Missing transport
 	config = DefaultConfig()
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Transport = nil
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1348,7 +1348,7 @@ func TestNewClusterValidation(t *testing.T) {
 	// Invalid encrypt key
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.EncryptionKey = []byte("short")
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1359,7 +1359,7 @@ func TestNewClusterValidation(t *testing.T) {
 	for _, keyLen := range []int{16, 24, 32} {
 		config = DefaultConfig()
 		config.Transport = &mockTransport{}
-		config.MsgCodec = codec.NewJsonCodec()
+		config.MsgCodec = codec.NewJSONCodec()
 		config.EncryptionKey = make([]byte, keyLen)
 		_, err = NewCluster(config)
 		if err != nil {
@@ -1369,7 +1369,7 @@ func TestNewClusterValidation(t *testing.T) {
 
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.MsgHistoryShardCount = 3
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1378,7 +1378,7 @@ func TestNewClusterValidation(t *testing.T) {
 
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.NodeShardCount = 3
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1388,7 +1388,7 @@ func TestNewClusterValidation(t *testing.T) {
 	// Cipher without key
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.Cipher = &mockCipher{}
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1398,7 +1398,7 @@ func TestNewClusterValidation(t *testing.T) {
 	// Invalid NodeID
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.NodeID = "not-a-uuid"
 	_, err = NewCluster(config)
 	if err == nil {
@@ -1408,7 +1408,7 @@ func TestNewClusterValidation(t *testing.T) {
 	// Valid NodeID
 	config = DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.NodeID = uuid.New().String()
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1422,7 +1422,7 @@ func TestNewClusterValidation(t *testing.T) {
 func TestClusterStartStopCancelsManagersDuringJitter(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.GossipInterval = time.Second
 	config.MetadataGossipInterval = time.Second
 	config.StateGossipInterval = 2 * time.Second
@@ -1465,7 +1465,7 @@ func (m *mockCipher) Name() string                             { return "mock" }
 func TestJoinSelfFiltering(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.AdvertiseAddr = "127.0.0.1:8000"
 
 	cluster, err := NewCluster(config)
@@ -1483,7 +1483,7 @@ func TestJoinSelfFiltering(t *testing.T) {
 func TestJoinHTTPSelfFiltering(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.BindAddr = "http://localhost:8080/gossip"
 	config.AdvertiseAddr = "http://localhost:8080/gossip"
 
@@ -1506,7 +1506,7 @@ func TestJoinHTTPSelfFiltering(t *testing.T) {
 func TestJoinEmptyPeers(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1526,7 +1526,7 @@ func TestJoinEmptyPeers(t *testing.T) {
 func TestCalcFanOutNoNodes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1545,7 +1545,7 @@ func TestCalcFanOutNoNodes(t *testing.T) {
 func TestCalcPayloadSizeZero(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1564,7 +1564,7 @@ func TestCalcPayloadSizeZero(t *testing.T) {
 func TestGetMaxTTLScaling(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -1593,7 +1593,7 @@ func TestGetMaxTTLScaling(t *testing.T) {
 func TestGossipMetadataSkipsRecentUpdate(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 	config.MetadataGossipInterval = 500 * time.Millisecond
 
 	cluster, err := NewCluster(config)
@@ -1632,7 +1632,7 @@ func TestGossipMetadataSkipsRecentUpdate(t *testing.T) {
 func TestLeave(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

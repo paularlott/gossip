@@ -155,7 +155,7 @@ func (md *Metadata) GetBool(key string) bool {
 		if err == nil {
 			return b
 		}
-	case int, int8, int16, int32, int64, uint, uint32, uint64:
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return md.GetInt64(key) != 0
 	case float32, float64:
 		return md.GetFloat64(key) != 0
@@ -184,6 +184,10 @@ func (md *Metadata) GetInt64(key string) int64 {
 	case int64:
 		return v
 	case uint:
+		return int64(v)
+	case uint8:
+		return int64(v)
+	case uint16:
 		return int64(v)
 	case uint32:
 		return int64(v)

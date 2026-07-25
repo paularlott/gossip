@@ -186,7 +186,7 @@ func TestMessageHistorySharding(t *testing.T) {
 func TestNodeListAddRemoveGet(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -222,7 +222,7 @@ func TestNodeListAddRemoveGet(t *testing.T) {
 func TestNodeListRemoveLocalNodeProtected(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestNodeListRemoveLocalNodeProtected(t *testing.T) {
 func TestNodeListRemoveIfInStateDeep(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -273,7 +273,7 @@ func TestNodeListRemoveIfInStateDeep(t *testing.T) {
 func TestNodeListUpdateState(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -307,7 +307,7 @@ func TestNodeListUpdateState(t *testing.T) {
 func TestNodeListGetRandomNodes(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -337,7 +337,7 @@ func TestNodeListGetRandomNodes(t *testing.T) {
 func TestNodeListGetRandomNodesWithTag(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -365,7 +365,7 @@ func TestNodeListGetRandomNodesWithTag(t *testing.T) {
 func TestNodeListGetRandomNodesInStatesEmpty(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -388,7 +388,7 @@ func TestNodeListGetRandomNodesInStatesEmpty(t *testing.T) {
 func TestNodeListForAllInStatesDeep(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -425,7 +425,7 @@ func TestNodeListForAllInStatesDeep(t *testing.T) {
 func TestNodeListGetByTag(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -448,7 +448,7 @@ func TestNodeListGetByTag(t *testing.T) {
 func TestNodeListCounters(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -489,7 +489,7 @@ func TestNodeListCounters(t *testing.T) {
 func TestNodeListStateCacheInvalidation(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {

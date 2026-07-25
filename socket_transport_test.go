@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression"
-	"github.com/paularlott/gossip/encryption"
+	"github.com/paularlott/gossip/compression/snappy"
+	"github.com/paularlott/gossip/encryption/aes"
 	"github.com/paularlott/gossip/hlc"
 	"github.com/paularlott/logger"
 )
@@ -20,7 +20,7 @@ func TestSocketTransport_NewSocketTransport(t *testing.T) {
 		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
 		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJsonCodec(),
+		MsgCodec:                 codec.NewJSONCodec(),
 	}
 
 	transport := NewSocketTransport(config)
@@ -47,7 +47,7 @@ func TestSocketTransport_NewSocketTransport(t *testing.T) {
 
 func TestSocketTransport_PacketSerialization(t *testing.T) {
 	config := &Config{
-		MsgCodec:        codec.NewJsonCodec(),
+		MsgCodec:        codec.NewJSONCodec(),
 		CompressMinSize: 100,
 	}
 
@@ -84,8 +84,8 @@ func TestSocketTransport_PacketSerialization(t *testing.T) {
 
 func TestSocketTransport_PacketWithCompression(t *testing.T) {
 	config := &Config{
-		MsgCodec:        codec.NewJsonCodec(),
-		Compressor:      compression.NewSnappyCompressor(),
+		MsgCodec:        codec.NewJSONCodec(),
+		Compressor:      snappy.New(),
 		CompressMinSize: 10,
 	}
 
@@ -123,8 +123,8 @@ func TestSocketTransport_PacketWithCompression(t *testing.T) {
 
 func TestSocketTransport_PacketWithEncryption(t *testing.T) {
 	config := &Config{
-		MsgCodec:      codec.NewJsonCodec(),
-		Cipher:        encryption.NewAESEncryptor(),
+		MsgCodec:      codec.NewJSONCodec(),
+		Cipher:        aes.New(),
 		EncryptionKey: []byte("12345678901234567890123456789012"),
 	}
 
@@ -158,7 +158,7 @@ func TestSocketTransport_PacketWithEncryption(t *testing.T) {
 
 func TestSocketTransport_ReplyExpectedFlag(t *testing.T) {
 	config := &Config{
-		MsgCodec: codec.NewJsonCodec(),
+		MsgCodec: codec.NewJSONCodec(),
 	}
 
 	transport := &SocketTransport{config: config}
@@ -209,7 +209,7 @@ func TestSocketTransport_SendReceive(t *testing.T) {
 		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
 		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJsonCodec(),
+		MsgCodec:                 codec.NewJSONCodec(),
 		TCPDeadline:              5 * time.Second,
 		UDPDeadline:              5 * time.Second,
 		TCPDialTimeout:           5 * time.Second,
@@ -221,7 +221,7 @@ func TestSocketTransport_SendReceive(t *testing.T) {
 		BindAddr:                 "127.0.0.1:0",
 		IncomingPacketQueueDepth: 10,
 		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJsonCodec(),
+		MsgCodec:                 codec.NewJSONCodec(),
 		TCPDeadline:              5 * time.Second,
 		UDPDeadline:              5 * time.Second,
 		TCPDialTimeout:           5 * time.Second,
@@ -286,7 +286,7 @@ func TestSocketTransport_SendReceive(t *testing.T) {
 
 func TestSocketTransport_ErrorCases(t *testing.T) {
 	config := &Config{
-		MsgCodec: codec.NewJsonCodec(),
+		MsgCodec: codec.NewJSONCodec(),
 	}
 
 	transport := &SocketTransport{config: config}

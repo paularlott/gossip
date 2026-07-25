@@ -1,14 +1,13 @@
-//go:build !skip_compression_snappy
-
-package compression
+package snappy
 
 import (
 	"github.com/klauspost/compress/snappy"
+	"github.com/paularlott/gossip/compression"
 )
 
 type SnappyCompressor struct{}
 
-func NewSnappyCompressor() *SnappyCompressor {
+func New() *SnappyCompressor {
 	return &SnappyCompressor{}
 }
 
@@ -23,3 +22,5 @@ func (s *SnappyCompressor) Compress(data []byte) ([]byte, error) {
 func (s *SnappyCompressor) Decompress(data []byte) ([]byte, error) {
 	return snappy.Decode(nil, data)
 }
+
+var _ compression.Compressor = (*SnappyCompressor)(nil)

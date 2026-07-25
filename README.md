@@ -40,8 +40,9 @@ import (
   "time"
 
   "github.com/paularlott/gossip"
-  "github.com/paularlott/gossip/codec"
-  "github.com/paularlott/gossip/compression"
+  "github.com/paularlott/gossip/codec/shamaton"
+  "github.com/paularlott/gossip/compression/snappy"
+  "github.com/paularlott/gossip/encryption"
 )
 
 func main() {
@@ -51,8 +52,8 @@ func main() {
   config.BindAddr = "127.0.0.1:8000"                           // Listen on TCP and UDP
   config.EncryptionKey = "your-32-byte-key"                    // Optional: enables encryption
 	config.Cipher = encryption.NewAESEncryptor()                 // Encryption algorithm
-  config.MsgCodec = codec.NewShamatonMsgpackCodec()            // Message serialization
-  config.Compressor = compression.NewSnappyCompressor()        // Optional: enables compression
+  config.MsgCodec = shamaton.New()                             // Message serialization
+  config.Compressor = snappy.New()                             // Optional: enables compression
 
   // Create and start the cluster
   cluster, err := gossip.NewCluster(config)
@@ -179,17 +180,35 @@ Nodes in the cluster go through several states:
 
 ## Message Codecs
 
-Multiple serialization options are available allowing you to choose the one that best fits your application:
+The library supports pluggable serialization. Each codec implementation lives in its own sub-package, so importing one does not pull in the others — Go's import system handles exclusion automatically, no build tags needed.
 
 ```go
-// Using Shamaton msgpack
-config.MsgCodec = codec.NewShamatonMsgpackCodec()
+import (
+    "github.com/paularlott/gossip/codec/shamaton"
+    // or: codec/vmihailenco
+    // or: codec/hashicorp
+    // or: codec (for JSON, which is stdlib)
+)
 
-// Using Vmihailenco msgpack
-config.MsgCodec = codec.NewVmihailencoMsgpackCodec()
+// Shamaton msgpack (recommended — fastest and safest)
+config.MsgCodec = shamaton.New()
 
-// Using JSON
+// Vmihailenco msgpack
+config.MsgCodec = vmihailenco.New()
+
+// Hashicorp msgpack (ugorji/codec port)
+config.MsgCodec = hashicorp.New()
+
+// JSON (stdlib, no external dependency)
 config.MsgCodec = codec.NewJSONCodec()
+```
+
+Similarly, compression implementations are split into sub-packages:
+
+```go
+import "github.com/paularlott/gossip/compression/snappy"
+
+config.Compressor = snappy.New()
 ```
 
 ### Examples

@@ -13,7 +13,7 @@ func TestHandleJoin(t *testing.T) {
 	config1 := DefaultConfig()
 	config1.BindAddr = "127.0.0.1:0"
 	config1.Transport = &mockTransport{}
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 
 	cluster1, err := NewCluster(config1)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestHandleJoinVersionMismatch(t *testing.T) {
 	config1 := DefaultConfig()
 	config1.BindAddr = "127.0.0.1:0"
 	config1.Transport = &mockTransport{}
-	config1.MsgCodec = codec.NewJsonCodec()
+	config1.MsgCodec = codec.NewJSONCodec()
 
 	cluster1, err := NewCluster(config1)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestHandleJoinVersionMismatch(t *testing.T) {
 func TestHandleNodeLeave(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestHandleNodeLeave(t *testing.T) {
 func TestHandlePushPullState(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestHandlePushPullState(t *testing.T) {
 func TestHandleMetadataUpdate(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
@@ -245,7 +245,7 @@ func TestHandleMetadataUpdate(t *testing.T) {
 func TestHandlePing(t *testing.T) {
 	config := DefaultConfig()
 	config.Transport = &mockTransport{}
-	config.MsgCodec = codec.NewJsonCodec()
+	config.MsgCodec = codec.NewJSONCodec()
 
 	cluster, err := NewCluster(config)
 	if err != nil {
