@@ -140,7 +140,17 @@ func (st *SocketTransport) shutdown(wg *sync.WaitGroup) {
 		st.udpListener.Close()
 	}
 
-	close(st.packetChannel)
+	// packetChannel is deliberately NOT closed.
+	//
+	// Per-connection packetToQueue goroutines may still be mid-send when
+	// shutdown runs. Those sends use a select against ctx.Done(), but when both
+	// cases are ready Go picks at random, so a send can still be chosen after
+	// the channel is closed — which panics with "send on closed channel" and
+	// takes down the process.
+	//
+	// Nothing requires the close: Cluster.acceptPackets exits on
+	// shutdownContext.Done(), not on channel closure, and the channel becomes
+	// garbage once the transport is unreachable.
 }
 
 func (st *SocketTransport) PacketChannel() chan *Packet {
