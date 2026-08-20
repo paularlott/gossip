@@ -21,6 +21,7 @@ This flexible architecture supports the development of resilient distributed sys
 - **Metadata Sharing**: Distribute custom node metadata across the cluster
 - **Version Checking**: Application and protocol version compatibility verification
 - **Automatic Transport Selection**: UDP will be used wherever possible, however if the packet exceeds the MTU size, TCP will be used instead
+- **[Distributed Queue](queue/)**: At-least-once delivery message queue with push-based dispatch, request/reply, and automatic failover
 
 ## Installation
 
@@ -220,3 +221,4 @@ The `examples` directory contains various examples demonstrating the library's c
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
 - **[kv](examples/kv)**: Example Key Value store.
 - **[leader](examples/leader)**: Example demonstrating leader election.
+- **[queue](examples/queue)**: Example demonstrating distributed message queue with request/reply.
