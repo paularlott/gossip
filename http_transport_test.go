@@ -396,10 +396,10 @@ func TestHTTPTransport_NodeAddressResolution(t *testing.T) {
 // decompresses them on read.
 func TestHTTPTransport_CompressionRoundTrip(t *testing.T) {
 	config := &Config{
-		MsgCodec:        codec.NewJSONCodec(),
-		Logger:          logger.NewNullLogger(),
-		Compressor:      snappy.New(),
-		CompressMinSize: 32, // compress anything >= 32 bytes
+		MsgCodec:         codec.NewJSONCodec(),
+		Logger:           logger.NewNullLogger(),
+		Compressor:       snappy.New(),
+		CompressMinSize:  32, // compress anything >= 32 bytes
 		TCPMaxPacketSize: 65535,
 	}
 

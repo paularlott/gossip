@@ -78,7 +78,7 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 		config:        config,
 		logger:        lgr,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
-		client:        &http.Client{
+		client: &http.Client{
 			Transport: transport,
 		},
 		ctx: context.Background(),

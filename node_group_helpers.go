@@ -20,6 +20,18 @@ func nodeMatchesCriteria(node *Node, metadataCriteria map[string]string) bool {
 	return true
 }
 
+// NodeMatchesCriteria reports whether a node's metadata satisfies a criteria map
+// using exactly the rule NodeGroup membership is evaluated with: every key must
+// exist, MetadataAnyValue ("*") matches any value, and a leading
+// MetadataContainsPrefix ("~") requires the value to contain the remainder.
+//
+// It is exported so consumers such as leader election can apply the same test a
+// node group would — useful at moments when the group itself can no longer be
+// asked, for example when a departing node has already been removed from it.
+func NodeMatchesCriteria(node *Node, metadataCriteria map[string]string) bool {
+	return nodeMatchesCriteria(node, metadataCriteria)
+}
+
 // fnvHash computes FNV-1a hash for better distribution
 func fnvHash(nodeID NodeID) uint32 {
 	idBytes := nodeID[:]

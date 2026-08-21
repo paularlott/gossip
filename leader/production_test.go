@@ -64,7 +64,6 @@ func TestNormalizeConfig(t *testing.T) {
 		LeaderCheckInterval:  0,
 		LeaderTimeout:        -time.Second,
 		HeartbeatMessageType: gossip.MessageType(1),
-		QuorumPercentage:     101,
 	}
 
 	normalized := normalizeConfig(cfg)
@@ -79,8 +78,8 @@ func TestNormalizeConfig(t *testing.T) {
 	if normalized.HeartbeatMessageType != defaults.HeartbeatMessageType {
 		t.Fatalf("expected HeartbeatMessageType %d, got %d", defaults.HeartbeatMessageType, normalized.HeartbeatMessageType)
 	}
-	if normalized.QuorumPercentage != defaults.QuorumPercentage {
-		t.Fatalf("expected QuorumPercentage %d, got %d", defaults.QuorumPercentage, normalized.QuorumPercentage)
+	if normalized.ForgetMessageType != defaults.ForgetMessageType {
+		t.Fatalf("expected ForgetMessageType %d, got %d", defaults.ForgetMessageType, normalized.ForgetMessageType)
 	}
 }
 
@@ -89,7 +88,6 @@ func TestNormalizeConfigTimeoutAtLeastCheckInterval(t *testing.T) {
 		LeaderCheckInterval:  2 * time.Second,
 		LeaderTimeout:        time.Second,
 		HeartbeatMessageType: gossip.ReservedMsgsStart + 5,
-		QuorumPercentage:     75,
 	}
 
 	normalized := normalizeConfig(cfg)

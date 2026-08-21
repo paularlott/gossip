@@ -39,7 +39,6 @@ func TestDefaultConfigSimple(t *testing.T) {
 
 	assert.Equal(t, 1*time.Second, config.LeaderCheckInterval)
 	assert.Equal(t, 3*time.Second, config.LeaderTimeout)
-	assert.Equal(t, 60, config.QuorumPercentage)
 	assert.Nil(t, config.MetadataCriteria)
 }
 
@@ -57,33 +56,5 @@ func TestEventTypeStringSimple(t *testing.T) {
 
 	for _, test := range tests {
 		assert.Equal(t, test.expected, test.event.String())
-	}
-}
-
-func TestQuorumPercentageEdgeCases(t *testing.T) {
-	config := DefaultConfig()
-
-	testCases := []struct {
-		percentage int
-		nodes      int
-		expected   int
-	}{
-		{50, 3, 2},  // 50% of 3 = 1.5, rounded up = 2
-		{60, 5, 3},  // 60% of 5 = 3
-		{67, 3, 3},  // 67% of 3 = 2.01, rounded up = 3
-		{100, 3, 3}, // 100% of 3 = 3
-		{0, 3, 0},   // 0% should result in 0 quorum
-	}
-
-	for _, tc := range testCases {
-		config.QuorumPercentage = tc.percentage
-
-		election := &LeaderElection{
-			config: config,
-		}
-
-		result := election.calculateQuorumForNodes(tc.nodes)
-		assert.Equal(t, tc.expected, result,
-			"percentage: %d, nodes: %d", tc.percentage, tc.nodes)
 	}
 }

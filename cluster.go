@@ -881,6 +881,44 @@ func (c *Cluster) NumNodes() int {
 	return c.nodes.getAliveCount() + c.nodes.getSuspectCount() + c.nodes.getLeavingCount() + c.nodes.getDeadCount()
 }
 
+// DeadNodeTimeout returns how long a suspect node is given before it is declared
+// dead. Useful for deriving timings that must outlast failure detection, such as
+// how long a membership count should be steady before it is trusted.
+func (c *Cluster) DeadNodeTimeout() time.Duration {
+	return c.config.DeadNodeTimeout
+}
+
+// NodeRetentionTime returns how long dead nodes are retained as tombstones
+// before being dropped from the node list.
+func (c *Cluster) NodeRetentionTime() time.Duration {
+	return c.config.NodeRetentionTime
+}
+
+// ForgetNode drops a node from the local node list entirely, discarding any
+// tombstone for it.
+//
+// This is an operator action for permanently decommissioned nodes. Because a
+// crashed node is indistinguishable from a partitioned one, the cluster keeps
+// counting it so that quorum calculations stay conservative. Calling ForgetNode
+// asserts, from outside the cluster, that the node is genuinely gone — which lets
+// quorum shrink safely in a way the cluster cannot infer on its own.
+//
+// The local node cannot be forgotten. Returns true if a node was removed.
+//
+// Note this only affects the local view. Other nodes retain their own tombstones
+// until they are told, or until NodeRetentionTime elapses, so call it on each
+// surviving node if you want the whole cluster to shrink its baseline.
+func (c *Cluster) ForgetNode(id NodeID) bool {
+	if id == c.localNode.ID {
+		return false
+	}
+	if c.nodes.get(id) == nil {
+		return false
+	}
+	c.nodes.remove(id)
+	return true
+}
+
 // Get the number of nodes that are currently alive
 func (c *Cluster) NumAliveNodes() int {
 	return c.nodes.getAliveCount()
