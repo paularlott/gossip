@@ -40,7 +40,6 @@ func TestBasicConfig(t *testing.T) {
 
 	assert.Equal(t, 1*time.Second, config.LeaderCheckInterval)
 	assert.Equal(t, 3*time.Second, config.LeaderTimeout)
-	assert.Equal(t, 60, config.QuorumPercentage)
 	assert.Nil(t, config.MetadataCriteria)
 }
 
@@ -118,29 +117,4 @@ func TestHeartbeatMessage(t *testing.T) {
 
 	assert.Equal(t, now, msg.LeaderTime)
 	assert.Equal(t, uint64(42), msg.Term)
-}
-
-func TestQuorumEdgeCases(t *testing.T) {
-	config := DefaultConfig()
-
-	testCases := []struct {
-		percentage int
-		nodes      int
-		expected   int
-	}{
-		{50, 3, 2},
-		{60, 5, 3},
-		{67, 3, 3},
-		{100, 3, 3},
-		{0, 3, 0},
-	}
-
-	for _, tc := range testCases {
-		config.QuorumPercentage = tc.percentage
-		election := &LeaderElection{config: config}
-
-		result := election.calculateQuorumForNodes(tc.nodes)
-		assert.Equal(t, tc.expected, result,
-			"percentage: %d, nodes: %d", tc.percentage, tc.nodes)
-	}
 }

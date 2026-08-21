@@ -21,7 +21,7 @@ const (
 	pushPullStateMsg                     // Sent by peers when pushing / pulling state
 	metadataUpdateMsg                    // Update the metadata of a node
 	pingMsg                              // Health check ping
-	ReservedMsgsStart MessageType = 64   // Reserved for future use
+	ReservedMsgsStart MessageType = 64   // Start of the library's internal message range; applications must not use these types
 	_                                    // skip to 128
 	UserMsg           MessageType = 128  // User messages start here
 )

@@ -8,6 +8,11 @@ import (
 	"github.com/paularlott/gossip"
 )
 
+// forgetMessage carries an operator assertion that a node is permanently gone.
+type forgetMessage struct {
+	NodeID gossip.NodeID `msgpack:"nid" json:"nid"`
+}
+
 type heartbeatMessage struct {
 	LeaderTime time.Time `msgpack:"ts" json:"ts"`
 	Term       uint64    `msgpack:"term" json:"term"` // Election term/epoch number
@@ -29,10 +34,107 @@ type LeaderElection struct {
 	eventHandlers *leaderEventHandlers
 	nodeGroup     *gossip.NodeGroup
 	stateHandler  gossip.HandlerID
+	baseline      *baselineTracker
 	startStopMu   sync.Mutex
 	wg            sync.WaitGroup
 	started       bool
 	stopped       bool
+
+	// watchers receive a callback on every leadership mutation — including
+	// transitions the four public events do not cover, such as a term
+	// advancing while the same node stays leader, or a leader silently
+	// becoming ineligible. Consumers that must react to every change (the
+	// lock pool's recovery, for instance) subscribe here instead of polling.
+	watchersMu    sync.Mutex
+	watchers      []watcherReg
+	nextWatcherID uint64
+}
+
+// LeadershipWatcherFn is notified with a consistent snapshot whenever the
+// local node's leadership state changes. It is invoked after the election's
+// lock is released, so it may call back into the election freely — but it runs
+// on the goroutine that observed the change (the election loop or an inbound
+// heartbeat handler), so it must not block.
+//
+// It is an alias so that implementations satisfy interfaces requiring the
+// plain function type.
+type LeadershipWatcherFn = func(isLeader bool, term uint64)
+
+// watcherReg pairs a watcher with an identity, since function values cannot be
+// compared for removal.
+type watcherReg struct {
+	id uint64
+	fn LeadershipWatcherFn
+}
+
+// WatchLeadership registers fn to be called on every leadership change, and
+// immediately invokes it once with the current state so callers can dispense
+// with a separate initial poll.
+//
+// The returned cancel unregisters fn and must be called before the consumer is
+// discarded; without it the election retains the consumer for its own lifetime.
+func (le *LeaderElection) WatchLeadership(fn LeadershipWatcherFn) (cancel func()) {
+	le.watchersMu.Lock()
+	le.nextWatcherID++
+	id := le.nextWatcherID
+	le.watchers = append(le.watchers, watcherReg{id: id, fn: fn})
+	le.watchersMu.Unlock()
+
+	le.lock.RLock()
+	is, term := le.isLeader, le.currentTerm
+	le.lock.RUnlock()
+	fn(is, term)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			le.watchersMu.Lock()
+			for i, r := range le.watchers {
+				if r.id == id {
+					le.watchers = append(le.watchers[:i], le.watchers[i+1:]...)
+					break
+				}
+			}
+			le.watchersMu.Unlock()
+		})
+	}
+}
+
+// notifyLeadershipWatchers snapshots the current state and invokes every
+// watcher. Callers must not hold le.lock.
+func (le *LeaderElection) notifyLeadershipWatchers() {
+	le.lock.RLock()
+	is, term := le.isLeader, le.currentTerm
+	le.lock.RUnlock()
+
+	le.watchersMu.Lock()
+	regs := make([]LeadershipWatcherFn, 0, len(le.watchers))
+	for _, r := range le.watchers {
+		regs = append(regs, r.fn)
+	}
+	le.watchersMu.Unlock()
+
+	for _, fn := range regs {
+		fn(is, term)
+	}
+}
+
+// applyState mutates leadership state under the election lock and notifies
+// watchers when fn reports a change. Every mutation of the watcher-visible
+// fields — isLeader, currentTerm, hasLeader, leaderID — goes through here,
+// which makes watcher notification structural: no call site can change
+// leadership state without the notification following. fn must not dispatch
+// events or otherwise re-enter the election; it runs under the writer lock.
+// Public events are the caller's concern and are dispatched after applyState
+// returns.
+func (le *LeaderElection) applyState(fn func() bool) bool {
+	le.lock.Lock()
+	changed := fn()
+	le.lock.Unlock()
+	if changed {
+		le.notifyLeadershipWatchers()
+	}
+	return changed
 }
 
 // NewLeaderElection creates a new leader election manager
@@ -40,6 +142,27 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	config = normalizeConfig(config)
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// The stability period must outlast failure detection, otherwise a count
+	// sampled mid-transition gets latched as the cluster's real size.
+	stability := config.StabilityPeriod
+	if stability <= 0 {
+		stability = 2 * cluster.DeadNodeTimeout()
+		if stability <= 0 {
+			stability = 30 * time.Second
+		}
+	}
+
+	// The shrink dwell is deliberately much longer than the stability period: a
+	// transient partition must have healed before the baseline follows the
+	// observed count downward.
+	shrinkDwell := config.ShrinkDwell
+	if shrinkDwell <= 0 {
+		shrinkDwell = 4 * cluster.DeadNodeTimeout()
+		if shrinkDwell <= 0 {
+			shrinkDwell = 60 * time.Second
+		}
+	}
 
 	election := &LeaderElection{
 		cluster:       cluster,
@@ -49,6 +172,16 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 		ctx:           ctx,
 		cancel:        cancel,
 		eventHandlers: newLeaderEventHandlers(cluster.Logger()),
+		baseline:      newBaselineTracker(stability, shrinkDwell, !config.AutoShrinkDisabled, cluster),
+	}
+
+	// The node group must exist before any handler is registered. Handlers run on
+	// the cluster's inbound goroutines, and both the heartbeat and state-change
+	// paths read election.nodeGroup — registering first leaves a window where an
+	// arriving heartbeat races that assignment and, worse, sees a nil group and
+	// skips the eligibility filter entirely.
+	if len(config.MetadataCriteria) > 0 {
+		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria, nil)
 	}
 
 	// Register event listeners
@@ -56,9 +189,12 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 	if err := cluster.HandleFunc(config.HeartbeatMessageType, election.handleLeaderHeartbeat); err != nil {
 		panic(err)
 	}
-
-	if len(config.MetadataCriteria) > 0 {
-		election.nodeGroup = gossip.NewNodeGroup(cluster, config.MetadataCriteria, nil)
+	// A failure here means the reserved message type is occupied by something
+	// other than library code — either an application violating the reserved
+	// range (applications start from UserMsg) or a library bug. Fail fast
+	// rather than run a half-configured election.
+	if err := cluster.HandleFunc(config.ForgetMessageType, election.handleForget); err != nil {
+		panic(err)
 	}
 
 	return election
@@ -84,8 +220,11 @@ func normalizeConfig(config *Config) *Config {
 	if normalized.HeartbeatMessageType < gossip.ReservedMsgsStart {
 		normalized.HeartbeatMessageType = defaults.HeartbeatMessageType
 	}
-	if normalized.QuorumPercentage <= 0 || normalized.QuorumPercentage > 100 {
-		normalized.QuorumPercentage = defaults.QuorumPercentage
+	if normalized.ForgetMessageType < gossip.ReservedMsgsStart {
+		normalized.ForgetMessageType = defaults.ForgetMessageType
+	}
+	if normalized.ForgetMessageType == normalized.HeartbeatMessageType {
+		normalized.ForgetMessageType = normalized.HeartbeatMessageType + 1
 	}
 
 	return &normalized
@@ -147,6 +286,7 @@ func (le *LeaderElection) Stop() {
 	}
 	le.cluster.RemoveNodeStateChangeHandler(le.stateHandler)
 	le.cluster.UnregisterMessageType(le.config.HeartbeatMessageType)
+	le.cluster.UnregisterMessageType(le.config.ForgetMessageType)
 }
 
 // getEligibleNodes returns nodes that are eligible for leader election
@@ -161,15 +301,26 @@ func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
 
 // checkAndElectLeader checks if we need to elect a new leader and does so if necessary
 func (le *LeaderElection) checkAndElectLeader() {
+	// Keep the quorum baseline current before any quorum decision is taken.
+	if le.baseline != nil {
+		le.baseline.observe(le.getEligibleNodes(), time.Now())
+	}
+
 	// If metadata filtering is enabled and local node is not eligible, don't participate
 	if le.nodeGroup != nil && !le.nodeGroup.Contains(le.cluster.LocalNode().ID) {
 		// Clear any leader state since we're not eligible to participate,
 		// however maintain the leader information
-		le.lock.Lock()
-		if le.isLeader {
+		stepped := le.applyState(func() bool {
+			if !le.isLeader {
+				return false
+			}
 			le.isLeader = false
+			return true
+		})
+
+		if stepped {
+			le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
 		}
-		le.lock.Unlock()
 		return
 	}
 
@@ -286,17 +437,27 @@ func (le *LeaderElection) electLeader() {
 			Debug("Quorum not met, cannot elect leader")
 
 		// Optional: If we previously had a leader but lost quorum, clear the leader state.
-		le.lock.Lock()
-		if le.hasLeader {
-			le.cluster.Logger().Warn("lost leader due to lack of quorum", "leader_id", le.leaderID)
-			if le.isLeader {
-				le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
+		var hadLeader, wasLeader bool
+		var lostID gossip.NodeID
+		le.applyState(func() bool {
+			hadLeader = le.hasLeader
+			wasLeader = le.isLeader
+			lostID = le.leaderID
+			if !hadLeader {
+				return false
 			}
-			le.eventHandlers.dispatch(LeaderLostEvent, le.leaderID)
+			le.cluster.Logger().Warn("lost leader due to lack of quorum", "leader_id", lostID)
 			le.hasLeader = false
 			le.isLeader = false
+			return true
+		})
+
+		if hadLeader {
+			if wasLeader {
+				le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
+			}
+			le.eventHandlers.dispatch(LeaderLostEvent, lostID)
 		}
-		le.lock.Unlock()
 		return
 	}
 
@@ -315,19 +476,22 @@ func (le *LeaderElection) electLeader() {
 
 	localNode := le.cluster.LocalNode()
 
-	le.lock.Lock()
-	wasLeader := le.isLeader
-	prevLeaderID := le.leaderID
-	hadLeader := le.hasLeader
+	var wasLeader, hadLeader bool
+	var prevLeaderID gossip.NodeID
+	le.applyState(func() bool {
+		wasLeader = le.isLeader
+		prevLeaderID = le.leaderID
+		hadLeader = le.hasLeader
 
-	le.currentTerm++
+		le.currentTerm++
 
-	le.leaderID = candidateNode.ID
-	le.hasLeader = true
-	le.lastHeartbeat = time.Now()
-	le.leaderTime = le.lastHeartbeat
-	le.isLeader = (candidateNode.ID == localNode.ID)
-	le.lock.Unlock()
+		le.leaderID = candidateNode.ID
+		le.hasLeader = true
+		le.lastHeartbeat = time.Now()
+		le.leaderTime = le.lastHeartbeat
+		le.isLeader = (candidateNode.ID == localNode.ID)
+		return true
+	})
 
 	le.cluster.Logger().
 		With("leaderId", candidateNode.ID.String()).
@@ -337,8 +501,8 @@ func (le *LeaderElection) electLeader() {
 
 	// Dispatch events based on state changes
 	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
-	becameLeader := !wasLeader && le.isLeader
-	steppedDown := wasLeader && !le.isLeader
+	becameLeader := !wasLeader && le.IsLeader()
+	steppedDown := wasLeader && !le.IsLeader()
 
 	if steppedDown {
 		le.eventHandlers.dispatch(SteppedDownEvent, localNode.ID)
@@ -406,73 +570,85 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 		return err
 	}
 
-	le.lock.Lock()
-	defer le.lock.Unlock() // Use defer for cleaner exit paths
+	var wasLeader, hadLeader bool
+	var prevLeaderID gossip.NodeID
+	var localNodeID gossip.NodeID
 
-	// Priority order for deciding leadership:
-	// 1. Higher term always wins
-	// 2. Within the same term:
-	//    a. If we have no leader, accept this one
-	//    b. If timestamp is newer, accept this one
-	//    c. If timestamps are equal, use lexicographical node ID as tiebreaker
-	acceptHeartbeat := false
-	if msg.Term > le.currentTerm {
-		acceptHeartbeat = true
-		le.cluster.Logger().
-			With("senderId", sender.ID.String()).
-			With("senderTerm", msg.Term).
-			With("currentTerm", le.currentTerm).
-			Debug("Accepting heartbeat due to higher term")
-	} else if msg.Term == le.currentTerm {
-		if !le.hasLeader {
+	accepted := le.applyState(func() bool {
+		// Priority order for deciding leadership:
+		// 1. Higher term always wins
+		// 2. Within the same term:
+		//    a. If we have no leader, accept this one
+		//    b. If timestamp is newer, accept this one
+		//    c. If timestamps are equal, use lexicographical node ID as tiebreaker
+		acceptHeartbeat := false
+		if msg.Term > le.currentTerm {
 			acceptHeartbeat = true
 			le.cluster.Logger().
 				With("senderId", sender.ID.String()).
-				With("term", msg.Term).
-				Debug("Accepting heartbeat as we have no current leader")
-		} else if msg.LeaderTime.After(le.leaderTime) {
-			acceptHeartbeat = true
-		} else if msg.LeaderTime.Equal(le.leaderTime) && sender.ID.String() < le.leaderID.String() {
-			acceptHeartbeat = true
-			le.cluster.Logger().
-				With("senderId", sender.ID.String()).
-				With("leaderId", le.leaderID.String()).
-				With("term", msg.Term).
-				Debug("Accepting heartbeat due to tie-breaker (lower ID)")
+				With("senderTerm", msg.Term).
+				With("currentTerm", le.currentTerm).
+				Debug("Accepting heartbeat due to higher term")
+		} else if msg.Term == le.currentTerm {
+			if !le.hasLeader {
+				acceptHeartbeat = true
+				le.cluster.Logger().
+					With("senderId", sender.ID.String()).
+					With("term", msg.Term).
+					Debug("Accepting heartbeat as we have no current leader")
+			} else if msg.LeaderTime.After(le.leaderTime) {
+				acceptHeartbeat = true
+			} else if msg.LeaderTime.Equal(le.leaderTime) && sender.ID.String() < le.leaderID.String() {
+				acceptHeartbeat = true
+				le.cluster.Logger().
+					With("senderId", sender.ID.String()).
+					With("leaderId", le.leaderID.String()).
+					With("term", msg.Term).
+					Debug("Accepting heartbeat due to tie-breaker (lower ID)")
+			}
 		}
-	}
 
-	if acceptHeartbeat {
-		wasLeader := le.isLeader
-		prevLeaderID := le.leaderID
-		hadLeader := le.hasLeader
+		if !acceptHeartbeat {
+			return false
+		}
+
+		wasLeader = le.isLeader
+		prevLeaderID = le.leaderID
+		hadLeader = le.hasLeader
 
 		le.leaderID = sender.ID
 		le.hasLeader = true
 		le.leaderTime = msg.LeaderTime
 		le.lastHeartbeat = time.Now() // Update last heartbeat time based on receipt time
 		le.currentTerm = msg.Term
-		le.isLeader = (sender.ID == le.cluster.LocalNode().ID)
+		localNodeID = le.cluster.LocalNode().ID
+		le.isLeader = (sender.ID == localNodeID)
+		return true
+	})
 
-		leaderChanged := !hadLeader || prevLeaderID != sender.ID
-		becameLeader := !wasLeader && le.isLeader
-		steppedDown := wasLeader && !le.isLeader
+	if !accepted {
+		return nil
+	}
 
-		// Log state changes and dispatch events
-		if steppedDown {
-			le.cluster.Logger().Debug("stepping down as leader due to heartbeat", "sender_id", sender.ID)
-			le.eventHandlers.dispatch(SteppedDownEvent, le.cluster.LocalNode().ID)
-		}
-		if becameLeader {
-			le.cluster.Logger().Warn("became leader unexpectedly via heartbeat from self")
-			le.eventHandlers.dispatch(BecameLeaderEvent, le.cluster.LocalNode().ID)
-		}
+	// Events run outside the lock — a handler may call back into the election
+	// (IsLeader and friends), which would deadlock under our writer lock.
+	leaderChanged := !hadLeader || prevLeaderID != sender.ID
+	becameLeader := !wasLeader && le.isLeader
+	steppedDown := wasLeader && !le.isLeader
 
-		if leaderChanged {
-			le.cluster.Logger().
-				Debug("leader updated via heartbeat", "leaderId", sender.ID.String(), "term", le.currentTerm)
-			le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
-		}
+	if steppedDown {
+		le.cluster.Logger().Debug("stepping down as leader due to heartbeat", "sender_id", sender.ID)
+		le.eventHandlers.dispatch(SteppedDownEvent, localNodeID)
+	}
+	if becameLeader {
+		le.cluster.Logger().Warn("became leader unexpectedly via heartbeat from self")
+		le.eventHandlers.dispatch(BecameLeaderEvent, localNodeID)
+	}
+
+	if leaderChanged {
+		le.cluster.Logger().
+			Debug("leader updated via heartbeat", "leaderId", sender.ID.String(), "term", le.currentTerm)
+		le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
 	}
 
 	return nil
@@ -492,6 +668,19 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 		With("newState", node.GetObservedState().String()).
 		Debug("Node state changed")
 
+	// A node that announced its departure is a positive signal from outside the
+	// failure domain, so it is safe to discount from the quorum baseline. A
+	// crash or partition produces no such announcement and is deliberately not
+	// discounted, keeping quorum conservative.
+	if node.GetObservedState() == gossip.NodeLeaving && le.baseline != nil &&
+		le.wasEligibleForBaseline(node, prevState) {
+		if le.baseline.noteGracefulDeparture(node.ID) {
+			le.cluster.Logger().Info("node left gracefully; quorum baseline reduced",
+				"node_id", node.ID.String(),
+				"baseline", le.baseline.size())
+		}
+	}
+
 	le.lock.RLock()
 	isCurrentLeader := le.hasLeader && (node.ID == le.leaderID)
 	currentLeaderID := le.leaderID
@@ -506,36 +695,191 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 
 		le.eventHandlers.dispatch(LeaderLostEvent, currentLeaderID)
 
-		le.lock.Lock()
-		if le.hasLeader && le.leaderID == node.ID {
+		le.applyState(func() bool {
+			if !le.hasLeader || le.leaderID != node.ID {
+				return false
+			}
 			le.hasLeader = false
 			le.isLeader = false
-		}
-		le.lock.Unlock()
+			return true
+		})
 	}
 }
 
-// calculateQuorumForNodes calculates the minimum number of nodes required for quorum
-// from a specific set of nodes
+// wasEligibleForBaseline reports whether a node that has just transitioned away
+// was, immediately before the transition, part of this election's eligible set.
+//
+// prevState is the state the node held a moment before the change; Alive and
+// Suspect are the states eligibility is drawn from (node groups track both, and
+// a Suspect node was Alive until shortly before). When the election is scoped by
+// MetadataCriteria the node's metadata is matched directly against them — the
+// group itself cannot be asked here, because its state-change handler runs
+// before this one and has already removed the departing node from the group.
+func (le *LeaderElection) wasEligibleForBaseline(node *gossip.Node, prevState gossip.NodeState) bool {
+	if prevState != gossip.NodeAlive && prevState != gossip.NodeSuspect {
+		return false
+	}
+	if len(le.config.MetadataCriteria) == 0 {
+		return true
+	}
+	return gossip.NodeMatchesCriteria(node, le.config.MetadataCriteria)
+}
+
+// calculateQuorumForNodes returns the minimum number of eligible nodes required
+// to elect or retain a leader, given how many are currently observed.
+//
+// Two ingredients:
+//
+//   - A strict majority of the observed count. This term varies per node, so on
+//     its own it cannot prevent split brain: two sides of a partition each
+//     compute a majority of their own view and both pass.
+//
+//   - MinClusterSize, a constant floor. Because it does not depend on the local
+//     view it is a lower bound on every node's threshold, so both sides of a
+//     split can only qualify if N >= 2*MinClusterSize. Keeping the floor above
+//     half the cluster makes two simultaneous leaders impossible.
+//
+// The result is the larger of the two. The varying term only ever adds
+// strictness, which is always safe; the floor is what supplies the guarantee.
 func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
-	if numNodes == 0 {
-		return 0 // Cannot have quorum with zero nodes
+	required := 0
+
+	// Never accept half or fewer of what we can see.
+	if numNodes > 0 {
+		required = numNodes/2 + 1
 	}
 
-	if le.config.QuorumPercentage <= 0 {
+	// The adaptive baseline: a majority of the cluster size we have settled on.
+	// This is what removes the need to re-tune MinClusterSize as the cluster
+	// grows, and it only ever shrinks on evidence of a deliberate departure.
+	if le.baseline != nil {
+		if bl := le.baseline.size(); bl > 0 {
+			if majority := bl/2 + 1; majority > required {
+				required = majority
+			}
+		}
+	}
+
+	if le.config.MinClusterSize > required {
+		required = le.config.MinClusterSize
+	}
+
+	return required
+}
+
+// BaselineSize returns the cluster size quorum is currently measured against.
+// Exposed for diagnostics: when leadership cannot be established, this is
+// usually the number to look at first.
+func (le *LeaderElection) BaselineSize() int {
+	if le.baseline == nil {
 		return 0
 	}
+	return le.baseline.size()
+}
 
-	// Calculate quorum: (total_nodes * percentage + 99) / 100 for ceiling division.
-	requiredQuorum := (numNodes*le.config.QuorumPercentage + 99) / 100
+// QuorumSize returns the number of eligible nodes currently required to elect or
+// retain a leader.
+func (le *LeaderElection) QuorumSize() int {
+	return le.calculateQuorumForNodes(len(le.getEligibleNodes()))
+}
 
-	// Ensure minimum quorum of 1 if percentage is low but nodes exist,
-	// unless percentage is explicitly 0 (which might imply no quorum needed).
-	if requiredQuorum == 0 && le.config.QuorumPercentage > 0 {
-		requiredQuorum = 1
+// ForgetNode discounts a node from the quorum baseline across the whole cluster
+// and drops it from the node list.
+//
+// A crashed node cannot be distinguished from a partitioned one, so the cluster
+// deliberately keeps counting it and quorum stays conservative. This is the
+// operator's way of asserting, from outside the cluster, that a node is
+// permanently gone — which allows quorum to shrink safely.
+//
+// The assertion is broadcast, so a single call on any one node reaches them all.
+// That matters at scale: reducing a 100-node cluster should not mean visiting 100
+// nodes. Delivery is best-effort gossip, so a node that misses it simply keeps
+// the higher baseline — the strict, safe direction — until it is told again or
+// the node ages out of its list.
+//
+// Returns true if the local node discounted it. Use ForgetNodeLocal to apply the
+// change only here. In either form, only nodes this cluster knows about can be
+// forgotten: unknown IDs are rejected rather than decremented.
+func (le *LeaderElection) ForgetNode(id gossip.NodeID) bool {
+	applied := le.ForgetNodeLocal(id)
+
+	// Tell everyone else. Best-effort: quorum only ever errs strict if this is
+	// missed.
+	if err := le.cluster.Send(le.config.ForgetMessageType, &forgetMessage{NodeID: id}); err != nil {
+		le.cluster.Logger().WithError(err).Warn("failed to broadcast node forget",
+			"node_id", id.String())
 	}
 
-	return requiredQuorum
+	return applied
+}
+
+// ForgetNodeLocal applies a forget to this node only, without broadcasting.
+//
+// Only nodes this node already knows about can be forgotten: a cluster member
+// asserting an ID that was never seen must not be able to spend baseline
+// decrements, since each one lowers quorum. Unknown IDs are rejected outright,
+// whether the call originates locally or from a peer's broadcast.
+func (le *LeaderElection) ForgetNodeLocal(id gossip.NodeID) bool {
+	if le.baseline == nil {
+		return false
+	}
+	if id == le.cluster.LocalNode().ID {
+		return false // a node cannot forget itself
+	}
+	if le.cluster.GetNode(id) == nil {
+		return false // unknown here — nothing to forget, no decrement
+	}
+
+	discounted := le.baseline.forget(id)
+	le.cluster.ForgetNode(id)
+
+	if discounted {
+		le.cluster.Logger().Info("node forgotten; quorum baseline reduced",
+			"node_id", id.String(),
+			"baseline", le.baseline.size(),
+			"quorum", le.QuorumSize())
+	}
+	return discounted
+}
+
+// handleForget applies a forget assertion received from a peer.
+func (le *LeaderElection) handleForget(sender *gossip.Node, packet *gossip.Packet) error {
+	var msg forgetMessage
+	if err := packet.Unmarshal(&msg); err != nil {
+		return err
+	}
+
+	// Applied locally only; the broadcast is already being relayed by the
+	// cluster's own forwarding, so re-broadcasting here would amplify it.
+	le.ForgetNodeLocal(msg.NodeID)
+	return nil
+}
+
+// ResetQuorumBaseline discards the tracked baseline so it is re-derived from
+// what is currently visible. Use after a deliberate resize when the accumulated
+// baseline no longer reflects reality.
+func (le *LeaderElection) ResetQuorumBaseline() {
+	if le.baseline != nil {
+		le.baseline.reset()
+	}
+}
+
+// Candidates returns the nodes currently eligible to become leader.
+//
+// When the election is scoped by MetadataCriteria this is the matching node
+// group; otherwise it is all alive nodes. Useful for predicting a successor
+// during a planned handover.
+func (le *LeaderElection) Candidates() []*gossip.Node {
+	return le.getEligibleNodes()
+}
+
+// Term returns the current election term. The term increments on every
+// leadership change, giving a strictly increasing, clock-independent ordering
+// that callers can use for fencing.
+func (le *LeaderElection) Term() uint64 {
+	le.lock.RLock()
+	defer le.lock.RUnlock()
+	return le.currentTerm
 }
 
 // GetNodeGroup returns the node group used for leader election, if any

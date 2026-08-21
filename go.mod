@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-msgpack/v2 v2.1.5
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.19.2
 	github.com/paularlott/logger v0.3.0
 	github.com/shamaton/msgpack/v3 v3.2.0
 	github.com/stretchr/testify v1.6.1
