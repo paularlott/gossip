@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/gossip/internal/baseline"
 )
 
 // mkNodes builds n throwaway nodes for feeding the tracker.
@@ -28,41 +29,41 @@ const (
 // --- seeding and growth ---
 
 func TestBaselineSeedsImmediately(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
-	b.observe(mkNodes(3), now)
+	b.Observe(mkNodes(3), now)
 
 	// A starting cluster must be usable at once rather than waiting a whole
 	// stability period before any leader can be elected.
-	if got := b.size(); got != 3 {
+	if got := b.Size(); got != 3 {
 		t.Errorf("expected the baseline to seed at 3, got %d", got)
 	}
 }
 
 func TestBaselineGrowthRequiresStability(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes3 := mkNodes(3)
-	b.observe(nodes3, now)
+	b.Observe(nodes3, now)
 
 	// Cluster grows to 5, but not yet steady.
 	nodes5 := append(nodes3, mkNodes(2)...)
-	b.observe(nodes5, now)
-	if got := b.size(); got != 3 {
+	b.Observe(nodes5, now)
+	if got := b.Size(); got != 3 {
 		t.Errorf("growth should not be adopted immediately, got %d", got)
 	}
 
 	// Still inside the stability window.
-	b.observe(nodes5, now.Add(stability/2))
-	if got := b.size(); got != 3 {
+	b.Observe(nodes5, now.Add(stability/2))
+	if got := b.Size(); got != 3 {
 		t.Errorf("growth adopted too early, got %d", got)
 	}
 
 	// Steady for long enough.
-	b.observe(nodes5, now.Add(stability+time.Millisecond))
-	if got := b.size(); got != 5 {
+	b.Observe(nodes5, now.Add(stability+time.Millisecond))
+	if got := b.Size(); got != 5 {
 		t.Errorf("expected the baseline to reach 5, got %d", got)
 	}
 }
@@ -70,24 +71,24 @@ func TestBaselineGrowthRequiresStability(t *testing.T) {
 // A count that flaps must never be adopted — this is what stops a node that
 // appears for a moment from ratcheting quorum permanently upward.
 func TestBaselineRejectsTransientSpike(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes3 := mkNodes(3)
-	b.observe(nodes3, now)
+	b.Observe(nodes3, now)
 
 	spike := append(nodes3, mkNodes(6)...) // brief jump to 9
-	b.observe(spike, now.Add(10*time.Millisecond))
-	b.observe(nodes3, now.Add(20*time.Millisecond)) // gone again
-	b.observe(nodes3, now.Add(30*time.Millisecond))
+	b.Observe(spike, now.Add(10*time.Millisecond))
+	b.Observe(nodes3, now.Add(20*time.Millisecond)) // gone again
+	b.Observe(nodes3, now.Add(30*time.Millisecond))
 
-	if got := b.size(); got != 3 {
+	if got := b.Size(); got != 3 {
 		t.Errorf("a transient spike must not raise the baseline, got %d", got)
 	}
 
 	// And the settled count should not lower it either.
-	b.observe(nodes3, now.Add(10*stability))
-	if got := b.size(); got != 3 {
+	b.Observe(nodes3, now.Add(10*stability))
+	if got := b.Size(); got != 3 {
 		t.Errorf("baseline should remain 3, got %d", got)
 	}
 }
@@ -96,59 +97,59 @@ func TestBaselineRejectsTransientSpike(t *testing.T) {
 
 // A silent disappearance (crash or partition) must NOT lower the baseline.
 func TestBaselineIgnoresSilentDisappearance(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
-	if got := b.size(); got != 9 {
+	b.Observe(nodes, now)
+	if got := b.Size(); got != 9 {
 		t.Fatalf("expected seed of 9, got %d", got)
 	}
 
 	// Three vanish with no announcement, and stay gone well past stability.
 	survivors := nodes[:6]
 	for i := 0; i < 20; i++ {
-		b.observe(survivors, now.Add(time.Duration(i)*stability))
+		b.Observe(survivors, now.Add(time.Duration(i)*stability))
 	}
 
-	if got := b.size(); got != 9 {
+	if got := b.Size(); got != 9 {
 		t.Errorf("a silent loss must not lower the baseline (a partition looks identical), got %d", got)
 	}
 }
 
 // A graceful leave is an explicit signal and must lower the baseline.
 func TestBaselineGracefulDepartureLowersBaseline(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
-	if !b.noteGracefulDeparture(nodes[0].ID) {
+	if !b.NoteGracefulDeparture(nodes[0].ID) {
 		t.Fatal("a graceful departure of an eligible node should count")
 	}
-	if got := b.size(); got != 8 {
+	if got := b.Size(); got != 8 {
 		t.Errorf("expected the baseline to drop to 8, got %d", got)
 	}
 
-	if !b.noteGracefulDeparture(nodes[1].ID) {
+	if !b.NoteGracefulDeparture(nodes[1].ID) {
 		t.Fatal("second departure should count")
 	}
-	if got := b.size(); got != 7 {
+	if got := b.Size(); got != 7 {
 		t.Errorf("expected the baseline to drop to 7, got %d", got)
 	}
 }
 
 func TestBaselineGracefulDepartureIsIdempotent(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	nodes := mkNodes(5)
-	b.observe(nodes, time.Now())
+	b.Observe(nodes, time.Now())
 
-	b.noteGracefulDeparture(nodes[0].ID)
-	if b.noteGracefulDeparture(nodes[0].ID) {
+	b.NoteGracefulDeparture(nodes[0].ID)
+	if b.NoteGracefulDeparture(nodes[0].ID) {
 		t.Error("the same departure must not be counted twice")
 	}
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Errorf("expected 4, got %d", got)
 	}
 }
@@ -189,15 +190,15 @@ func TestWasEligibleForBaseline(t *testing.T) {
 }
 
 func TestBaselineNeverDropsBelowOne(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	nodes := mkNodes(3)
-	b.observe(nodes, time.Now())
+	b.Observe(nodes, time.Now())
 
 	for _, n := range nodes {
-		b.noteGracefulDeparture(n.ID)
+		b.NoteGracefulDeparture(n.ID)
 	}
 
-	if got := b.size(); got < 1 {
+	if got := b.Size(); got < 1 {
 		t.Errorf("baseline must stay at least 1, got %d", got)
 	}
 }
@@ -207,17 +208,17 @@ func TestBaselineNeverDropsBelowOne(t *testing.T) {
 // The failure mode a monotonic departed-counter would have had: repeated
 // leave/rejoin cycles driving the baseline to zero.
 func TestBaselineRollingRestartDoesNotLeak(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	for cycle := 0; cycle < 10; cycle++ {
 		target := nodes[cycle%len(nodes)]
 
 		// Announce and depart.
-		b.noteGracefulDeparture(target.ID)
+		b.NoteGracefulDeparture(target.ID)
 
 		remaining := make([]*gossip.Node, 0, len(nodes)-1)
 		for _, n := range nodes {
@@ -226,22 +227,22 @@ func TestBaselineRollingRestartDoesNotLeak(t *testing.T) {
 			}
 		}
 		now = now.Add(10 * time.Millisecond)
-		b.observe(remaining, now)
+		b.Observe(remaining, now)
 
-		if got := b.size(); got != 4 {
+		if got := b.Size(); got != 4 {
 			t.Fatalf("cycle %d: expected 4 while the node is away, got %d", cycle, got)
 		}
 
 		// It comes back and stays.
 		now = now.Add(10 * time.Millisecond)
-		b.observe(nodes, now)
+		b.Observe(nodes, now)
 		now = now.Add(stability + time.Millisecond)
-		b.observe(nodes, now)
+		b.Observe(nodes, now)
 
-		if got := b.size(); got != 5 {
+		if got := b.Size(); got != 5 {
 			t.Fatalf("cycle %d: expected recovery to 5, got %d (leak)", cycle, got)
 		}
-		if got := b.departedCount(); got != 0 {
+		if got := b.DepartedCount(); got != 0 {
 			t.Fatalf("cycle %d: departed set should be empty, holds %d", cycle, got)
 		}
 	}
@@ -249,29 +250,29 @@ func TestBaselineRollingRestartDoesNotLeak(t *testing.T) {
 
 // A rejoin must clear the mark so a later departure counts again.
 func TestBaselineRejoinRearmsDeparture(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
-	b.noteGracefulDeparture(nodes[0].ID)
-	if got := b.size(); got != 4 {
+	b.NoteGracefulDeparture(nodes[0].ID)
+	if got := b.Size(); got != 4 {
 		t.Fatalf("expected 4, got %d", got)
 	}
 
 	// Rejoins and settles.
-	b.observe(nodes, now.Add(10*time.Millisecond))
-	b.observe(nodes, now.Add(stability+20*time.Millisecond))
-	if got := b.size(); got != 5 {
+	b.Observe(nodes, now.Add(10*time.Millisecond))
+	b.Observe(nodes, now.Add(stability+20*time.Millisecond))
+	if got := b.Size(); got != 5 {
 		t.Fatalf("expected recovery to 5, got %d", got)
 	}
 
 	// Leaves again — must count.
-	if !b.noteGracefulDeparture(nodes[0].ID) {
+	if !b.NoteGracefulDeparture(nodes[0].ID) {
 		t.Error("a departure after a rejoin should count again")
 	}
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Errorf("expected 4, got %d", got)
 	}
 }
@@ -279,44 +280,44 @@ func TestBaselineRejoinRearmsDeparture(t *testing.T) {
 // --- forget ---
 
 func TestBaselineForgetDiscountsSilentNode(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	// Three crash silently; the baseline holds, as it must.
 	survivors := nodes[:6]
-	b.observe(survivors, now.Add(stability*3))
-	if got := b.size(); got != 9 {
+	b.Observe(survivors, now.Add(stability*3))
+	if got := b.Size(); got != 9 {
 		t.Fatalf("expected the baseline to hold at 9 after a silent loss, got %d", got)
 	}
 
 	// The operator asserts they are gone for good.
 	for _, n := range nodes[6:] {
-		if !b.forget(n.ID) {
+		if !b.Forget(n.ID) {
 			t.Errorf("forget should discount %v", n.ID)
 		}
 	}
 
-	if got := b.size(); got != 6 {
+	if got := b.Size(); got != 6 {
 		t.Errorf("expected the baseline to fall to 6 after forgetting, got %d", got)
 	}
 }
 
 func TestBaselineForgetIsIdempotent(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	nodes := mkNodes(5)
-	b.observe(nodes, time.Now())
+	b.Observe(nodes, time.Now())
 
 	id := nodes[0].ID
-	if !b.forget(id) {
+	if !b.Forget(id) {
 		t.Fatal("first forget should count")
 	}
-	if b.forget(id) {
+	if b.Forget(id) {
 		t.Error("forgetting twice must not double-count")
 	}
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Errorf("expected 4, got %d", got)
 	}
 }
@@ -326,13 +327,13 @@ func TestBaselineForgetIsIdempotent(t *testing.T) {
 // on cluster knowledge (see TestClusterForgetNodeUnknownIsRejected), which is
 // what stops a bogus forget broadcast from suppressing quorum.
 func TestBaselineForgetAcceptsAnyID(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
-	b.observe(mkNodes(5), time.Now())
+	b := baseline.New(stability, longDwell, true, nil)
+	b.Observe(mkNodes(5), time.Now())
 
-	if !b.forget(gossip.NodeID(uuid.New())) {
+	if !b.Forget(gossip.NodeID(uuid.New())) {
 		t.Error("the tracker itself does not filter; the caller must")
 	}
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Errorf("expected 4, got %d", got)
 	}
 }
@@ -340,28 +341,28 @@ func TestBaselineForgetAcceptsAnyID(t *testing.T) {
 // --- reset ---
 
 func TestBaselineResetReDerives(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
-	b.noteGracefulDeparture(nodes[0].ID)
-	b.noteGracefulDeparture(nodes[1].ID)
-	if got := b.size(); got != 7 {
+	b.Observe(nodes, now)
+	b.NoteGracefulDeparture(nodes[0].ID)
+	b.NoteGracefulDeparture(nodes[1].ID)
+	if got := b.Size(); got != 7 {
 		t.Fatalf("expected 7, got %d", got)
 	}
 
-	b.reset()
-	if got := b.size(); got != 0 {
+	b.Reset()
+	if got := b.Size(); got != 0 {
 		t.Errorf("reset should clear the baseline, got %d", got)
 	}
-	if got := b.departedCount(); got != 0 {
+	if got := b.DepartedCount(); got != 0 {
 		t.Errorf("reset should clear departures, got %d", got)
 	}
 
 	// Re-seeds from what is visible now.
-	b.observe(nodes[:5], now.Add(time.Second))
-	if got := b.size(); got != 5 {
+	b.Observe(nodes[:5], now.Add(time.Second))
+	if got := b.Size(); got != 5 {
 		t.Errorf("expected a re-seed at 5, got %d", got)
 	}
 }
@@ -421,11 +422,11 @@ func TestWatchLeadershipNotifications(t *testing.T) {
 // A graceful drain should walk quorum down in step, and every intermediate state
 // must still be split-safe for the cluster size actually running at that point.
 func TestBaselineDrainKeepsQuorumSafe(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	le := &LeaderElection{
 		config:   &Config{MinClusterSize: 0},
@@ -441,26 +442,26 @@ func TestBaselineDrainKeepsQuorumSafe(t *testing.T) {
 			bSide := live - a
 			if a >= quorum && bSide >= quorum {
 				t.Fatalf("live=%d baseline=%d quorum=%d: split %d/%d elects twice",
-					live, b.size(), quorum, a, bSide)
+					live, b.Size(), quorum, a, bSide)
 			}
 		}
 
 		// Drain one more node.
-		b.noteGracefulDeparture(nodes[i].ID)
+		b.NoteGracefulDeparture(nodes[i].ID)
 		live--
 		now = now.Add(stability + time.Millisecond)
-		b.observe(nodes[i+1:], now)
+		b.Observe(nodes[i+1:], now)
 	}
 }
 
 // A partition must never let the minority reach quorum, no matter how long it
 // persists — the baseline holds because no departure was announced.
 func TestBaselinePartitionMinorityStaysBlocked(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	le := &LeaderElection{
 		config:   &Config{},
@@ -471,23 +472,23 @@ func TestBaselinePartitionMinorityStaysBlocked(t *testing.T) {
 	minority := nodes[:3]
 	for i := 0; i < 50; i++ {
 		now = now.Add(stability)
-		b.observe(minority, now)
+		b.Observe(minority, now)
 
 		if q := le.calculateQuorumForNodes(3); 3 >= q {
-			t.Fatalf("iteration %d: minority of 3 reached quorum %d (baseline %d)", i, q, b.size())
+			t.Fatalf("iteration %d: minority of 3 reached quorum %d (baseline %d)", i, q, b.Size())
 		}
 	}
 
 	// And the majority side can still lead.
 	if q := le.calculateQuorumForNodes(6); 6 < q {
-		t.Errorf("majority of 6 should reach quorum, needs %d (baseline %d)", q, b.size())
+		t.Errorf("majority of 6 should reach quorum, needs %d (baseline %d)", q, b.Size())
 	}
 }
 
 // The whole point of the adaptive term: growth is covered without re-tuning the
 // floor. A floor set for a 5-node cluster must still be safe at 9.
 func TestBaselineGrowthCoversStaleFloor(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	now := time.Now()
 
 	// Floor chosen when the cluster was 5.
@@ -498,10 +499,10 @@ func TestBaselineGrowthCoversStaleFloor(t *testing.T) {
 
 	// It has since grown to 9 and settled.
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
-	b.observe(nodes, now.Add(stability+time.Millisecond))
+	b.Observe(nodes, now)
+	b.Observe(nodes, now.Add(stability+time.Millisecond))
 
-	if got := b.size(); got != 9 {
+	if got := b.Size(); got != 9 {
 		t.Fatalf("expected the baseline to reach 9, got %d", got)
 	}
 
@@ -511,7 +512,7 @@ func TestBaselineGrowthCoversStaleFloor(t *testing.T) {
 
 	if 3 >= q3 && 6 >= q6 {
 		t.Fatalf("a 3/6 split elects twice (q3=%d q6=%d baseline=%d) — the stale floor was not covered",
-			q3, q6, b.size())
+			q3, q6, b.Size())
 	}
 	if 6 < q6 {
 		t.Errorf("the majority side should still lead, needs %d", q6)
@@ -521,9 +522,9 @@ func TestBaselineGrowthCoversStaleFloor(t *testing.T) {
 // Concurrency smoke test: the tracker is touched from the election loop and from
 // state-change callbacks at the same time.
 func TestBaselineConcurrentAccess(t *testing.T) {
-	b := newBaselineTracker(stability, longDwell, true, nil)
+	b := baseline.New(stability, longDwell, true, nil)
 	nodes := mkNodes(20)
-	b.observe(nodes, time.Now())
+	b.Observe(nodes, time.Now())
 
 	done := make(chan struct{})
 
@@ -532,19 +533,19 @@ func TestBaselineConcurrentAccess(t *testing.T) {
 		now := time.Now()
 		for i := 0; i < 500; i++ {
 			now = now.Add(time.Millisecond)
-			b.observe(nodes, now)
-			_ = b.size()
+			b.Observe(nodes, now)
+			_ = b.Size()
 		}
 	}()
 
 	for i := 0; i < 20; i++ {
-		b.noteGracefulDeparture(nodes[i].ID)
-		_ = b.departedCount()
+		b.NoteGracefulDeparture(nodes[i].ID)
+		_ = b.DepartedCount()
 	}
 
 	<-done
 
-	if got := b.size(); got < 1 {
+	if got := b.Size(); got < 1 {
 		t.Errorf("baseline should remain sane under concurrent use, got %d", got)
 	}
 }
@@ -554,27 +555,27 @@ func TestBaselineConcurrentAccess(t *testing.T) {
 const shrinkDwell = 200 * time.Millisecond
 
 func TestAutoShrinkFollowsSingleLoss(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
-	if got := b.size(); got != 5 {
+	b.Observe(nodes, now)
+	if got := b.Size(); got != 5 {
 		t.Fatalf("expected seed of 5, got %d", got)
 	}
 
 	// One node goes missing silently.
 	survivors := nodes[:4]
-	b.observe(survivors, now)
+	b.Observe(survivors, now)
 
 	// Not yet — the dwell has to elapse.
-	b.observe(survivors, now.Add(shrinkDwell/2))
-	if got := b.size(); got != 5 {
+	b.Observe(survivors, now.Add(shrinkDwell/2))
+	if got := b.Size(); got != 5 {
 		t.Errorf("shrink happened too early, baseline %d", got)
 	}
 
-	b.observe(survivors, now.Add(shrinkDwell+time.Millisecond))
-	if got := b.size(); got != 4 {
+	b.Observe(survivors, now.Add(shrinkDwell+time.Millisecond))
+	if got := b.Size(); got != 4 {
 		t.Errorf("expected the baseline to follow down to 4, got %d", got)
 	}
 }
@@ -582,38 +583,38 @@ func TestAutoShrinkFollowsSingleLoss(t *testing.T) {
 // A larger shortfall must be left alone: it cannot be told apart from a partition
 // of that size.
 func TestAutoShrinkIgnoresMultiNodeLoss(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(9)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	// Three vanish at once.
 	survivors := nodes[:6]
 	for i := 0; i < 30; i++ {
-		b.observe(survivors, now.Add(time.Duration(i)*shrinkDwell))
+		b.Observe(survivors, now.Add(time.Duration(i)*shrinkDwell))
 	}
 
-	if got := b.size(); got != 9 {
+	if got := b.Size(); got != 9 {
 		t.Errorf("a three-node shortfall must not shrink the baseline, got %d", got)
 	}
 }
 
 // Losing nodes one at a time should walk the baseline down in steps.
 func TestAutoShrinkWalksDownOneAtATime(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(6)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	for want := 5; want >= 2; want-- {
 		survivors := nodes[:want]
-		b.observe(survivors, now)
+		b.Observe(survivors, now)
 		now = now.Add(shrinkDwell + time.Millisecond)
-		b.observe(survivors, now)
+		b.Observe(survivors, now)
 
-		if got := b.size(); got != want {
+		if got := b.Size(); got != want {
 			t.Fatalf("expected the baseline to step to %d, got %d", want, got)
 		}
 	}
@@ -622,66 +623,66 @@ func TestAutoShrinkWalksDownOneAtATime(t *testing.T) {
 // A single step must not cascade: after following down by one, the baseline
 // should hold until another node actually goes missing.
 func TestAutoShrinkDoesNotCascade(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	survivors := nodes[:4]
-	b.observe(survivors, now)
+	b.Observe(survivors, now)
 	now = now.Add(shrinkDwell + time.Millisecond)
-	b.observe(survivors, now)
+	b.Observe(survivors, now)
 
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Fatalf("expected 4, got %d", got)
 	}
 
 	// Sit at 4 for a long time — the baseline must stay at 4.
 	for i := 0; i < 20; i++ {
 		now = now.Add(shrinkDwell)
-		b.observe(survivors, now)
+		b.Observe(survivors, now)
 	}
 
-	if got := b.size(); got != 4 {
+	if got := b.Size(); got != 4 {
 		t.Errorf("the baseline cascaded to %d; it should have held at 4", got)
 	}
 }
 
 func TestAutoShrinkCanBeDisabled(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, false, nil)
+	b := baseline.New(stability, shrinkDwell, false, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	survivors := nodes[:4]
 	for i := 0; i < 20; i++ {
-		b.observe(survivors, now.Add(time.Duration(i)*shrinkDwell))
+		b.Observe(survivors, now.Add(time.Duration(i)*shrinkDwell))
 	}
 
-	if got := b.size(); got != 5 {
+	if got := b.Size(); got != 5 {
 		t.Errorf("auto-shrink is disabled, baseline should hold at 5, got %d", got)
 	}
 }
 
 // A brief dip must not shrink the baseline — the dwell has to be continuous.
 func TestAutoShrinkRequiresContinuousDwell(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	for i := 0; i < 10; i++ {
 		// Flap between 4 and 5, never holding either long enough.
-		b.observe(nodes[:4], now)
+		b.Observe(nodes[:4], now)
 		now = now.Add(shrinkDwell / 3)
-		b.observe(nodes, now)
+		b.Observe(nodes, now)
 		now = now.Add(shrinkDwell / 3)
 	}
 
-	if got := b.size(); got != 5 {
+	if got := b.Size(); got != 5 {
 		t.Errorf("a flapping count must not shrink the baseline, got %d", got)
 	}
 }
@@ -703,14 +704,14 @@ func TestAutoShrinkNeverAllowsTwoLeaders(t *testing.T) {
 			// Each side runs its own tracker, seeded at the full cluster size,
 			// then settles at what it can see for a long time.
 			trackerFor := func(visible int) *LeaderElection {
-				bt := newBaselineTracker(stability, shrinkDwell, true, nil)
+				bt := baseline.New(stability, shrinkDwell, true, nil)
 				full := mkNodes(n)
 				start := time.Now()
-				bt.observe(full, start)
+				bt.Observe(full, start)
 
 				side := full[:visible]
 				for i := 1; i <= 40; i++ {
-					bt.observe(side, start.Add(time.Duration(i)*(shrinkDwell+time.Millisecond)))
+					bt.Observe(side, start.Add(time.Duration(i)*(shrinkDwell+time.Millisecond)))
 				}
 				return &LeaderElection{
 					config:   &Config{MinClusterSize: floor},
@@ -726,7 +727,7 @@ func TestAutoShrinkNeverAllowsTwoLeaders(t *testing.T) {
 
 			if aElects && bElects {
 				t.Errorf("N=%d floor=%d split %d/%d: both sides elect (baselines %d/%d)",
-					n, floor, a, bSide, leA.baseline.size(), leB.baseline.size())
+					n, floor, a, bSide, leA.baseline.Size(), leB.baseline.Size())
 			}
 		}
 	}
@@ -734,45 +735,45 @@ func TestAutoShrinkNeverAllowsTwoLeaders(t *testing.T) {
 
 // Auto-shrink must not drag the baseline below one.
 func TestAutoShrinkFloorsAtOne(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(2)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	for i := 0; i < 20; i++ {
 		now = now.Add(shrinkDwell + time.Millisecond)
-		b.observe(nodes[:1], now)
+		b.Observe(nodes[:1], now)
 	}
 
-	if got := b.size(); got < 1 {
+	if got := b.Size(); got < 1 {
 		t.Errorf("baseline fell below 1, got %d", got)
 	}
 }
 
 // Growth after a shrink should still work.
 func TestAutoShrinkThenGrowthRecovers(t *testing.T) {
-	b := newBaselineTracker(stability, shrinkDwell, true, nil)
+	b := baseline.New(stability, shrinkDwell, true, nil)
 	now := time.Now()
 
 	nodes := mkNodes(5)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
 	// Shrink to 4.
-	b.observe(nodes[:4], now)
+	b.Observe(nodes[:4], now)
 	now = now.Add(shrinkDwell + time.Millisecond)
-	b.observe(nodes[:4], now)
-	if got := b.size(); got != 4 {
+	b.Observe(nodes[:4], now)
+	if got := b.Size(); got != 4 {
 		t.Fatalf("expected 4, got %d", got)
 	}
 
 	// The node returns and settles.
 	now = now.Add(10 * time.Millisecond)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 	now = now.Add(stability + time.Millisecond)
-	b.observe(nodes, now)
+	b.Observe(nodes, now)
 
-	if got := b.size(); got != 5 {
+	if got := b.Size(); got != 5 {
 		t.Errorf("expected recovery to 5, got %d", got)
 	}
 }

@@ -15,9 +15,12 @@ Set / Delete  →  apply locally under a fresh HLC version
              →  push to W-1 peers in parallel, wait for acks          (durable)
              →  fire-and-forget fan-out to the scope's members        (spread)
 
-every node, per gossip tick  ──► full-sync pull until synced, and again
-                                 whenever the observed group grows;
-                                 re-gossip batches in between
+anti-entropy (no ticks)     ──► events: membership growth or a peer returning
+                                 triggers a full-sync pull; failures arm a
+                                 backing-off retry that self-extinguishes
+activity                     ──► every change re-arms one debounced total
+                                 sweep; failed fan-out sends retry with
+                                 backoff — no activity, no timers at all
 
 restarted / late-joining node ──► bidirectional full sync: it offers its
                                   snapshot and merges the answer
@@ -64,9 +67,10 @@ reaped after a skew-absorbing grace.
 
 `Set` acknowledges after the local write plus `min(W-1, water-1)` peer acks
 within `ReplicationTimeout`, retried once against replacement peers. The
-water mark is the adopted group size the bar is measured against, and it
-moves only for defensible reasons — the same rules as the leader package's
-election baseline:
+water mark is the adopted group size the bar is measured against — the same
+shared tracker as the leader package's election baseline (internal/baseline),
+fed by membership events rather than polling — and it moves only for
+defensible reasons:
 
 - **Growth is trusted after it settles**: the observed member count must hold
   steady for `StabilityPeriod` (default 2 × DeadNodeTimeout) before it raises
@@ -135,6 +139,20 @@ after the cluster has reaped that delete's tombstone, would otherwise
 resurrect the deleted key — the same GC-grace tradeoff as any
 tombstone-based store.
 
+### Tick-free drivers
+
+The store runs no periodic timers. Everything is driven by events, activity,
+or scheduled one-shots: the baseline's stability/dwell windows advance via a
+timer armed only while an adoption is pending; the snapshot interval is a
+one-shot armed on the clean-to-dirty transition; reaping is amortised over
+every 1024 table changes; catch-up runs at construction, on membership events,
+and on capped-backoff retries after failures; total sweeps ride a per-change
+debounce. The boundary this buys: **a completely quiet store that silently
+missed a fire-and-forget delivery stays stale until the next membership
+event, mutation, or explicit `Sync()`** — absence of data is not an event.
+For a busy store (the intended use) the debounce fires shortly after every
+burst and heals everything.
+
 ### Residual consistency semantics (documented, by design)
 
 - **No atomic read-modify-write.** Concurrent writers to one key race and one
@@ -202,9 +220,8 @@ the store is a generic byte KV and deliberately knows nothing about users.
 | `Delete(key)` | Idempotent tombstone write; durable like Set. On quorum failure the delete stands and converges. |
 | `DeletePrefix(prefix)` | Scans live keys under the prefix, replicates one tombstone batch; returns the count. |
 | `Keys(prefix)` / `Len()` | Sorted live keys / live count — local view. |
-| `Sync()` | One bidirectional full-sync exchange; also runs automatically on the gossip tick. |
+| `Sync()` | One bidirectional full-sync exchange; also runs automatically on membership events, activity debounces, and failure retries. |
 | `Synced()` | Whether an initial catch-up has completed (or there are no peers). |
-| `EntryCount()` / `TombstoneCount()` | Diagnostics. |
 
 Validation errors — `ErrKeyEmpty`, `ErrValueTooLarge`, `ErrTTLOutOfRange`,
 `ErrTooManyKeys` (per-store `MaxKeys` cap), `ErrStoreClosed` — are returned

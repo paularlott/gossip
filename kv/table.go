@@ -3,6 +3,7 @@ package kv
 import (
 	"bytes"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,17 +26,15 @@ type table struct {
 	cfg     *Config
 	clock   *hlc.Clock
 	nowFn   func() time.Time
-	selfID  gossip.NodeID
 	closed  bool
 }
 
-func newTable(cfg *Config, selfID gossip.NodeID) *table {
+func newTable(cfg *Config) *table {
 	return &table{
 		entries: make(map[string]*Entry),
 		cfg:     cfg,
 		clock:   cfg.Clock,
 		nowFn:   cfg.NowFn,
-		selfID:  selfID,
 	}
 }
 
@@ -76,10 +75,12 @@ func (t *table) get(key string) ([]byte, bool) {
 	return e.Value, true
 }
 
-// setLocal mints a versioned entry for a local write. The current entry's
-// version is witnessed before minting, so the local clock — and therefore
-// this write — is guaranteed to dominate whatever the table already holds.
-func (t *table) setLocal(key string, value []byte, ttl time.Duration) *Entry {
+// setLocal mints a versioned entry for a local write, stamped with the
+// caller's origin (the local node's ID, queried from the cluster). The
+// current entry's version is witnessed before minting, so the local clock —
+// and therefore this write — is guaranteed to dominate whatever the table
+// already holds.
+func (t *table) setLocal(origin gossip.NodeID, key string, value []byte, ttl time.Duration) *Entry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -95,7 +96,7 @@ func (t *table) setLocal(key string, value []byte, ttl time.Duration) *Entry {
 		Key:     key,
 		Value:   value,
 		Version: uint64(t.clock.Now()),
-		Origin:  t.selfID,
+		Origin:  origin,
 	}
 	if ttl > 0 {
 		e.ExpiresAtMs = t.nowFn().Add(ttl).UnixMilli()
@@ -107,7 +108,7 @@ func (t *table) setLocal(key string, value []byte, ttl time.Duration) *Entry {
 // deleteLocal mints a tombstone. It is written even when the key is absent
 // locally: a peer may still hold a value the local node never saw, and only
 // the tombstone prevents that value resurrecting on the next sync.
-func (t *table) deleteLocal(key string) *Entry {
+func (t *table) deleteLocal(origin gossip.NodeID, key string) *Entry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -122,7 +123,7 @@ func (t *table) deleteLocal(key string) *Entry {
 	e := &Entry{
 		Key:         key,
 		Version:     uint64(t.clock.Now()),
-		Origin:      t.selfID,
+		Origin:      origin,
 		Tombstone:   true,
 		DeletedAtMs: t.nowFn().UnixMilli(),
 	}
@@ -134,7 +135,7 @@ func (t *table) deleteLocal(key string) *Entry {
 // batch for replication. Absent keys are skipped — unlike a plain Delete
 // there is no resurrection to guard against for keys the table has never
 // held, and skipping keeps bulk deletes from minting unbounded junk.
-func (t *table) deletePrefixLocal(prefix string) []*Entry {
+func (t *table) deletePrefixLocal(origin gossip.NodeID, prefix string) []*Entry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -145,14 +146,14 @@ func (t *table) deletePrefixLocal(prefix string) []*Entry {
 	now := t.nowFn()
 	var out []*Entry
 	for k, e := range t.entries {
-		if !e.live(now) || !hasPrefix(k, prefix) {
+		if !e.live(now) || !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		t.clock.Witness(hlc.Timestamp(e.Version))
 		tomb := &Entry{
 			Key:         k,
 			Version:     uint64(t.clock.Now()),
-			Origin:      t.selfID,
+			Origin:      origin,
 			Tombstone:   true,
 			DeletedAtMs: now.UnixMilli(),
 		}
@@ -238,7 +239,7 @@ func (t *table) keys(prefix string) []string {
 	now := t.nowFn()
 	var out []string
 	for k, e := range t.entries {
-		if e.live(now) && hasPrefix(k, prefix) {
+		if e.live(now) && strings.HasPrefix(k, prefix) {
 			out = append(out, k)
 		}
 	}
@@ -325,9 +326,4 @@ func (t *table) reap() {
 			delete(t.entries, k)
 		}
 	}
-}
-
-// hasPrefix matches keys under a prefix; the empty prefix matches everything.
-func hasPrefix(key, prefix string) bool {
-	return len(prefix) == 0 || (len(key) >= len(prefix) && key[:len(prefix)] == prefix)
 }

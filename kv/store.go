@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/gossip/internal/baseline"
 )
 
 // Store is a leaderless, eventually-consistent replicated key-value store.
@@ -27,13 +28,13 @@ import (
 // and entries never leak outside it. Multiple stores with different Names
 // coexist on one cluster.
 type Store struct {
-	cluster   *gossip.Cluster
-	members   Membership
-	config    *Config
-	tbl       *table
-	registry  *registry
-	gossipTip gossip.HandlerID
-	stateTip  gossip.HandlerID
+	cluster  *gossip.Cluster
+	members  Membership
+	config   *Config
+	tbl      *table
+	registry *registry
+	stateTip gossip.HandlerID
+	metaTip  gossip.HandlerID
 
 	mu     sync.Mutex
 	closed bool
@@ -48,21 +49,53 @@ type Store struct {
 	synced      atomic.Bool
 	syncedCount atomic.Int32 // member count the store last caught up at
 
-	// water is the adaptive group-size mark the write bar is measured
-	// against (see water.go). lastCount is the most recently observed
-	// member count, kept as an atomic for the resync-on-growth trigger.
-	water     *waterTracker
+	// mark is the adaptive group-size water mark the write bar is measured
+	// against — the shared baseline tracker (internal/baseline), the same
+	// rules the leader package applies to election quorum.
+	mark *baseline.Tracker
+
+	// viewMu guards the event-driven member view. Unlike the lock pool —
+	// whose every mutation is a network round trip and therefore queries the
+	// cluster's own (event-maintained) candidate list each time — the kv
+	// write path is a ~400ns local operation, and querying AliveNodes()
+	// costs a node-list scan plus a slice allocation per Set. So the store
+	// caches: the view is rebuilt on node state and metadata events, the
+	// gossip tick only advances the mark's stability clocks against the
+	// cache, and writes filter a small slice instead of scanning. viewIDs
+	// accumulates every member ever observed (the departure-eligibility
+	// set, which cannot be queried from the cluster — a leaving node is
+	// already out of the alive list by the time handlers run), pruning
+	// nodes the cluster has forgotten. lastCount is the current view's
+	// size, kept as an atomic for the resync-on-growth trigger.
+	viewMu    sync.Mutex
+	viewNodes []*gossip.Node // alive members at the last event
+	viewIDs   map[gossip.NodeID]struct{}
 	lastCount atomic.Int32
 
 	// Snapshot state: dirty counts table changes (local writes plus adopted
 	// remote entries) since the last successful save; a store with a nil
 	// Persister never snapshots. snapshotting single-flights the save so a
 	// slow Persister — the save runs on its own goroutine — skips triggers
-	// instead of piling up; lastSaveNano anchors the interval trigger.
-	dirty        atomic.Int64
-	snapshotting atomic.Bool
-	lastSaveNano atomic.Int64
-	saveWG       sync.WaitGroup
+	// instead of piling up; lastSaveNano anchors the interval check.
+	// changes counts all table activity and drives amortised housekeeping;
+	// snapScheduled flags the one-shot interval timer armed on the clean-to-
+	// dirty transition (debounce by timer, not by tick).
+	dirty         atomic.Int64
+	changes       atomic.Int64
+	snapScheduled atomic.Bool
+	snapshotting  atomic.Bool
+	lastSaveNano  atomic.Int64
+	saveWG        sync.WaitGroup
+
+	// clockTimer advances the baseline's stability/dwell windows — the one
+	// genuinely time-based rule — as a scheduled one-shot re-armed after
+	// every Observe, never a periodic tick. retryTimer re-runs a failed
+	// catch-up with capped backoff. Both are stopped in Close.
+	clockTimer    *time.Timer
+	retryTimer    *time.Timer
+	retryMu       sync.Mutex
+	retryDelay    time.Duration
+	sweepDebounce *time.Timer
 }
 
 // NewStore creates a store on the given cluster, scoped to membership.
@@ -93,11 +126,12 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 		cluster: cluster,
 		members: membership,
 		config:  config,
-		tbl:     newTable(config, cluster.LocalNode().ID),
-		water: newWaterTracker(config.StabilityPeriod, config.ShrinkDwell,
-			!config.AutoShrinkDisabled, cluster, config.NowFn),
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		tbl:     newTable(config),
+		mark: baseline.New(config.StabilityPeriod, config.ShrinkDwell,
+			!config.AutoShrinkDisabled, cluster),
+		viewIDs: make(map[gossip.NodeID]struct{}),
+		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
 	}
 
 	s.registry = getOrCreateRegistry(cluster)
@@ -112,22 +146,23 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 		s.loadSnapshot()
 	}
 
-	// Anti-entropy rides the cluster's gossip event — the same self-adjusting
-	// cadence the cluster uses for its own state exchange — so the store
-	// keeps no timer of its own.
-	s.gossipTip = cluster.HandleGossipFunc(s.onGossipTick)
-
-	// Graceful departures lower the water mark immediately: a Leave()
-	// broadcast is a positive signal from outside the failure domain, which
-	// a partitioned node cannot fake.
+	// Membership is event-driven: node state and metadata changes rebuild
+	// the member view and feed the water mark; the gossip tick only
+	// advances the mark's stability clocks. Graceful departures lower the
+	// mark immediately — a Leave() broadcast is a positive signal from
+	// outside the failure domain, which a partitioned node cannot fake.
 	s.stateTip = cluster.HandleNodeStateChangeFunc(s.handleNodeStateChange)
+	s.metaTip = cluster.HandleNodeMetadataChangeFunc(s.handleNodeMetadataChange)
 
 	// Record the current view immediately so a store created on an
 	// established group enforces its quorum from the first write, not from
-	// the first tick. A store with no peers is vacuously in sync — but the
+	// the first event. A store with no peers is vacuously in sync — but the
 	// count it synced at means later-appearing peers trigger a real catch-up
 	// pull.
-	s.observeMembers()
+	// Seed the mark with the healthy construction-time view before anything
+	// else can observe: the baseline seeds immediately on first observation,
+	// so that observation must be the full group, not an already-shrunk one.
+	s.observe(s.refreshView())
 	if len(s.targets()) == 0 {
 		s.synced.Store(true)
 		s.syncedCount.Store(s.lastCount.Load())
@@ -171,8 +206,23 @@ func (s *Store) Close() {
 	<-s.doneCh
 	s.saveWG.Wait()
 
-	s.cluster.RemoveGossipHandler(s.gossipTip)
+	s.mu.Lock()
+	if s.clockTimer != nil {
+		s.clockTimer.Stop()
+	}
+	s.mu.Unlock()
+
+	s.retryMu.Lock()
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+	}
+	if s.sweepDebounce != nil {
+		s.sweepDebounce.Stop()
+	}
+	s.retryMu.Unlock()
+
 	s.cluster.RemoveNodeStateChangeHandler(s.stateTip)
+	s.cluster.RemoveNodeMetadataChangeHandler(s.metaTip)
 	s.tbl.close()
 	s.registry.unregisterStore(s.config.Name)
 }
@@ -224,7 +274,7 @@ func (s *Store) Set(key string, value []byte, ttl time.Duration) error {
 		}
 	}
 
-	ent := s.tbl.setLocal(key, value, ttl)
+	ent := s.tbl.setLocal(s.cluster.LocalNode().ID, key, value, ttl)
 	if ent == nil {
 		return ErrStoreClosed
 	}
@@ -252,7 +302,7 @@ func (s *Store) Delete(key string) error {
 		return ErrKeyEmpty
 	}
 
-	ent := s.tbl.deleteLocal(key)
+	ent := s.tbl.deleteLocal(s.cluster.LocalNode().ID, key)
 	if ent == nil {
 		return ErrStoreClosed
 	}
@@ -271,7 +321,7 @@ func (s *Store) DeletePrefix(prefix string) (int, error) {
 		return 0, err
 	}
 
-	tombs := s.tbl.deletePrefixLocal(prefix)
+	tombs := s.tbl.deletePrefixLocal(s.cluster.LocalNode().ID, prefix)
 	if len(tombs) == 0 {
 		return 0, nil
 	}
@@ -291,12 +341,6 @@ func (s *Store) Keys(prefix string) []string {
 
 // Len returns the number of live keys in the local replica.
 func (s *Store) Len() int { return s.tbl.len() }
-
-// EntryCount returns total entries including tombstones (diagnostics).
-func (s *Store) EntryCount() int { return s.tbl.entryCount() }
-
-// TombstoneCount returns the number of live tombstones (diagnostics).
-func (s *Store) TombstoneCount() int { return s.tbl.tombstoneCount() }
 
 // Sync runs one bidirectional full-sync exchange with the store's peers and
 // reports whether any peer answered. Catch-up also happens automatically on
@@ -319,13 +363,13 @@ func (s *Store) Sync() bool {
 // mirroring Cluster.ForgetNode. Local view only: peers keep their own (more
 // conservative) bars until they forget the node themselves or see it leave.
 func (s *Store) Forget(id gossip.NodeID) bool {
-	return s.water.forget(id)
+	return s.mark.Forget(id)
 }
 
 // compensate undoes a local write whose replication fell short: the fresh
 // tombstone beats the half-written value everywhere by version.
 func (s *Store) compensate(ent *Entry) {
-	if tomb := s.tbl.deleteLocal(ent.Key); tomb != nil {
+	if tomb := s.tbl.deleteLocal(s.cluster.LocalNode().ID, ent.Key); tomb != nil {
 		go s.gossipEntries([]*Entry{tomb})
 	}
 }
@@ -336,11 +380,50 @@ func (s *Store) compensate(ent *Entry) {
 // background anti-entropy — catch-up until synced and again whenever the
 // observed group has grown (a lone store meeting its first peers pulls their
 // state), and re-gossip batches in between.
-func (s *Store) onGossipTick() {
-	s.observeMembers()
-	s.tbl.reap()
-	s.maybeSnapshotAsync()
+// observe feeds the baseline and re-arms its clock timer: every membership
+// event and every timer firing routes through here, so the stability and
+// dwell windows advance on schedule without any periodic tick.
+func (s *Store) observe(nodes []*gossip.Node) {
+	s.mark.Observe(nodes, s.config.NowFn())
 
+	if d := s.mark.Deadline(s.config.NowFn()); d > 0 {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		if s.clockTimer != nil {
+			s.clockTimer.Stop()
+		}
+		s.clockTimer = time.AfterFunc(d, func() {
+			if s.checkClosed() != nil {
+				return
+			}
+			s.observe(s.currentView())
+		})
+		s.mu.Unlock()
+	}
+}
+
+// maybeSweep runs the anti-entropy pass single-flighted on its own goroutine:
+// catch-up until synced and again whenever the observed group has grown
+// (a lone store meeting its first peers pulls their state), and re-gossip
+// batches in between. Called from the gossip tick and — for faster
+// convergence — directly from membership events, which is why the work is
+// dispatched rather than done inline: the event goroutine must not wait on
+// network round trips.
+func (s *Store) maybeSweep() {
+	s.sweep(false)
+}
+
+// maybeSweepAll is the event-triggered variant: when already synced it
+// regossips every batch to every peer, because a membership event is rare
+// and must heal totally rather than across successive paced rounds.
+func (s *Store) maybeSweepAll() {
+	s.sweep(true)
+}
+
+func (s *Store) sweep(all bool) {
 	if s.sweeping.CompareAndSwap(false, true) {
 		go func() {
 			defer s.sweeping.Store(false)
@@ -351,20 +434,85 @@ func (s *Store) onGossipTick() {
 				}
 				return
 			}
+			if all {
+				s.regossipAll()
+				return
+			}
 			s.regossip()
 		}()
 	}
 }
 
-// --- optional persistence (see persist.go for the contract) ---
-
-// markDirty records table changes that the next snapshot must capture. A
-// memory-only store never counts.
-func (s *Store) markDirty(n int) {
-	if s.config.Persister != nil && n > 0 {
-		s.dirty.Add(int64(n))
+// sweepOnGrowth kicks the anti-entropy pass when the member view has grown
+// past what it last synced with — the event-driven trigger that lets a
+// joining, healing, or group-growing store pull state immediately instead
+// of waiting out the gossip interval. Growth-gated by construction: shrink
+// and flap events do not fire sweeps, so churn cannot stampede the peers
+// with full-sync requests.
+func (s *Store) sweepOnGrowth() {
+	if s.lastCount.Load() > s.syncedCount.Load() {
+		s.maybeSweepAll()
 	}
 }
+
+// --- optional persistence (see persist.go for the contract) ---
+
+// markDirty records table changes and drives everything that was once
+// tick-based, amortised over activity instead: every so many changes the
+// table is reaped (memory hygiene; reads already expire lazily) and the
+// anti-entropy sweep runs, so a busy store keeps itself healthy without any
+// periodic timer. A store with a Persister additionally counts toward the
+// snapshot triggers — the write threshold here, the interval via a one-shot
+// timer armed on the clean-to-dirty transition.
+func (s *Store) markDirty(n int) {
+	if n <= 0 {
+		return
+	}
+	total := s.changes.Add(int64(n))
+	if total%reapEvery == 0 {
+		go s.tbl.reap()
+	}
+
+	// Every change (re)arms one debounced total sweep, firing shortly after
+	// activity settles: a fire-and-forget delivery silently dropped —
+	// sub-detection partitions produce neither events nor send errors — is
+	// healed by the next burst's wake. No activity, no timer.
+	s.retryMu.Lock()
+	if s.sweepDebounce != nil {
+		s.sweepDebounce.Stop()
+	}
+	s.sweepDebounce = time.AfterFunc(sweepDebounceDelay, func() { s.sweep(true) })
+	s.retryMu.Unlock()
+
+	if s.config.Persister == nil {
+		return
+	}
+	d := s.dirty.Add(int64(n))
+	if d >= int64(s.config.SnapshotWrites) {
+		s.maybeSnapshotAsync()
+		return
+	}
+	if d == int64(n) && s.snapScheduled.CompareAndSwap(false, true) {
+		// Clean store just went dirty: arm the interval debounce.
+		s.mu.Lock()
+		if !s.closed {
+			time.AfterFunc(s.config.SnapshotInterval, func() {
+				s.snapScheduled.Store(false)
+				s.maybeSnapshotAsync()
+			})
+		}
+		s.mu.Unlock()
+	}
+}
+
+// Housekeeping cadence: reap every 1024 changes; sweeps ride the mutation
+// debounce. A quiet store runs neither — its reads are lazy-expired, and
+// healing waits for a membership event, further activity, or an explicit
+// Sync().
+const (
+	reapEvery          = 1024
+	sweepDebounceDelay = 750 * time.Millisecond
+)
 
 // adopt merges a batch of remote entries and counts what actually changed,
 // so a replica that only ever receives gossip still persists its view of
@@ -497,32 +645,98 @@ func (s *Store) Snapshot() error {
 	return nil
 }
 
-// handleNodeStateChange lowers the water mark when a member announces a
-// graceful departure. Crashes and partitions produce no signal — only
-// absence — and are handled by the tracker's one-at-a-time dwell rule.
+// handleNodeStateChange rebuilds the member view on any node state change
+// and feeds it to the water mark, advancing its stability clock on real
+// membership events. A graceful departure lowers the mark immediately; a
+// crash or partition produces no signal — only absence — and is handled by
+// the mark's one-at-a-time dwell rule.
 func (s *Store) handleNodeStateChange(node *gossip.Node, prevState gossip.NodeState) {
-	if node == nil || node.GetObservedState() != gossip.NodeLeaving {
+	if node == nil {
 		return
 	}
-	if s.water.wasMember(node.ID) {
-		s.water.noteGracefulDeparture(node.ID)
+	// Eligibility is decided from the pre-event view: a leaving node is
+	// typically already out of the alive set by the time handlers run.
+	wasMember := s.inView(node.ID)
+
+	// A peer returning from suspect or dead is not growth, but we may have
+	// missed its writes while it was partitioned from us — pull.
+	peerReturned := prevState != gossip.NodeAlive && node.GetObservedState() == gossip.NodeAlive
+
+	nodes := s.refreshView()
+	s.observe(nodes)
+	if s.lastCount.Load() > s.syncedCount.Load() || peerReturned {
+		s.maybeSweepAll()
+	}
+
+	if node.GetObservedState() == gossip.NodeLeaving && wasMember {
+		s.mark.NoteGracefulDeparture(node.ID)
+		s.observe(nodes)
 	}
 }
 
-// observeMembers feeds the current alive-member view into the water mark.
-// The count includes the local node when it is a member.
-func (s *Store) observeMembers() {
-	alive := aliveMembers(s.members, s.cluster)
-	s.lastCount.Store(int32(len(alive)))
-	s.water.observe(alive, s.config.NowFn())
+// handleNodeMetadataChange rebuilds the member view when node metadata
+// changes — group-scoped memberships gain and lose members this way.
+func (s *Store) handleNodeMetadataChange(node *gossip.Node) {
+	s.observe(s.refreshView())
+	s.sweepOnGrowth()
 }
 
-// targets returns the store's alive peers — members minus the local node —
-// as candidate replica targets.
+// refreshView rebuilds the cached member view from the membership scope and
+// returns it. Alive-membership snapshots plus the ever-seen eligibility set
+// are maintained here; callers feed the result to the water mark.
+func (s *Store) refreshView() []*gossip.Node {
+	nodes := aliveMembers(s.members, s.cluster)
+
+	s.viewMu.Lock()
+	s.viewNodes = nodes
+	s.viewIDs = pruneForgotten(s.cluster, s.viewIDs, nodes)
+	s.viewMu.Unlock()
+
+	s.lastCount.Store(int32(len(nodes)))
+	return nodes
+}
+
+// inView reports whether the node has ever been observed inside the store's
+// scope — the departure-eligibility set.
+func (s *Store) inView(id gossip.NodeID) bool {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	_, ok := s.viewIDs[id]
+	return ok
+}
+
+// currentView returns a copy of the cached member view — no membership
+// scan; the view is maintained by events.
+func (s *Store) currentView() []*gossip.Node {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	out := make([]*gossip.Node, len(s.viewNodes))
+	copy(out, s.viewNodes)
+	return out
+}
+
+// pruneForgotten adds the currently observed members to the ever-seen set
+// and drops entries for nodes the cluster no longer knows at all.
+func pruneForgotten(c *gossip.Cluster, seen map[gossip.NodeID]struct{}, nodes []*gossip.Node) map[gossip.NodeID]struct{} {
+	for _, n := range nodes {
+		seen[n.ID] = struct{}{}
+	}
+	for id := range seen {
+		if c.GetNode(id) == nil {
+			delete(seen, id)
+		}
+	}
+	return seen
+}
+
+// targets returns the store's alive peers — the cached member view minus
+// the local node — as candidate replica targets. The view is maintained by
+// events, so this is a filter of a small slice, never a membership scan.
 func (s *Store) targets() []*gossip.Node {
 	self := s.cluster.LocalNode().ID
-	out := make([]*gossip.Node, 0, len(s.members.Nodes()))
-	for _, n := range s.members.Nodes() {
+	view := s.currentView()
+	out := make([]*gossip.Node, 0, len(view))
+	for _, n := range view {
 		if n == nil || n.ID == self {
 			continue
 		}
@@ -535,13 +749,13 @@ func (s *Store) targets() []*gossip.Node {
 }
 
 // needAcks is the number of peer acks a write must collect: W-1, degraded to
-// the adopted water mark. The mark follows the rules in water.go — it rises
-// with stable growth and falls only on graceful leaves, one-at-a-time
+// the adopted water mark. The mark follows the shared baseline rules — it
+// rises with stable growth and falls only on graceful leaves, one-at-a-time
 // dwell-confirmed shrinkage, or Forget — so peer failures never lower the
 // bar, but a genuinely scaled-down group re-opens for writes.
 func (s *Store) needAcks() int {
 	need := s.config.WriteReplicas - 1
-	if mark := s.water.size() - 1; need > mark {
+	if mark := s.mark.Size() - 1; need > mark {
 		need = mark
 	}
 	if need < 0 {

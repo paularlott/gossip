@@ -39,7 +39,7 @@ type Config struct {
 	// whole group.
 	//
 	// The requirement is measured against the store's water mark — the group
-	// size adopted under the rules in water.go (growth after a stability
+	// size adopted under the shared baseline rules (growth after a stability
 	// period; shrinkage only on graceful leaves, one-at-a-time after a long
 	// dwell, or Store.Forget). A store that starts alone accepts local-only
 	// writes; a store partitioned away from a group it has seen refuses
@@ -59,7 +59,7 @@ type Config struct {
 	// ShrinkDwell is how long the group must sit at exactly one member below
 	// the water mark before the mark follows it down. This lets a group
 	// shrink without operator involvement while remaining split-safe (see
-	// water.go). Any larger loss is left alone: it cannot be told apart from
+	// the baseline tracker). Any larger loss is left alone: it cannot be told apart from
 	// a partition of that size. Zero derives it as 4 x
 	// Cluster.DeadNodeTimeout(). Set AutoShrinkDisabled to turn it off.
 	ShrinkDwell time.Duration

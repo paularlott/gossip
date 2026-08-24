@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/paularlott/gossip"
+	"github.com/paularlott/gossip/internal/baseline"
 )
 
 // forgetMessage carries an operator assertion that a node is permanently gone.
@@ -34,7 +35,7 @@ type LeaderElection struct {
 	eventHandlers *leaderEventHandlers
 	nodeGroup     *gossip.NodeGroup
 	stateHandler  gossip.HandlerID
-	baseline      *baselineTracker
+	baseline      *baseline.Tracker
 	startStopMu   sync.Mutex
 	wg            sync.WaitGroup
 	started       bool
@@ -172,7 +173,7 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 		ctx:           ctx,
 		cancel:        cancel,
 		eventHandlers: newLeaderEventHandlers(cluster.Logger()),
-		baseline:      newBaselineTracker(stability, shrinkDwell, !config.AutoShrinkDisabled, cluster),
+		baseline:      baseline.New(stability, shrinkDwell, !config.AutoShrinkDisabled, cluster),
 	}
 
 	// The node group must exist before any handler is registered. Handlers run on
@@ -303,7 +304,7 @@ func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
 func (le *LeaderElection) checkAndElectLeader() {
 	// Keep the quorum baseline current before any quorum decision is taken.
 	if le.baseline != nil {
-		le.baseline.observe(le.getEligibleNodes(), time.Now())
+		le.baseline.Observe(le.getEligibleNodes(), time.Now())
 	}
 
 	// If metadata filtering is enabled and local node is not eligible, don't participate
@@ -668,16 +669,22 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 		With("newState", node.GetObservedState().String()).
 		Debug("Node state changed")
 
+	// Membership changes feed the baseline the moment they happen; the check
+	// interval remains as the clock that advances stability and dwell windows.
+	if le.baseline != nil {
+		le.baseline.Observe(le.getEligibleNodes(), time.Now())
+	}
+
 	// A node that announced its departure is a positive signal from outside the
 	// failure domain, so it is safe to discount from the quorum baseline. A
 	// crash or partition produces no such announcement and is deliberately not
 	// discounted, keeping quorum conservative.
 	if node.GetObservedState() == gossip.NodeLeaving && le.baseline != nil &&
 		le.wasEligibleForBaseline(node, prevState) {
-		if le.baseline.noteGracefulDeparture(node.ID) {
+		if le.baseline.NoteGracefulDeparture(node.ID) {
 			le.cluster.Logger().Info("node left gracefully; quorum baseline reduced",
 				"node_id", node.ID.String(),
-				"baseline", le.baseline.size())
+				"baseline", le.baseline.Size())
 		}
 	}
 
@@ -753,7 +760,7 @@ func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 	// This is what removes the need to re-tune MinClusterSize as the cluster
 	// grows, and it only ever shrinks on evidence of a deliberate departure.
 	if le.baseline != nil {
-		if bl := le.baseline.size(); bl > 0 {
+		if bl := le.baseline.Size(); bl > 0 {
 			if majority := bl/2 + 1; majority > required {
 				required = majority
 			}
@@ -774,7 +781,7 @@ func (le *LeaderElection) BaselineSize() int {
 	if le.baseline == nil {
 		return 0
 	}
-	return le.baseline.size()
+	return le.baseline.Size()
 }
 
 // QuorumSize returns the number of eligible nodes currently required to elect or
@@ -830,13 +837,13 @@ func (le *LeaderElection) ForgetNodeLocal(id gossip.NodeID) bool {
 		return false // unknown here — nothing to forget, no decrement
 	}
 
-	discounted := le.baseline.forget(id)
+	discounted := le.baseline.Forget(id)
 	le.cluster.ForgetNode(id)
 
 	if discounted {
 		le.cluster.Logger().Info("node forgotten; quorum baseline reduced",
 			"node_id", id.String(),
-			"baseline", le.baseline.size(),
+			"baseline", le.baseline.Size(),
 			"quorum", le.QuorumSize())
 	}
 	return discounted
@@ -860,7 +867,7 @@ func (le *LeaderElection) handleForget(sender *gossip.Node, packet *gossip.Packe
 // baseline no longer reflects reality.
 func (le *LeaderElection) ResetQuorumBaseline() {
 	if le.baseline != nil {
-		le.baseline.reset()
+		le.baseline.Reset()
 	}
 }
 

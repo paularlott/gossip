@@ -25,7 +25,6 @@ func (s *Store) replicateBatch(entries []*Entry) error {
 		return nil
 	}
 
-	s.observeMembers()
 	targets := s.targets()
 	need := s.needAcks()
 
@@ -125,6 +124,10 @@ func (s *Store) gossipEntries(entries []*Entry) {
 		for _, peer := range peers {
 			if err := s.cluster.SendTo(peer, kvGossipMsg, msg); err != nil {
 				s.cluster.Logger().WithError(err).Debug("kv: gossip send failed")
+				// A peer was unreachable — sub-detection partitions produce
+				// no membership events, so the fan-out retries itself on a
+				// backing-off schedule until it succeeds.
+				s.scheduleSweepRetry()
 				return
 			}
 		}
@@ -158,11 +161,65 @@ func (s *Store) entriesPerPacket(total int) int {
 
 // catchUp pulls the state of every peer into the local table via a
 // bidirectional full-sync exchange — the request carries our snapshot, the
-// response carries theirs, both sides merge. Run on the gossip tick until
-// some peer has answered. Returns true when the store is in sync: at least
-// one peer answered, or there are no peers at all (a lone store is vacuously
-// in sync).
+// response carries theirs, both sides merge. Run from membership events,
+// amortised activity, and construction until some peer has answered; a
+// failed exchange schedules a capped-backoff retry, so an unsynced store
+// keeps trying without any periodic tick. Returns true when the store is in
+// sync: at least one peer answered, or there are no peers at all (a lone
+// store is vacuously in sync).
 func (s *Store) catchUp() bool {
+	ok := s.catchUpOnce()
+	if !ok {
+		s.scheduleSweepRetry()
+	}
+	return ok
+}
+
+// scheduleSweepRetry re-runs the sweep after a failure — a failed catch-up
+// or a fan-out send that could not reach a peer — on a backing-off one-shot
+// timer. This is what heals sub-detection partitions (too brief for any
+// membership event to exist) and unreachable peers, without a periodic tick:
+// the schedule exists only while something is failing.
+func (s *Store) scheduleSweepRetry() {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+
+	if s.retryDelay == 0 {
+		s.retryDelay = s.config.SyncTimeout
+	} else if s.retryDelay < 6*s.config.SyncTimeout {
+		s.retryDelay *= 2
+	}
+	delay := s.retryDelay
+
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+	}
+	s.retryTimer = time.AfterFunc(delay, func() {
+		if s.checkClosed() != nil {
+			return
+		}
+		s.retryMu.Lock()
+		s.retryDelay = 0
+		s.retryMu.Unlock()
+		// Retries heal totally: a paced sweep could randomly miss the peer
+		// whose return motivated the retry.
+		s.sweep(true)
+	})
+}
+
+// clearSweepRetry disarms the backoff after a fully successful sweep.
+func (s *Store) clearSweepRetry() {
+	s.retryMu.Lock()
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+		s.retryTimer = nil
+	}
+	s.retryDelay = 0
+	s.retryMu.Unlock()
+}
+
+// catchUpOnce performs one full-sync exchange round.
+func (s *Store) catchUpOnce() bool {
 	targets := s.targets()
 	if len(targets) == 0 {
 		return true
@@ -197,6 +254,31 @@ func (s *Store) catchUp() bool {
 	return true
 }
 
+// regossipAll pushes every batch to every peer — the complete sweep used by
+// rare, high-signal triggers (membership events), where healing must be
+// total rather than spread over successive rounds.
+func (s *Store) regossipAll() {
+	peers := s.targets()
+	if len(peers) == 0 {
+		return
+	}
+	snap := s.tbl.snapshot()
+	if len(snap) == 0 {
+		return
+	}
+
+	for _, batch := range chunkEntries(snap, s.entriesPerPacket(len(snap))) {
+		msg := &gossipBroadcast{StoreName: s.config.Name, Entries: batch}
+		for _, peer := range peers {
+			if err := s.cluster.SendTo(peer, kvGossipMsg, msg); err != nil {
+				s.scheduleSweepRetry()
+				return
+			}
+		}
+	}
+	s.clearSweepRetry()
+}
+
 // regossip pushes one random, payload-sized batch of entries to each peer in
 // rotation — the anti-entropy sweep. A fire-and-forget delivery that was lost
 // is healed on a later tick, and steady-state replication rises towards the
@@ -224,8 +306,11 @@ func (s *Store) regossip() {
 			}
 			continue
 		}
-		// Large table: one random peer per batch per tick, so traffic spreads
-		// and every peer converges over successive ticks.
-		_ = s.cluster.SendTo(peers[rand.Intn(len(peers))], kvGossipMsg, msg)
+		// Large table: one random peer per sweep, so traffic spreads and
+		// every peer converges over successive sweeps.
+		if err := s.cluster.SendTo(peers[rand.Intn(len(peers))], kvGossipMsg, msg); err != nil {
+			s.scheduleSweepRetry()
+			return
+		}
 	}
 }

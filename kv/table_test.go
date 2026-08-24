@@ -14,7 +14,7 @@ func newTestTable(now time.Time) (*table, *hlc.Clock, *time.Time) {
 	cfg.Clock = hlc.NewClock()
 	tNow := now
 	cfg.NowFn = func() time.Time { return tNow }
-	return newTable(cfg, gossip.NodeID{0x01}), cfg.Clock, &tNow
+	return newTable(cfg), cfg.Clock, &tNow
 }
 
 func nodeID(byte byte) gossip.NodeID {
@@ -24,7 +24,7 @@ func nodeID(byte byte) gossip.NodeID {
 func TestTableSetGetOverwriteDelete(t *testing.T) {
 	tbl, _, _ := newTestTable(time.Now())
 
-	e := tbl.setLocal("k", []byte("v1"), 0)
+	e := tbl.setLocal(nodeID(1), "k", []byte("v1"), 0)
 	if e == nil {
 		t.Fatal("setLocal returned nil")
 	}
@@ -32,12 +32,12 @@ func TestTableSetGetOverwriteDelete(t *testing.T) {
 		t.Fatalf("get = %q,%v want v1,true", v, ok)
 	}
 
-	tbl.setLocal("k", []byte("v2"), 0)
+	tbl.setLocal(nodeID(1), "k", []byte("v2"), 0)
 	if v, _ := tbl.get("k"); string(v) != "v2" {
 		t.Fatalf("overwrite failed: %q", v)
 	}
 
-	tbl.deleteLocal("k")
+	tbl.deleteLocal(nodeID(1), "k")
 	if _, ok := tbl.get("k"); ok {
 		t.Fatal("deleted key still readable")
 	}
@@ -46,8 +46,8 @@ func TestTableSetGetOverwriteDelete(t *testing.T) {
 func TestTableLocalWritesDominate(t *testing.T) {
 	tbl, _, _ := newTestTable(time.Now())
 
-	tbl.setLocal("k", []byte("v1"), 0)
-	tbl.setLocal("k", []byte("v2"), 0)
+	tbl.setLocal(nodeID(1), "k", []byte("v1"), 0)
+	tbl.setLocal(nodeID(1), "k", []byte("v2"), 0)
 
 	// A local write must always beat what the table held: the table
 	// witnesses the current version before minting.
@@ -61,7 +61,7 @@ func TestTableTTLLazyExpiry(t *testing.T) {
 	start := time.Now()
 	tbl, _, now := newTestTable(start)
 
-	tbl.setLocal("k", []byte("v"), 500*time.Millisecond)
+	tbl.setLocal(nodeID(1), "k", []byte("v"), 500*time.Millisecond)
 	if _, ok := tbl.get("k"); !ok {
 		t.Fatal("entry missing before expiry")
 	}
@@ -184,10 +184,10 @@ func TestTableReap(t *testing.T) {
 	tbl, _, now := newTestTable(start)
 	tbl.cfg.TombstoneRetention = 2 * time.Minute
 
-	tbl.setLocal("expiring", []byte("v"), time.Minute) // expires at start+1m
-	tbl.setLocal("forever", []byte("v"), 0)            // never expires
-	tomb := tbl.deleteLocal("gone")                    // deleted at start
-	tomb.DeletedAtMs = start.UnixMilli()               // pin for arithmetic below
+	tbl.setLocal(nodeID(1), "expiring", []byte("v"), time.Minute) // expires at start+1m
+	tbl.setLocal(nodeID(1), "forever", []byte("v"), 0)            // never expires
+	tomb := tbl.deleteLocal(nodeID(1), "gone")                    // deleted at start
+	tomb.DeletedAtMs = start.UnixMilli()                          // pin for arithmetic below
 	tbl.entries["gone"] = tomb
 
 	// Nothing reapable at start + grace.
@@ -222,11 +222,11 @@ func TestTableSnapshotExcludesReapable(t *testing.T) {
 	start := time.Now()
 	tbl, _, now := newTestTable(start)
 
-	tbl.setLocal("live", []byte("v"), 0)
-	tomb := tbl.deleteLocal("gone")
+	tbl.setLocal(nodeID(1), "live", []byte("v"), 0)
+	tomb := tbl.deleteLocal(nodeID(1), "gone")
 	tomb.DeletedAtMs = start.Add(-2 * tbl.cfg.TombstoneRetention).UnixMilli()
 	tbl.entries["gone"] = tomb
-	expired := tbl.setLocal("old", []byte("v"), time.Second)
+	expired := tbl.setLocal(nodeID(1), "old", []byte("v"), time.Second)
 	expired.ExpiresAtMs = start.Add(-time.Hour).UnixMilli()
 	tbl.entries["old"] = expired
 
@@ -248,12 +248,12 @@ func TestTableKeysPrefixSortedLiveOnly(t *testing.T) {
 	start := time.Now()
 	tbl, _, now := newTestTable(start)
 
-	tbl.setLocal("a/1", []byte("v"), 0)
-	tbl.setLocal("a/2", []byte("v"), 0)
-	tbl.setLocal("b/1", []byte("v"), 0)
-	tbl.setLocal("gone", []byte("v"), 0)
-	tbl.deleteLocal("gone")
-	tbl.setLocal("expired", []byte("v"), time.Second)
+	tbl.setLocal(nodeID(1), "a/1", []byte("v"), 0)
+	tbl.setLocal(nodeID(1), "a/2", []byte("v"), 0)
+	tbl.setLocal(nodeID(1), "b/1", []byte("v"), 0)
+	tbl.setLocal(nodeID(1), "gone", []byte("v"), 0)
+	tbl.deleteLocal(nodeID(1), "gone")
+	tbl.setLocal(nodeID(1), "expired", []byte("v"), time.Second)
 	*now = start.Add(time.Hour)
 
 	if got := tbl.keys("a/"); len(got) != 2 || got[0] != "a/1" || got[1] != "a/2" {
@@ -267,12 +267,12 @@ func TestTableKeysPrefixSortedLiveOnly(t *testing.T) {
 func TestTableDeletePrefixLocalOnlyLive(t *testing.T) {
 	tbl, _, _ := newTestTable(time.Now())
 
-	tbl.setLocal("a/1", []byte("v"), 0)
-	tbl.setLocal("a/2", []byte("v"), 0)
-	tbl.setLocal("b/1", []byte("v"), 0)
-	tbl.deleteLocal("a/2") // already deleted: must not produce a second tombstone batch entry
+	tbl.setLocal(nodeID(1), "a/1", []byte("v"), 0)
+	tbl.setLocal(nodeID(1), "a/2", []byte("v"), 0)
+	tbl.setLocal(nodeID(1), "b/1", []byte("v"), 0)
+	tbl.deleteLocal(nodeID(1), "a/2") // already deleted: must not produce a second tombstone batch entry
 
-	tombs := tbl.deletePrefixLocal("a/")
+	tombs := tbl.deletePrefixLocal(nodeID(1), "a/")
 	if len(tombs) != 1 || tombs[0].Key != "a/1" {
 		t.Fatalf("deletePrefixLocal = %v want exactly [a/1]", tombs)
 	}
@@ -290,7 +290,7 @@ func TestTableWitnessMakesLocalWin(t *testing.T) {
 
 	// The local write that follows must dominate: the table witnessed the
 	// remote version, so its mint is strictly greater.
-	e := tbl.setLocal("k", []byte("local"), 0)
+	e := tbl.setLocal(nodeID(1), "k", []byte("local"), 0)
 	if e.Version <= remoteVersion {
 		t.Fatalf("local mint %d did not beat witnessed %d", e.Version, remoteVersion)
 	}
@@ -303,10 +303,10 @@ func TestTableCloseStopsWrites(t *testing.T) {
 	tbl, _, _ := newTestTable(time.Now())
 	tbl.close()
 
-	if tbl.setLocal("k", []byte("v"), 0) != nil {
+	if tbl.setLocal(nodeID(1), "k", []byte("v"), 0) != nil {
 		t.Fatal("setLocal accepted after close")
 	}
-	if tbl.deleteLocal("k") != nil {
+	if tbl.deleteLocal(nodeID(1), "k") != nil {
 		t.Fatal("deleteLocal accepted after close")
 	}
 	if tbl.apply(&Entry{Key: "k", Version: 1}) {

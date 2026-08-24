@@ -15,7 +15,10 @@ const stateQueryConcurrency = 64
 
 // replicationTargets returns the pool's peers as candidate replica targets,
 // drawn from the election's candidate list — group-scoped for a group-scoped
-// election. The local node is excluded — it is already one of the W replicas.
+// election, and already event-maintained by the cluster's node tracking, so
+// there is nothing to cache here: every mutation is a network round trip,
+// making the query cost irrelevant. The local node is excluded — it is
+// already one of the W replicas.
 func (p *Pool) replicationTargets() []*gossip.Node {
 	nodes := p.leadership.Candidates()
 
@@ -36,6 +39,13 @@ func (p *Pool) replicationTargets() []*gossip.Node {
 // replicateEntry makes a single mutation durable (see replicateBatch).
 func (p *Pool) replicateEntry(ent replicaEntry) error {
 	return p.replicateBatch([]replicaEntry{ent})
+}
+
+// replicateBatch records the mutation for amortised anti-entropy pacing and
+// makes it durable.
+func (p *Pool) replicateAndCount(entries []replicaEntry) error {
+	p.noteMutation()
+	return p.replicateBatch(entries)
 }
 
 // replicateBatch makes a set of mutations durable: it pushes the entries to
@@ -150,6 +160,10 @@ func (p *Pool) gossipEntries(entries []replicaEntry) {
 		for _, peer := range peers {
 			if err := p.cluster.SendTo(peer, lockReplicaGossip, msg); err != nil {
 				p.cluster.Logger().WithError(err).Debug("lock: replica gossip send failed")
+				// A peer was unreachable — sub-detection partitions produce
+				// no membership events, so the fan-out retries itself on a
+				// backing-off schedule until it succeeds.
+				p.scheduleSweepRetry()
 				return
 			}
 		}
@@ -219,6 +233,32 @@ func (p *Pool) catchUp() bool {
 		}
 	}
 	return answered
+}
+
+// regossipAll pushes every batch to every peer — the complete sweep used by
+// rare, high-signal triggers (membership events), where healing must be
+// total rather than spread over successive rounds. Bounded by payload-sized
+// batching.
+func (p *Pool) regossipAll() {
+	peers := p.replicationTargets()
+	if len(peers) == 0 {
+		return
+	}
+	snap := p.tbl.snapshot()
+	if len(snap) == 0 {
+		return
+	}
+
+	for _, batch := range chunkEntries(snap, p.entriesPerPacket(len(snap))) {
+		msg := &replicaGossipBroadcast{PoolName: p.config.Name, Entries: batch}
+		for _, peer := range peers {
+			if err := p.cluster.SendTo(peer, lockReplicaGossip, msg); err != nil {
+				p.scheduleSweepRetry()
+				return
+			}
+		}
+	}
+	p.clearSweepRetry()
 }
 
 // regossip pushes one random, payload-sized batch of entries to each peer in
