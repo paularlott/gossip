@@ -41,13 +41,6 @@ func (p *Pool) replicateEntry(ent replicaEntry) error {
 	return p.replicateBatch([]replicaEntry{ent})
 }
 
-// replicateBatch records the mutation for amortised anti-entropy pacing and
-// makes it durable.
-func (p *Pool) replicateAndCount(entries []replicaEntry) error {
-	p.noteMutation()
-	return p.replicateBatch(entries)
-}
-
 // replicateBatch makes a set of mutations durable: it pushes the entries to
 // peers in parallel and requires WriteReplicas-1 of them to ack within the
 // timeout, retrying once against replacement peers before giving up.
@@ -160,10 +153,6 @@ func (p *Pool) gossipEntries(entries []replicaEntry) {
 		for _, peer := range peers {
 			if err := p.cluster.SendTo(peer, lockReplicaGossip, msg); err != nil {
 				p.cluster.Logger().WithError(err).Debug("lock: replica gossip send failed")
-				// A peer was unreachable — sub-detection partitions produce
-				// no membership events, so the fan-out retries itself on a
-				// backing-off schedule until it succeeds.
-				p.scheduleSweepRetry()
 				return
 			}
 		}
@@ -252,13 +241,9 @@ func (p *Pool) regossipAll() {
 	for _, batch := range chunkEntries(snap, p.entriesPerPacket(len(snap))) {
 		msg := &replicaGossipBroadcast{PoolName: p.config.Name, Entries: batch}
 		for _, peer := range peers {
-			if err := p.cluster.SendTo(peer, lockReplicaGossip, msg); err != nil {
-				p.scheduleSweepRetry()
-				return
-			}
+			_ = p.cluster.SendTo(peer, lockReplicaGossip, msg)
 		}
 	}
-	p.clearSweepRetry()
 }
 
 // regossip pushes one random, payload-sized batch of entries to each peer in

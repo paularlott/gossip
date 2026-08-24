@@ -225,34 +225,3 @@ func (b *Tracker) Reset() {
 	b.candidateFrom = time.Time{}
 	b.departed = make(map[gossip.NodeID]struct{})
 }
-
-// Deadline reports how long until the tracker's next clock-dependent
-// transition — the candidate count reaching its stability period (growth
-// adoption) or its shrink dwell (one-at-a-time shrinkage) — so callers can
-// schedule a one-shot timer instead of polling on a tick. Zero means
-// nothing is pending: no adoption is possible until membership changes
-// again. Callers re-arm after every Observe.
-func (b *Tracker) Deadline(now time.Time) time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.candidate < 0 {
-		return 0 // reset by a departure; the next Observe re-arms
-	}
-	if b.candidate == 0 || b.candidate == b.baseline {
-		return 0
-	}
-	steady := now.Sub(b.candidateFrom)
-	var wait time.Duration
-	if b.candidate > b.baseline {
-		wait = b.stabilityPeriod - steady
-	} else if b.autoShrink && b.candidate == b.baseline-1 {
-		wait = b.shrinkDwell - steady
-	} else {
-		return 0
-	}
-	if wait <= 0 {
-		return time.Millisecond // eligible now; the next Observe adopts
-	}
-	return wait
-}

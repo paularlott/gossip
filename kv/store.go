@@ -28,13 +28,14 @@ import (
 // and entries never leak outside it. Multiple stores with different Names
 // coexist on one cluster.
 type Store struct {
-	cluster  *gossip.Cluster
-	members  Membership
-	config   *Config
-	tbl      *table
-	registry *registry
-	stateTip gossip.HandlerID
-	metaTip  gossip.HandlerID
+	cluster   *gossip.Cluster
+	members   Membership
+	config    *Config
+	tbl       *table
+	registry  *registry
+	gossipTip gossip.HandlerID
+	stateTip  gossip.HandlerID
+	metaTip   gossip.HandlerID
 
 	mu     sync.Mutex
 	closed bool
@@ -80,22 +81,16 @@ type Store struct {
 	// changes counts all table activity and drives amortised housekeeping;
 	// snapScheduled flags the one-shot interval timer armed on the clean-to-
 	// dirty transition (debounce by timer, not by tick).
-	dirty         atomic.Int64
-	changes       atomic.Int64
-	snapScheduled atomic.Bool
-	snapshotting  atomic.Bool
-	lastSaveNano  atomic.Int64
-	saveWG        sync.WaitGroup
+	dirty        atomic.Int64
+	snapshotting atomic.Bool
+	lastSaveNano atomic.Int64
+	saveWG       sync.WaitGroup
 
 	// clockTimer advances the baseline's stability/dwell windows — the one
 	// genuinely time-based rule — as a scheduled one-shot re-armed after
 	// every Observe, never a periodic tick. retryTimer re-runs a failed
 	// catch-up with capped backoff. Both are stopped in Close.
-	clockTimer    *time.Timer
-	retryTimer    *time.Timer
-	retryMu       sync.Mutex
-	retryDelay    time.Duration
-	sweepDebounce *time.Timer
+	clockTimer *time.Timer
 }
 
 // NewStore creates a store on the given cluster, scoped to membership.
@@ -154,6 +149,12 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 	s.stateTip = cluster.HandleNodeStateChangeFunc(s.handleNodeStateChange)
 	s.metaTip = cluster.HandleNodeMetadataChangeFunc(s.handleNodeMetadataChange)
 
+	// Anti-entropy rides the cluster's gossip event — the library's own
+	// periodic state exchange, which runs regardless of store activity. That
+	// is the "eventually in sync" backbone; everything else here reacts to
+	// membership events immediately.
+	s.gossipTip = cluster.HandleGossipFunc(s.onGossipEvent)
+
 	// Record the current view immediately so a store created on an
 	// established group enforces its quorum from the first write, not from
 	// the first event. A store with no peers is vacuously in sync — but the
@@ -206,20 +207,7 @@ func (s *Store) Close() {
 	<-s.doneCh
 	s.saveWG.Wait()
 
-	s.mu.Lock()
-	if s.clockTimer != nil {
-		s.clockTimer.Stop()
-	}
-	s.mu.Unlock()
-
-	s.retryMu.Lock()
-	if s.retryTimer != nil {
-		s.retryTimer.Stop()
-	}
-	if s.sweepDebounce != nil {
-		s.sweepDebounce.Stop()
-	}
-	s.retryMu.Unlock()
+	s.cluster.RemoveGossipHandler(s.gossipTip)
 
 	s.cluster.RemoveNodeStateChangeHandler(s.stateTip)
 	s.cluster.RemoveNodeMetadataChangeHandler(s.metaTip)
@@ -380,29 +368,22 @@ func (s *Store) compensate(ent *Entry) {
 // background anti-entropy — catch-up until synced and again whenever the
 // observed group has grown (a lone store meeting its first peers pulls their
 // state), and re-gossip batches in between.
-// observe feeds the baseline and re-arms its clock timer: every membership
-// event and every timer firing routes through here, so the stability and
-// dwell windows advance on schedule without any periodic tick.
+// onGossipEvent runs on the cluster's gossip event — the library's own
+// state-exchange cadence, always running. It advances the baseline's
+// stability/dwell windows, reaps the table (short map scan, safe inline),
+// checks the debounced snapshot triggers, and runs the paced anti-entropy
+// sweep. Membership events handle the immediate reactions; this is the
+// periodic backbone that guarantees eventual convergence.
+func (s *Store) onGossipEvent() {
+	s.observe(s.currentView())
+	s.tbl.reap()
+	s.maybeSnapshotAsync()
+	s.maybeSweep()
+}
+
+// observe feeds the baseline — from membership events and the gossip event.
 func (s *Store) observe(nodes []*gossip.Node) {
 	s.mark.Observe(nodes, s.config.NowFn())
-
-	if d := s.mark.Deadline(s.config.NowFn()); d > 0 {
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			return
-		}
-		if s.clockTimer != nil {
-			s.clockTimer.Stop()
-		}
-		s.clockTimer = time.AfterFunc(d, func() {
-			if s.checkClosed() != nil {
-				return
-			}
-			s.observe(s.currentView())
-		})
-		s.mu.Unlock()
-	}
 }
 
 // maybeSweep runs the anti-entropy pass single-flighted on its own goroutine:
@@ -457,62 +438,14 @@ func (s *Store) sweepOnGrowth() {
 
 // --- optional persistence (see persist.go for the contract) ---
 
-// markDirty records table changes and drives everything that was once
-// tick-based, amortised over activity instead: every so many changes the
-// table is reaped (memory hygiene; reads already expire lazily) and the
-// anti-entropy sweep runs, so a busy store keeps itself healthy without any
-// periodic timer. A store with a Persister additionally counts toward the
-// snapshot triggers — the write threshold here, the interval via a one-shot
-// timer armed on the clean-to-dirty transition.
+// markDirty records table changes that the next snapshot must capture. The
+// write-count and interval triggers are checked on the cluster's gossip
+// event (snapshotDue); a memory-only store never counts.
 func (s *Store) markDirty(n int) {
-	if n <= 0 {
-		return
-	}
-	total := s.changes.Add(int64(n))
-	if total%reapEvery == 0 {
-		go s.tbl.reap()
-	}
-
-	// Every change (re)arms one debounced total sweep, firing shortly after
-	// activity settles: a fire-and-forget delivery silently dropped —
-	// sub-detection partitions produce neither events nor send errors — is
-	// healed by the next burst's wake. No activity, no timer.
-	s.retryMu.Lock()
-	if s.sweepDebounce != nil {
-		s.sweepDebounce.Stop()
-	}
-	s.sweepDebounce = time.AfterFunc(sweepDebounceDelay, func() { s.sweep(true) })
-	s.retryMu.Unlock()
-
-	if s.config.Persister == nil {
-		return
-	}
-	d := s.dirty.Add(int64(n))
-	if d >= int64(s.config.SnapshotWrites) {
-		s.maybeSnapshotAsync()
-		return
-	}
-	if d == int64(n) && s.snapScheduled.CompareAndSwap(false, true) {
-		// Clean store just went dirty: arm the interval debounce.
-		s.mu.Lock()
-		if !s.closed {
-			time.AfterFunc(s.config.SnapshotInterval, func() {
-				s.snapScheduled.Store(false)
-				s.maybeSnapshotAsync()
-			})
-		}
-		s.mu.Unlock()
+	if s.config.Persister != nil && n > 0 {
+		s.dirty.Add(int64(n))
 	}
 }
-
-// Housekeeping cadence: reap every 1024 changes; sweeps ride the mutation
-// debounce. A quiet store runs neither — its reads are lazy-expired, and
-// healing waits for a membership event, further activity, or an explicit
-// Sync().
-const (
-	reapEvery          = 1024
-	sweepDebounceDelay = 750 * time.Millisecond
-)
 
 // adopt merges a batch of remote entries and counts what actually changed,
 // so a replica that only ever receives gossip still persists its view of

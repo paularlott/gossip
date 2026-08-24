@@ -83,15 +83,11 @@ type Pool struct {
 	stopCh       chan struct{}
 	doneCh       chan struct{}
 	stateHandler gossip.HandlerID
+	gossipTick   gossip.HandlerID
 
 	// mutations counts lock-table changes and drives amortised anti-entropy:
 	// every so many mutations the table is reaped and a sweep runs, so a busy
 	// pool keeps itself healthy with no periodic timer.
-	mutations     atomic.Uint64
-	retryMu       sync.Mutex
-	retryTimer    *time.Timer
-	retryDelay    time.Duration
-	sweepDebounce *time.Timer
 
 	// sweeping single-flights the anti-entropy work so a slow sweep skips
 	// gossip ticks instead of piling up; synced is only touched inside a
@@ -137,9 +133,14 @@ func NewPool(cluster *gossip.Cluster, leadership Leadership, config *Config) *Po
 		p.syncLeadership()
 	})
 
+	// Anti-entropy rides the cluster's gossip event — the library's own
+	// state-exchange cadence, always running: that is the "eventually in
+	// sync" backbone. Membership events handle the immediate reactions.
+	p.gossipTick = cluster.HandleGossipFunc(p.onGossipEvent)
+
 	// Catch up with the group's replica state immediately rather than
-	// waiting for an event: a late-arriving node becomes a useful replica
-	// straight away.
+	// waiting for the next gossip event: a late-arriving node becomes a
+	// useful replica straight away.
 	go p.maybeSweepAll()
 
 	// Lifecycle goroutine: owns doneCh so Close can wait for shutdown.
@@ -189,30 +190,17 @@ func (p *Pool) ReplicaCount() int { return p.tbl.count() }
 // WriteReplicas returns the configured W for this pool.
 func (p *Pool) WriteReplicas() int { return p.config.WriteReplicas }
 
-// noteMutation drives amortised anti-entropy: every sweepEveryMutations
-// table changes the table is reaped (hygiene — expiry is lazy) and a sweep
-// runs. Replaces what the gossip tick once did, paced by activity instead of
-// time.
-func (p *Pool) noteMutation() {
-	total := p.mutations.Add(1)
-	if total%sweepEveryMutations == 0 {
-		go p.tbl.reap()
-	}
-	// Every mutation (re)arms one debounced total sweep, firing shortly
-	// after activity settles: a fire-and-forget delivery that was silently
-	// dropped — sub-detection partitions produce neither events nor send
-	// errors — is healed by the next burst's wake. No activity, no timer.
-	p.retryMu.Lock()
-	if p.sweepDebounce != nil {
-		p.sweepDebounce.Stop()
-	}
-	p.sweepDebounce = time.AfterFunc(sweepDebounceDelay, func() { p.sweep(true) })
-	p.retryMu.Unlock()
+// onGossipEvent runs on the cluster's gossip event: reap inline (a short
+// map scan, safe for the synchronous event) and run the paced anti-entropy
+// sweep — catch-up until synced, re-gossip batches after. The work is
+// dispatched rather than done inline: gossip handlers run synchronously on
+// the cluster's gossip goroutine and their duration feeds the cluster's
+// interval adjustment, so network waits must not block the event.
+// Single-flighted — a slow sweep skips events instead of piling up.
+func (p *Pool) onGossipEvent() {
+	p.tbl.reap()
+	p.maybeSweep()
 }
-
-// sweepDebounceDelay lets a burst of mutations coalesce into one total
-// sweep shortly after it ends.
-const sweepDebounceDelay = 750 * time.Millisecond
 
 // maybeSweep runs the anti-entropy pass single-flighted on its own goroutine:
 // catch-up until synced (a late joiner otherwise holds nothing until the next
@@ -321,7 +309,7 @@ func (p *Pool) handleNodeStateChange(node *gossip.Node, prevState gossip.NodeSta
 		return
 	}
 	if tombs := p.tbl.releaseByOwner(node.ID); len(tombs) > 0 {
-		if err := p.replicateAndCount(tombs); err != nil {
+		if err := p.replicateBatch(tombs); err != nil {
 			// The locks stay released locally and on any replica that did
 			// apply the tombstones; TTL expiry cleans up the rest.
 			p.cluster.Logger().WithError(err).Warn("lock: replicating holder-death releases fell short",
@@ -438,7 +426,7 @@ func (p *Pool) acquireOnce(key string, ttl time.Duration) (*Lock, error) {
 		if !granted {
 			return nil, classifyDenial(reason)
 		}
-		if err := p.replicateAndCount([]replicaEntry{ent}); err != nil {
+		if err := p.replicateEntry(ent); err != nil {
 			// The grant was not durable: compensate with a tombstone so the
 			// half-written grant cannot resurrect at a later recovery.
 			p.compensate(ent)
@@ -492,7 +480,7 @@ func (p *Pool) release(key string, token Token) error {
 		if tomb.Token.IsZero() {
 			return nil // nothing to replicate (absent or already expired)
 		}
-		if err := p.replicateAndCount([]replicaEntry{tomb}); err != nil {
+		if err := p.replicateEntry(tomb); err != nil {
 			// The tombstone exists locally and wherever it did land; TTL
 			// expiry covers the remainder. Report so the caller knows.
 			return err
@@ -535,7 +523,7 @@ func (p *Pool) extend(key string, token Token, ttl time.Duration) error {
 		if !extended {
 			return fmt.Errorf("lock: extend rejected: %s", reason)
 		}
-		if err := p.replicateAndCount([]replicaEntry{ent}); err != nil {
+		if err := p.replicateEntry(ent); err != nil {
 			return err
 		}
 		return nil
@@ -616,46 +604,4 @@ func isRetryable(err error) bool {
 		errors.Is(err, ErrNoLeader) ||
 		errors.Is(err, ErrWarmingUp) ||
 		errors.Is(err, ErrWriteQuorum)
-}
-
-// scheduleSweepRetry re-runs the sweep after a failed fan-out send on a
-// backing-off one-shot timer: it heals sub-detection partitions and
-// unreachable peers without a periodic tick — the schedule exists only
-// while something is failing.
-func (p *Pool) scheduleSweepRetry() {
-	p.retryMu.Lock()
-	defer p.retryMu.Unlock()
-
-	if p.retryDelay == 0 {
-		p.retryDelay = p.config.ReplicationTimeout * 4
-	} else if p.retryDelay < 30*time.Second {
-		p.retryDelay *= 2
-	}
-	delay := p.retryDelay
-
-	if p.retryTimer != nil {
-		p.retryTimer.Stop()
-	}
-	p.retryTimer = time.AfterFunc(delay, func() {
-		if p.checkClosed() != nil {
-			return
-		}
-		p.retryMu.Lock()
-		p.retryDelay = 0
-		p.retryMu.Unlock()
-		// Retries heal totally: a paced sweep could randomly miss the peer
-		// whose return motivated the retry.
-		p.sweep(true)
-	})
-}
-
-// clearSweepRetry disarms the backoff after a fully successful sweep.
-func (p *Pool) clearSweepRetry() {
-	p.retryMu.Lock()
-	if p.retryTimer != nil {
-		p.retryTimer.Stop()
-		p.retryTimer = nil
-	}
-	p.retryDelay = 0
-	p.retryMu.Unlock()
 }

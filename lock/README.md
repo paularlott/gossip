@@ -15,10 +15,9 @@ Acquire / Release / Extend / Query  →  current leader  (TCP request/response)
 leader applies mutation ──► pushes entry to W-1 peers, waits for acks
                         └─► fire-and-forget fan-out to the group's candidates
 
-anti-entropy (no ticks)     ──► events + activity: membership changes sweep;
-                                 every mutation re-arms one debounced total
-                                 sweep; failed fan-out sends retry with
-                                 backoff — no activity, no timers at all
+anti-entropy rides the cluster's gossip event (the library's own
+state exchange, always running): catch-up until synced, re-gossip after;
+membership events trigger immediate total sweeps on top
 
 new leader elected ──► queries every live peer for its replica view, merges
 ```
@@ -82,8 +81,10 @@ false "not held" during that window.
 ### Anti-entropy: catch-up and re-gossip
 
 Fire-and-forget gossip can lose a delivery, and a node that joins later never
-sees the history at all. Two mechanisms close both gaps, driven by events
-and activity rather than any periodic timer — no activity, no timers at all:
+sees the history at all. Two mechanisms close both gaps, riding the
+cluster's gossip event (`HandleGossipFunc`) — the same self-adjusting
+cadence the cluster uses for its own state exchange — with membership events
+adding immediate total sweeps on top:
 
 - **Catch-up.** Until a pool has synced once, membership events and pool
   construction pull a full

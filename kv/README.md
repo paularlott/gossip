@@ -15,12 +15,9 @@ Set / Delete  →  apply locally under a fresh HLC version
              →  push to W-1 peers in parallel, wait for acks          (durable)
              →  fire-and-forget fan-out to the scope's members        (spread)
 
-anti-entropy (no ticks)     ──► events: membership growth or a peer returning
-                                 triggers a full-sync pull; failures arm a
-                                 backing-off retry that self-extinguishes
-activity                     ──► every change re-arms one debounced total
-                                 sweep; failed fan-out sends retry with
-                                 backoff — no activity, no timers at all
+anti-entropy rides the cluster's gossip event (the library's own
+state exchange, always running): catch-up until synced, re-gossip after;
+membership events trigger immediate total sweeps on top
 
 restarted / late-joining node ──► bidirectional full sync: it offers its
                                   snapshot and merges the answer
@@ -139,19 +136,17 @@ after the cluster has reaped that delete's tombstone, would otherwise
 resurrect the deleted key — the same GC-grace tradeoff as any
 tombstone-based store.
 
-### Tick-free drivers
+### Drivers: events plus the cluster's gossip cadence
 
-The store runs no periodic timers. Everything is driven by events, activity,
-or scheduled one-shots: the baseline's stability/dwell windows advance via a
-timer armed only while an adoption is pending; the snapshot interval is a
-one-shot armed on the clean-to-dirty transition; reaping is amortised over
-every 1024 table changes; catch-up runs at construction, on membership events,
-and on capped-backoff retries after failures; total sweeps ride a per-change
-debounce. The boundary this buys: **a completely quiet store that silently
-missed a fire-and-forget delivery stays stale until the next membership
-event, mutation, or explicit `Sync()`** — absence of data is not an event.
-For a busy store (the intended use) the debounce fires shortly after every
-burst and heals everything.
+The store owns no timers and polls nothing. Membership events (node state
+and metadata changes) refresh the member view and feed the baseline
+immediately; the cluster's own gossip event — which the library runs
+continuously for its state exchange regardless of store activity — advances
+the baseline's stability/dwell windows, reaps the table, checks the
+debounced snapshot triggers, and runs the paced anti-entropy sweep. That
+gossip cadence is the eventual-consistency backbone: fire-and-forget
+deliveries lost to sub-detection partitions (no events, no send errors
+exist) are healed by the next gossip round, exactly as in the lock package.
 
 ### Residual consistency semantics (documented, by design)
 
@@ -220,7 +215,7 @@ the store is a generic byte KV and deliberately knows nothing about users.
 | `Delete(key)` | Idempotent tombstone write; durable like Set. On quorum failure the delete stands and converges. |
 | `DeletePrefix(prefix)` | Scans live keys under the prefix, replicates one tombstone batch; returns the count. |
 | `Keys(prefix)` / `Len()` | Sorted live keys / live count — local view. |
-| `Sync()` | One bidirectional full-sync exchange; also runs automatically on membership events, activity debounces, and failure retries. |
+| `Sync()` | One bidirectional full-sync exchange; also runs automatically on membership events and the gossip cadence. |
 | `Synced()` | Whether an initial catch-up has completed (or there are no peers). |
 
 Validation errors — `ErrKeyEmpty`, `ErrValueTooLarge`, `ErrTTLOutOfRange`,

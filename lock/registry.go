@@ -141,7 +141,7 @@ func (r *registry) handleAcquire(sender *gossip.Node, packet *gossip.Packet) (in
 		return &acquireResponse{Granted: false, Reason: reason}, nil
 	}
 
-	if err := p.replicateAndCount([]replicaEntry{ent}); err != nil {
+	if err := p.replicateEntry(ent); err != nil {
 		p.compensate(ent)
 		return &acquireResponse{Granted: false, Reason: reasonWriteQuorum}, nil
 	}
@@ -171,7 +171,7 @@ func (r *registry) handleRelease(sender *gossip.Node, packet *gossip.Packet) (in
 		return &releaseResponse{Released: false, Reason: reason}, nil
 	}
 	if !tomb.Token.IsZero() {
-		if err := p.replicateAndCount([]replicaEntry{tomb}); err != nil {
+		if err := p.replicateEntry(tomb); err != nil {
 			// The tombstone exists locally and wherever it did land; report
 			// so the caller knows it was not made durable.
 			return &releaseResponse{Released: false, Reason: reasonWriteQuorum}, nil
@@ -206,7 +206,7 @@ func (r *registry) handleExtend(sender *gossip.Node, packet *gossip.Packet) (int
 		return &extendResponse{Extended: false, Reason: reason}, nil
 	}
 
-	if err := p.replicateAndCount([]replicaEntry{ent}); err != nil {
+	if err := p.replicateEntry(ent); err != nil {
 		return &extendResponse{Extended: false, Reason: reasonWriteQuorum}, nil
 	}
 	return &extendResponse{Extended: true}, nil
