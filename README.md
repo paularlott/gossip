@@ -222,5 +222,6 @@ The `examples` directory contains various examples demonstrating the library's c
 - **[events](examples/events)**: Example that installs an event handler to display cluster events.
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
 - **[kv](examples/kv)**: Example replicated key-value store built on the [kv package](kv/).
+- **[kvpersist](examples/kvpersist)**: Example KV store with optional persistence, dumping snapshots to a readable JSON file and restoring from it on restart.
 - **[leader](examples/leader)**: Example demonstrating leader election.
 - **[lock](examples/lock)**: Example demonstrating distributed advisory locks.

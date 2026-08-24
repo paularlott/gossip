@@ -94,6 +94,47 @@ The net behaviour for a zone: lose one node of three and writes continue
 follows within a dwell; get partitioned away from the group and writes fail
 closed until the partition heals or the group is genuinely gone.
 
+### Optional persistence (snapshots)
+
+Supply a `Persister` — anything that can hold an opaque blob (an atomically
+written local file, an object store, a database) — and the store periodically
+snapshots itself to it:
+
+- **Debounced saves**: a snapshot is taken after `SnapshotWrites` table
+  changes (local writes *plus* adopted remote entries, so pure replicas
+  persist their view too) or `SnapshotInterval` of unsaved changes,
+  whichever comes first. **A clean store never touches the Persister** — no
+  write activity means no disk activity.
+- **Saves run on their own goroutine**, single-flighted: a slow Persister
+  skips later triggers rather than piling up, and nothing on the write path,
+  read path, or gossip machinery ever waits on storage.
+- **At startup the store seeds from the Persister before its first peer
+  sync**, so the restore composes with the merge rules: a stale snapshot
+  loses per-key to fresher cluster state, a snapshot newer than any peer
+  propagates back out, and a full group outage restores to the freshest
+  state any node had persisted — the union, resolved by version.
+- **`Store.Snapshot()`** forces an immediate synchronous save (a no-op in
+  memory-only mode); **`Close`** flushes a dirty store on the way down. A
+  failed save restores the dirty count, so no change is silently considered
+  persisted and the next trigger retries.
+
+The blob is opaque and library-owned: a versioned binary encoding of the
+entries, live tombstones included — a snapshot without tombstones would
+resurrect every deleted key from disk on restore. Persisters that want an
+inspectable format can decode and re-encode it with `DecodeSnapshot` /
+`EncodeSnapshot` (see `examples/kvpersist` for a JSON-dumping Persister). A Load error or an
+undecodable blob logs and starts empty; peers repopulate via sync.
+
+**Not a write-ahead log.** An acknowledged write is durable on
+`WriteReplicas` in-memory nodes; the snapshot narrows the full-outage loss
+window to the writes since the last one.
+
+**When persisting, raise `TombstoneRetention` beyond the worst-case node
+downtime.** A node restored from a snapshot taken before a delete, rejoining
+after the cluster has reaped that delete's tombstone, would otherwise
+resurrect the deleted key — the same GC-grace tradeoff as any
+tombstone-based store.
+
 ### Residual consistency semantics (documented, by design)
 
 - **No atomic read-modify-write.** Concurrent writers to one key race and one
@@ -178,6 +219,9 @@ before any replication is attempted.
 | `StabilityPeriod` | `2 x DeadNodeTimeout` | How long growth must hold steady before raising the mark. |
 | `ShrinkDwell` | `4 x DeadNodeTimeout` | How long exactly-one-missing must persist before the mark follows down. |
 | `AutoShrinkDisabled` | `false` | Shrink only via graceful leave or `Store.Forget`. |
+| `Persister` | `nil` | Optional long-term storage; nil is memory-only. |
+| `SnapshotWrites` | `1000` | Table changes before a snapshot is saved. |
+| `SnapshotInterval` | `30s` | Max age of unsaved changes; clean stores never save. |
 | `ReplicationTimeout` | `500ms` | Per ack round; one retry against replacements. |
 | `SyncTimeout` | `5s` | Bounds each full-sync exchange attempt. |
 | `MaxValueSize` | `64KB` | Hard cap, enforced before replication. |

@@ -179,7 +179,7 @@ func (s *Store) catchUp() bool {
 			if err := s.cluster.SendToWithResponse(n, kvFullSyncMsg, req, &resp); err != nil {
 				return
 			}
-			s.tbl.applyAll(resp.Entries)
+			s.adopt(resp.Entries)
 			answered <- struct{}{}
 		}(n)
 	}

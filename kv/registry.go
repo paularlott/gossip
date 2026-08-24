@@ -104,7 +104,7 @@ func (r *registry) handleWritePush(sender *gossip.Node, packet *gossip.Packet) (
 		return &writeAck{Applied: false}, nil
 	}
 
-	s.tbl.applyAll(req.Entries)
+	s.adopt(req.Entries)
 	return &writeAck{Applied: true}, nil
 }
 
@@ -117,7 +117,7 @@ func (r *registry) handleGossip(sender *gossip.Node, packet *gossip.Packet) erro
 	}
 
 	if s := r.getStore(msg.StoreName); s != nil {
-		s.tbl.applyAll(msg.Entries)
+		s.adopt(msg.Entries)
 	}
 	return nil
 }
@@ -136,6 +136,6 @@ func (r *registry) handleFullSync(sender *gossip.Node, packet *gossip.Packet) (i
 		return &fullSyncResponse{}, nil
 	}
 
-	s.tbl.applyAll(req.Entries)
+	s.adopt(req.Entries)
 	return &fullSyncResponse{Entries: s.tbl.snapshot()}, nil
 }

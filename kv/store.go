@@ -53,6 +53,16 @@ type Store struct {
 	// member count, kept as an atomic for the resync-on-growth trigger.
 	water     *waterTracker
 	lastCount atomic.Int32
+
+	// Snapshot state: dirty counts table changes (local writes plus adopted
+	// remote entries) since the last successful save; a store with a nil
+	// Persister never snapshots. snapshotting single-flights the save so a
+	// slow Persister — the save runs on its own goroutine — skips triggers
+	// instead of piling up; lastSaveNano anchors the interval trigger.
+	dirty        atomic.Int64
+	snapshotting atomic.Bool
+	lastSaveNano atomic.Int64
+	saveWG       sync.WaitGroup
 }
 
 // NewStore creates a store on the given cluster, scoped to membership.
@@ -93,6 +103,15 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 	s.registry = getOrCreateRegistry(cluster)
 	s.registry.registerStore(config.Name, s)
 
+	// Restore from long-term storage before anything else: the seeded table
+	// then participates in the first bidirectional full sync, so stale
+	// snapshot entries lose to fresher cluster state while newer snapshot
+	// entries propagate back out — a full-group outage restores to the
+	// freshest state any node had persisted.
+	if config.Persister != nil {
+		s.loadSnapshot()
+	}
+
 	// Anti-entropy rides the cluster's gossip event — the same self-adjusting
 	// cadence the cluster uses for its own state exchange — so the store
 	// keeps no timer of its own.
@@ -122,8 +141,9 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 	return s
 }
 
-// Close shuts the store down. Entries held by peers survive; a restarted
-// node recovers them via the full-sync catch-up.
+// Close shuts the store down. A dirty persistent store flushes one final
+// snapshot first (best-effort). Entries held by peers survive; a restarted
+// node recovers them from its Persister and via the full-sync catch-up.
 func (s *Store) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -133,8 +153,23 @@ func (s *Store) Close() {
 	s.closed = true
 	s.mu.Unlock()
 
+	if s.config.Persister != nil && s.dirty.Load() > 0 {
+		// Wait out any in-flight save so the Persister never sees concurrent
+		// Save calls, then flush what is left.
+		for !s.snapshotting.CompareAndSwap(false, true) {
+			time.Sleep(2 * time.Millisecond)
+		}
+		d := s.dirty.Swap(0)
+		if err := s.snapshotNow(); err != nil {
+			s.dirty.Add(d)
+			s.cluster.Logger().WithError(err).Warn("kv: final snapshot on close failed")
+		}
+		s.snapshotting.Store(false)
+	}
+
 	close(s.stopCh)
 	<-s.doneCh
+	s.saveWG.Wait()
 
 	s.cluster.RemoveGossipHandler(s.gossipTip)
 	s.cluster.RemoveNodeStateChangeHandler(s.stateTip)
@@ -193,6 +228,7 @@ func (s *Store) Set(key string, value []byte, ttl time.Duration) error {
 	if ent == nil {
 		return ErrStoreClosed
 	}
+	s.markDirty(1)
 
 	if err := s.replicateBatch([]*Entry{ent}); err != nil {
 		// The write is not durable: compensate with a tombstone so the
@@ -220,6 +256,7 @@ func (s *Store) Delete(key string) error {
 	if ent == nil {
 		return ErrStoreClosed
 	}
+	s.markDirty(1)
 
 	return s.replicateBatch([]*Entry{ent})
 }
@@ -238,6 +275,7 @@ func (s *Store) DeletePrefix(prefix string) (int, error) {
 	if len(tombs) == 0 {
 		return 0, nil
 	}
+	s.markDirty(len(tombs))
 
 	if err := s.replicateBatch(tombs); err != nil {
 		return len(tombs), err
@@ -293,13 +331,15 @@ func (s *Store) compensate(ent *Entry) {
 }
 
 // onGossipTick runs on the cluster's gossip event: reap inline (a short map
-// scan, safe for the synchronous tick), then single-flighted background
-// anti-entropy — catch-up until synced and again whenever the observed group
-// has grown (a lone store meeting its first peers pulls their state), and
-// re-gossip batches in between.
+// scan, safe for the synchronous tick), hand a due snapshot to its own
+// goroutine (never blocking the tick on a Persister), then single-flighted
+// background anti-entropy — catch-up until synced and again whenever the
+// observed group has grown (a lone store meeting its first peers pulls their
+// state), and re-gossip batches in between.
 func (s *Store) onGossipTick() {
 	s.observeMembers()
 	s.tbl.reap()
+	s.maybeSnapshotAsync()
 
 	if s.sweeping.CompareAndSwap(false, true) {
 		go func() {
@@ -314,6 +354,147 @@ func (s *Store) onGossipTick() {
 			s.regossip()
 		}()
 	}
+}
+
+// --- optional persistence (see persist.go for the contract) ---
+
+// markDirty records table changes that the next snapshot must capture. A
+// memory-only store never counts.
+func (s *Store) markDirty(n int) {
+	if s.config.Persister != nil && n > 0 {
+		s.dirty.Add(int64(n))
+	}
+}
+
+// adopt merges a batch of remote entries and counts what actually changed,
+// so a replica that only ever receives gossip still persists its view of
+// the data to its own Persister.
+func (s *Store) adopt(entries []*Entry) int {
+	n := s.tbl.applyAll(entries)
+	s.markDirty(n)
+	return n
+}
+
+// maybeSnapshotAsync hands a due snapshot to a dedicated goroutine. A save
+// in flight holds the single-flight flag, so a slow Persister makes later
+// triggers skip rather than pile up — and nothing on the gossip tick, the
+// anti-entropy sweep, or the write path ever waits on storage.
+func (s *Store) maybeSnapshotAsync() {
+	if s.config.Persister == nil {
+		return
+	}
+	if !s.snapshotDue(s.config.NowFn()) {
+		return
+	}
+	if !s.snapshotting.CompareAndSwap(false, true) {
+		return
+	}
+
+	// Register with the WaitGroup under the close flag so a save racing
+	// Close cannot outlive it.
+	s.mu.Lock()
+	if s.closed {
+		s.snapshotting.Store(false)
+		s.mu.Unlock()
+		return
+	}
+	s.saveWG.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer s.saveWG.Done()
+		defer s.snapshotting.Store(false)
+		s.runSnapshot()
+	}()
+}
+
+// snapshotDue reports whether unsaved changes have reached the write
+// threshold or outlived the interval. A clean store is never due — no
+// write activity means no disk activity.
+func (s *Store) snapshotDue(now time.Time) bool {
+	d := s.dirty.Load()
+	if d <= 0 {
+		return false
+	}
+	if d >= int64(s.config.SnapshotWrites) {
+		return true
+	}
+	return now.UnixNano()-s.lastSaveNano.Load() >= int64(s.config.SnapshotInterval)
+}
+
+// runSnapshot swaps the dirty counter to zero, saves, and restores the count
+// on failure so no change is silently considered persisted. The swap happens
+// before the snapshot is taken: changes landing during the save accumulate
+// in the fresh counter and are simply re-captured next time — the safe
+// (over-persisting) direction.
+func (s *Store) runSnapshot() {
+	d := s.dirty.Swap(0)
+	if d <= 0 {
+		return
+	}
+	if err := s.snapshotNow(); err != nil {
+		s.dirty.Add(d)
+		s.cluster.Logger().WithError(err).Warn("kv: snapshot save failed; will retry")
+		return
+	}
+	s.lastSaveNano.Store(s.config.NowFn().UnixNano())
+}
+
+// snapshotNow hands the current view — live entries and live tombstones —
+// to the Persister, which encodes it however it wants.
+func (s *Store) snapshotNow() error {
+	return s.config.Persister.Save(&StoreSnapshot{
+		Store:   s.config.Name,
+		Entries: s.tbl.snapshot(),
+	})
+}
+
+// loadSnapshot seeds the table from the Persister at construction. A load
+// error, a nil snapshot, or one for a different store name logs and starts
+// empty: peers repopulate the store via sync, and a snapshot that cannot be
+// read cannot be trusted regardless.
+func (s *Store) loadSnapshot() {
+	snap, err := s.config.Persister.Load()
+	if err != nil {
+		s.cluster.Logger().WithError(err).Warn("kv: snapshot load failed; starting empty")
+		return
+	}
+	if snap == nil {
+		return
+	}
+	if snap.Store != s.config.Name {
+		s.cluster.Logger().Warn(fmt.Sprintf("kv: snapshot is for store %q, not %q; starting empty", snap.Store, s.config.Name))
+		return
+	}
+	s.tbl.applyAll(snap.Entries) // not markDirty: these came from storage
+}
+
+// Snapshot forces an immediate save and returns once it is complete — the
+// manual trigger, a no-op in memory-only mode. It waits out any in-flight
+// save first, so a forced snapshot is never lost behind a slow one.
+func (s *Store) Snapshot() error {
+	if s.config.Persister == nil {
+		return nil
+	}
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+
+	for !s.snapshotting.CompareAndSwap(false, true) {
+		if err := s.checkClosed(); err != nil {
+			return err
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	defer s.snapshotting.Store(false)
+
+	d := s.dirty.Swap(0)
+	if err := s.snapshotNow(); err != nil {
+		s.dirty.Add(d)
+		return err
+	}
+	s.lastSaveNano.Store(s.config.NowFn().UnixNano())
+	return nil
 }
 
 // handleNodeStateChange lowers the water mark when a member announces a

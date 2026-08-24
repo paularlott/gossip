@@ -100,6 +100,52 @@ type harnessOpts struct {
 
 	// skipStoreFor marks nodes that get no store.
 	skipStoreFor func(i int) bool
+
+	// persister supplies each node's Persister; the same function is used
+	// on rebuild so a restarted node restores from "disk".
+	persister func(i int) kv.Persister
+}
+
+// memPersister is an in-memory fake of the Persister interface: records
+// saves, can be made to fail, and hands back whatever was last saved.
+type memPersister struct {
+	mu      sync.Mutex
+	snap    *kv.StoreSnapshot
+	saves   int
+	fail    error
+	corrupt bool // Load fails instead of returning the snapshot
+}
+
+func (p *memPersister) Save(snap *kv.StoreSnapshot) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fail != nil {
+		return p.fail
+	}
+	p.snap = snap
+	p.saves++
+	return nil
+}
+
+func (p *memPersister) Load() (*kv.StoreSnapshot, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.corrupt {
+		return nil, errors.New("unreadable")
+	}
+	return p.snap, nil
+}
+
+func (p *memPersister) saveCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.saves
+}
+
+func (p *memPersister) setFail(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fail = err
 }
 
 // build starts count nodes, joins them, and creates each node's store.
@@ -153,7 +199,11 @@ func build(t *testing.T, o harnessOpts) []*node {
 			membership = kv.GroupMembership{Group: n.group}
 		}
 		if o.skipStoreFor == nil || !o.skipStoreFor(i) {
-			n.store = kv.NewStore(n.cluster, membership, o.storeCfg())
+			cfg := o.storeCfg()
+			if o.persister != nil {
+				cfg.Persister = o.persister(i)
+			}
+			n.store = kv.NewStore(n.cluster, membership, cfg)
 		}
 	}
 
@@ -186,7 +236,11 @@ func rebuild(t *testing.T, o harnessOpts, i int, seedNode *node) *node {
 		n.group = gossip.NewNodeGroup(c, o.groupCriteria, nil)
 		membership = kv.GroupMembership{Group: n.group}
 	}
-	n.store = kv.NewStore(c, membership, o.storeCfg())
+	cfg := o.storeCfg()
+	if o.persister != nil {
+		cfg.Persister = o.persister(i)
+	}
+	n.store = kv.NewStore(c, membership, cfg)
 	return n
 }
 
@@ -1048,5 +1102,263 @@ func TestFlappingPartition(t *testing.T) {
 		for _, n := range nodes {
 			waitValue(t, n.store, k, "v", 5*time.Second)
 		}
+	}
+}
+
+// --- optional persistence ---
+
+// fastSnapCfg makes the snapshot triggers quick for tests.
+func fastSnapCfg(writes int, interval time.Duration) *kv.Config {
+	c := kv.DefaultConfig()
+	c.SnapshotWrites = writes
+	c.SnapshotInterval = interval
+	return c
+}
+
+func TestSnapshotRestoreAfterRestart(t *testing.T) {
+	persisters := []*memPersister{{}, {}, {}}
+	opts := harnessOpts{basePort: 21400, count: 3,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return persisters[i] },
+	}
+	nodes := build(t, opts)
+	defer teardown(nodes)
+
+	// A surviving key, and a deleted one whose tombstone must travel
+	// through the snapshot or the delete resurrects from disk.
+	if err := nodes[0].store.Set("keep", []byte("v"), 0); err != nil {
+		t.Fatalf("set keep: %v", err)
+	}
+	if err := nodes[0].store.Set("gone", []byte("v"), 0); err != nil {
+		t.Fatalf("set gone: %v", err)
+	}
+	if err := nodes[0].store.Delete("gone"); err != nil {
+		t.Fatalf("delete gone: %v", err)
+	}
+	waitMiss(t, nodes[2].store, "gone", 5*time.Second)
+
+	// Save, then lose the node and its memory; write more while it is down.
+	if err := nodes[2].store.Snapshot(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	nodes[2].crash()
+	if err := nodes[0].store.Set("during-downtime", []byte("v"), 0); err != nil {
+		t.Fatalf("set during downtime: %v", err)
+	}
+	waitValue(t, nodes[1].store, "during-downtime", "v", 5*time.Second)
+
+	// Restart: the node loads its snapshot from "disk", then catches up.
+	nodes[2] = rebuild(t, opts, 2, nodes[0])
+	waitClusterSize(t, nodes[2].cluster, 3, 15*time.Second)
+	waitValue(t, nodes[2].store, "keep", "v", 10*time.Second)
+	waitValue(t, nodes[2].store, "during-downtime", "v", 10*time.Second)
+	waitMiss(t, nodes[2].store, "gone", 10*time.Second) // tombstone survived the round trip
+}
+
+func TestRestoreOlderThanClusterState(t *testing.T) {
+	// A snapshot older than the live cluster must lose to the cluster's
+	// fresher writes on restore.
+	persisters := []*memPersister{{}, {}, {}}
+	opts := harnessOpts{basePort: 21410, count: 3,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return persisters[i] },
+	}
+	nodes := build(t, opts)
+	defer teardown(nodes)
+
+	if err := nodes[0].store.Set("shared", []byte("old"), 0); err != nil {
+		t.Fatalf("set old: %v", err)
+	}
+	waitValue(t, nodes[2].store, "shared", "old", 5*time.Second)
+
+	if err := nodes[2].store.Snapshot(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	nodes[2].crash()
+
+	if err := nodes[0].store.Set("shared", []byte("new"), 0); err != nil {
+		t.Fatalf("set new: %v", err)
+	}
+	waitValue(t, nodes[1].store, "shared", "new", 5*time.Second)
+
+	nodes[2] = rebuild(t, opts, 2, nodes[0])
+	waitClusterSize(t, nodes[2].cluster, 3, 15*time.Second)
+	waitValue(t, nodes[2].store, "shared", "new", 10*time.Second)
+}
+
+func TestFullOutageRestoreUnion(t *testing.T) {
+	// Every node crashes with its own snapshot; on restart each loads its
+	// disk and the group converges to the union.
+	persisters := []*memPersister{{}, {}}
+	opts := harnessOpts{basePort: 21420, count: 2,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return persisters[i] },
+	}
+	nodes := build(t, opts)
+
+	if err := nodes[0].store.Set("from-n0", []byte("v"), 0); err != nil {
+		t.Fatalf("set from-n0: %v", err)
+	}
+	if err := nodes[1].store.Set("from-n1", []byte("v"), 0); err != nil {
+		t.Fatalf("set from-n1: %v", err)
+	}
+	waitValue(t, nodes[0].store, "from-n1", "v", 5*time.Second)
+	waitValue(t, nodes[1].store, "from-n0", "v", 5*time.Second)
+
+	if err := nodes[0].store.Snapshot(); err != nil {
+		t.Fatalf("snapshot n0: %v", err)
+	}
+	if err := nodes[1].store.Snapshot(); err != nil {
+		t.Fatalf("snapshot n1: %v", err)
+	}
+	nodes[0].crash()
+	nodes[1].crash()
+
+	// Total outage: both come back with nothing but their disks.
+	nodes[0] = rebuild(t, opts, 0, nodes[1]) // seed via n1's address book
+	waitClusterSize(t, nodes[0].cluster, 1, 5*time.Second)
+	waitValue(t, nodes[0].store, "from-n0", "v", 5*time.Second)
+
+	nodes[1] = rebuild(t, opts, 1, nodes[0])
+	waitClusterSize(t, nodes[0].cluster, 2, 15*time.Second)
+	waitValue(t, nodes[0].store, "from-n1", "v", 10*time.Second)
+	waitValue(t, nodes[1].store, "from-n0", "v", 10*time.Second)
+}
+
+func TestSnapshotTriggersCountIntervalAndIdle(t *testing.T) {
+	p := &memPersister{}
+	nodes := build(t, harnessOpts{basePort: 21430, count: 1,
+		storeCfg:  func() *kv.Config { return fastSnapCfg(3, 400*time.Millisecond) },
+		persister: func(i int) kv.Persister { return p },
+	})
+	defer teardown(nodes)
+	s := nodes[0].store
+
+	// Three writes reach the write-count trigger.
+	for i := 0; i < 3; i++ {
+		if err := s.Set(fmt.Sprintf("k%d", i), []byte("v"), 0); err != nil {
+			t.Fatalf("set k%d: %v", i, err)
+		}
+	}
+	waitFor(t, func() bool { return p.saveCount() >= 1 }, 5*time.Second, "write-count trigger")
+
+	// Clean store: the interval must not fire on its own.
+	time.Sleep(900 * time.Millisecond)
+	if got := p.saveCount(); got != 1 {
+		t.Fatalf("idle store saved %d times, want 1", got)
+	}
+
+	// One write is below the count trigger but the interval catches it.
+	if err := s.Set("k3", []byte("v"), 0); err != nil {
+		t.Fatalf("set k3: %v", err)
+	}
+	waitFor(t, func() bool { return p.saveCount() >= 2 }, 5*time.Second, "interval trigger")
+
+	// Clean again: still exactly two.
+	time.Sleep(900 * time.Millisecond)
+	if got := p.saveCount(); got != 2 {
+		t.Fatalf("idle store saved %d times after interval, want 2", got)
+	}
+}
+
+func TestCloseFlushesDirtyStore(t *testing.T) {
+	// Triggers are far away (defaults); only the close-time flush saves.
+	p := &memPersister{}
+	n := build(t, harnessOpts{basePort: 21440, count: 1,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return p },
+	})[0]
+
+	if err := n.store.Set("survives", []byte("v"), 0); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	n.retire() // Close flushes the dirty store
+
+	if p.saveCount() != 1 {
+		t.Fatalf("close flush saved %d times, want 1", p.saveCount())
+	}
+
+	// A fresh store on a fresh cluster restores from the same "disk".
+	n2 := build(t, harnessOpts{basePort: 21441, count: 1,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return p },
+	})[0]
+	defer n2.retire()
+	waitValue(t, n2.store, "survives", "v", time.Second)
+}
+
+func TestSnapshotSaveRetriesAfterFailure(t *testing.T) {
+	p := &memPersister{}
+	p.setFail(errors.New("disk full"))
+	nodes := build(t, harnessOpts{basePort: 21450, count: 1,
+		storeCfg:  func() *kv.Config { return fastSnapCfg(2, time.Hour) },
+		persister: func(i int) kv.Persister { return p },
+	})
+	defer teardown(nodes)
+	s := nodes[0].store
+
+	// The write-count trigger fires but the save fails; the dirty count is
+	// restored, so nothing is considered persisted.
+	for i := 0; i < 2; i++ {
+		if err := s.Set(fmt.Sprintf("k%d", i), []byte("v"), 0); err != nil {
+			t.Fatalf("set k%d: %v", i, err)
+		}
+	}
+	time.Sleep(1 * time.Second)
+	if p.saveCount() != 0 {
+		t.Fatalf("failing persister recorded %d saves, want 0", p.saveCount())
+	}
+
+	// The Persister recovers; one more write re-triggers with the carried
+	// dirty count and the save lands.
+	p.setFail(nil)
+	if err := s.Set("k2", []byte("v"), 0); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	waitFor(t, func() bool { return p.saveCount() >= 1 }, 5*time.Second, "retry after recovery")
+}
+
+// waitFor polls cond until it holds or the deadline passes.
+func waitFor(t *testing.T, cond func() bool, limit time.Duration, what string) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestLoadErrorStartsEmpty(t *testing.T) {
+	p := &memPersister{}
+	p.setFail(nil)
+	p.corrupt = true // Load returns an error
+	nodes := build(t, harnessOpts{basePort: 21460, count: 1,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return p },
+	})
+	defer teardown(nodes)
+
+	// A failed load must not prevent the store from working normally.
+	if err := nodes[0].store.Set("k", []byte("v"), 0); err != nil {
+		t.Fatalf("set after failed load: %v", err)
+	}
+	waitValue(t, nodes[0].store, "k", "v", time.Second)
+}
+
+func TestLoadWrongStoreNameIgnored(t *testing.T) {
+	p := &memPersister{snap: &kv.StoreSnapshot{Store: "other-store",
+		Entries: []*kv.Entry{{Key: "k", Version: 1, Origin: [16]byte{1}, Value: []byte("v")}}}}
+	nodes := build(t, harnessOpts{basePort: 21470, count: 1,
+		storeCfg:  func() *kv.Config { return kv.DefaultConfig() },
+		persister: func(i int) kv.Persister { return p },
+	})
+	defer teardown(nodes)
+
+	// The snapshot belongs to another store: ignored, not merged.
+	if _, ok := nodes[0].store.Get("k"); ok {
+		t.Fatal("foreign store's snapshot leaked into this store")
 	}
 }

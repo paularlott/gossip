@@ -69,6 +69,23 @@ type Config struct {
 	// a graceful leave or an explicit Store.Forget.
 	AutoShrinkDisabled bool
 
+	// Persister optionally backs the store with long-term storage (see
+	// persist.go). Nil — the default — is memory-only. When set, note that
+	// TombstoneRetention must exceed the worst-case node downtime: a node
+	// restored from a snapshot taken before a delete, rejoining after the
+	// cluster has reaped that delete's tombstone, would otherwise resurrect
+	// the deleted key.
+	Persister Persister
+
+	// SnapshotWrites is how many table changes (local writes plus adopted
+	// remote entries) may accumulate before a snapshot is saved. A store
+	// with no changes never touches the Persister. Default: 1000.
+	SnapshotWrites int
+
+	// SnapshotInterval bounds the age of unsaved changes: a dirty store
+	// snapshots at least this often, a clean one never. Default: 30s.
+	SnapshotInterval time.Duration
+
 	// ReplicationTimeout bounds one round of write acks. A write that cannot
 	// collect its acks within this budget is retried once against replacement
 	// peers and then refused. Default: 500ms.
@@ -124,6 +141,8 @@ func DefaultConfig() *Config {
 		MaxKeys:            0,
 		MaxTTL:             24 * time.Hour,
 		TombstoneRetention: 10 * time.Minute,
+		SnapshotWrites:     1000,
+		SnapshotInterval:   30 * time.Second,
 	}
 }
 
@@ -159,6 +178,12 @@ func (c *Config) validate() *Config {
 	}
 	if out.TombstoneRetention <= 0 {
 		out.TombstoneRetention = defaults.TombstoneRetention
+	}
+	if out.SnapshotWrites <= 0 {
+		out.SnapshotWrites = defaults.SnapshotWrites
+	}
+	if out.SnapshotInterval <= 0 {
+		out.SnapshotInterval = defaults.SnapshotInterval
 	}
 	if out.Clock == nil {
 		out.Clock = hlc.NewClock()
