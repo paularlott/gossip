@@ -258,3 +258,24 @@ func BenchmarkTimestampComparison(b *testing.B) {
 		_ = ts1.Before(ts2)
 	}
 }
+
+func TestWitness(t *testing.T) {
+	clock := NewClock()
+
+	first := clock.Now()
+
+	// Witnessing a lower timestamp must be a no-op.
+	before := clock.Now()
+	clock.Witness(first)
+	if next := clock.Now(); !next.After(before) && !next.Equal(before) {
+		t.Errorf("Witness of an old timestamp changed the clock: before=%d next=%d", before, next)
+	}
+
+	// Witnessing a future timestamp must advance the clock: the next Now()
+	// has to beat it even without wall-clock movement.
+	future := first + Timestamp(1<<20)
+	clock.Witness(future)
+	if next := clock.Now(); !next.After(future) {
+		t.Errorf("Now()=%d did not beat witnessed %d", next, future)
+	}
+}

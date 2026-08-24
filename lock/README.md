@@ -15,7 +15,9 @@ Acquire / Release / Extend / Query  →  current leader  (TCP request/response)
 leader applies mutation ──► pushes entry to W-1 peers, waits for acks
                         └─► fire-and-forget fan-out to the group's candidates
 
-every node, per gossip tick ──► catch-up pull until synced; re-gossip batches after
+anti-entropy rides the cluster's gossip event (the library's own
+state exchange, always running): catch-up until synced, re-gossip after;
+membership events trigger immediate total sweeps on top
 
 new leader elected ──► queries every live peer for its replica view, merges
 ```
@@ -79,18 +81,19 @@ false "not held" during that window.
 ### Anti-entropy: catch-up and re-gossip
 
 Fire-and-forget gossip can lose a delivery, and a node that joins later never
-sees the history at all. Two mechanisms close both gaps, both riding the
-cluster's gossip event (`HandleGossipFunc`) — the same self-adjusting cadence
-the cluster uses for its own state exchange — so the pool keeps no timer of
-its own:
+sees the history at all. Two mechanisms close both gaps, riding the
+cluster's gossip event (`HandleGossipFunc`) — the same self-adjusting
+cadence the cluster uses for its own state exchange — with membership events
+adding immediate total sweeps on top:
 
-- **Catch-up.** Until a pool has synced once, each gossip tick pulls a full
+- **Catch-up.** Until a pool has synced once, membership events and pool
+  construction pull a full
   state query from its peers, so a late-joining node becomes a useful replica
   promptly rather than waiting for the next leadership change.
-- **Re-gossip.** Thereafter each tick pushes a random, payload-sized batch of
+- **Re-gossip.** Sweeps push a random, payload-sized batch of
   entries to the pool's candidates — the whole table to every peer when it
   fits one payload, one random peer per batch otherwise. Lost gossip heals on
-  a later tick and steady-state replication rises towards the whole candidate
+  later sweeps and steady-state replication rises towards the whole candidate
   set over time.
 
 Neither is load-bearing for correctness — W-durability carries that — they

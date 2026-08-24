@@ -85,6 +85,10 @@ type Pool struct {
 	stateHandler gossip.HandlerID
 	gossipTick   gossip.HandlerID
 
+	// mutations counts lock-table changes and drives amortised anti-entropy:
+	// every so many mutations the table is reaped and a sweep runs, so a busy
+	// pool keeps itself healthy with no periodic timer.
+
 	// sweeping single-flights the anti-entropy work so a slow sweep skips
 	// gossip ticks instead of piling up; synced is only touched inside a
 	// sweep, ordered by the sweeping atomic.
@@ -129,10 +133,15 @@ func NewPool(cluster *gossip.Cluster, leadership Leadership, config *Config) *Po
 		p.syncLeadership()
 	})
 
-	// Anti-entropy rides the cluster's gossip event — the same self-adjusting
-	// cadence the cluster uses for its own state exchange — so the pool keeps
-	// no timer of its own.
-	p.gossipTick = cluster.HandleGossipFunc(p.onGossipTick)
+	// Anti-entropy rides the cluster's gossip event — the library's own
+	// state-exchange cadence, always running: that is the "eventually in
+	// sync" backbone. Membership events handle the immediate reactions.
+	p.gossipTick = cluster.HandleGossipFunc(p.onGossipEvent)
+
+	// Catch up with the group's replica state immediately rather than
+	// waiting for the next gossip event: a late-arriving node becomes a
+	// useful replica straight away.
+	go p.maybeSweepAll()
 
 	// Lifecycle goroutine: owns doneCh so Close can wait for shutdown.
 	go func() {
@@ -163,7 +172,6 @@ func (p *Pool) Close() {
 		p.unwatch()
 	}
 
-	p.cluster.RemoveGossipHandler(p.gossipTick)
 	p.cluster.RemoveNodeStateChangeHandler(p.stateHandler)
 	p.tbl.close()
 	p.registry.unregisterPool(p.config.Name)
@@ -182,19 +190,37 @@ func (p *Pool) ReplicaCount() int { return p.tbl.count() }
 // WriteReplicas returns the configured W for this pool.
 func (p *Pool) WriteReplicas() int { return p.config.WriteReplicas }
 
-// onGossipTick runs on the cluster's gossip event: until the pool has synced
-// once it catches the local replica store up with its peers (a late joiner
-// otherwise holds nothing until the next leadership change), afterwards it
-// sweeps entries to its peers, healing lost fire-and-forget gossip.
-//
-// The work is dispatched rather than done inline: gossip handlers run
-// synchronously on the cluster's gossip goroutine and their duration feeds the
-// cluster's interval adjustment, so network waits must not block the tick.
-// Single-flighted — a slow sweep skips ticks instead of piling up.
-func (p *Pool) onGossipTick() {
-	// Reap inline: a short map scan, safe for the synchronous tick.
+// onGossipEvent runs on the cluster's gossip event: reap inline (a short
+// map scan, safe for the synchronous event) and run the paced anti-entropy
+// sweep — catch-up until synced, re-gossip batches after. The work is
+// dispatched rather than done inline: gossip handlers run synchronously on
+// the cluster's gossip goroutine and their duration feeds the cluster's
+// interval adjustment, so network waits must not block the event.
+// Single-flighted — a slow sweep skips events instead of piling up.
+func (p *Pool) onGossipEvent() {
 	p.tbl.reap()
+	p.maybeSweep()
+}
 
+// maybeSweep runs the anti-entropy pass single-flighted on its own goroutine:
+// catch-up until synced (a late joiner otherwise holds nothing until the next
+// leadership change), re-gossip sweeps afterwards, healing lost
+// fire-and-forget gossip. Dispatched rather than inline because state-change
+// handlers must not block on network waits. Called from construction,
+// membership events, and amortised mutations.
+func (p *Pool) maybeSweep() {
+	p.sweep(false)
+}
+
+// maybeSweepAll is the event-triggered variant: when already synced it
+// regossips every batch to every peer, because a membership event (a peer
+// returning from a partition, a late joiner) is rare and must heal totally
+// rather than across successive paced rounds.
+func (p *Pool) maybeSweepAll() {
+	p.sweep(true)
+}
+
+func (p *Pool) sweep(all bool) {
 	if !p.sweeping.CompareAndSwap(false, true) {
 		return
 	}
@@ -205,9 +231,16 @@ func (p *Pool) onGossipTick() {
 			p.synced = p.catchUp()
 			return
 		}
+		if all {
+			p.regossipAll()
+			return
+		}
 		p.regossip()
 	}()
 }
+
+// sweepEveryMutations paces amortised anti-entropy for a busy pool.
+const sweepEveryMutations = 64
 
 // --- leadership transitions ---
 
@@ -265,6 +298,10 @@ func (p *Pool) syncLeadership() {
 
 // handleNodeStateChange frees locks belonging to a node that has died.
 func (p *Pool) handleNodeStateChange(node *gossip.Node, prevState gossip.NodeState) {
+	// Membership moved — including a peer returning from suspect or dead,
+	// whose replica state we may have missed: heal totally.
+	p.maybeSweepAll()
+
 	if node.GetObservedState() != gossip.NodeDead {
 		return
 	}

@@ -57,6 +57,24 @@ func (c *Clock) Now() Timestamp {
 	}
 }
 
+// Witness advances the clock so that it has observed ts. After Witness
+// returns, the next Now() is strictly greater than ts even when the local
+// wall clock is behind the observed timestamp — the logical counter takes
+// over. Receiving nodes use this when merging remote timestamps so that a
+// locally minted write always dominates a previously observed remote one.
+func (c *Clock) Witness(ts Timestamp) {
+	v := uint64(ts)
+	for {
+		last := atomic.LoadUint64(&c.last)
+		if v <= last {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&c.last, last, v) {
+			return
+		}
+	}
+}
+
 // Before returns true if ts is before other.
 func (ts Timestamp) Before(other Timestamp) bool {
 	return ts < other

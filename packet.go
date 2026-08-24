@@ -21,9 +21,41 @@ const (
 	pushPullStateMsg                     // Sent by peers when pushing / pulling state
 	metadataUpdateMsg                    // Update the metadata of a node
 	pingMsg                              // Health check ping
-	ReservedMsgsStart MessageType = 64   // Start of the library's internal message range; applications must not use these types
-	_                                    // skip to 128
-	UserMsg           MessageType = 128  // User messages start here
+
+	// ReservedMsgsStart opens the library's internal message range, 64–127.
+	// Applications must not use these types; user messages start at UserMsg
+	// (128).
+	//
+	// Every subpackage protocol (leader, lock, kv, …) allocates its message
+	// types from this range in the single registry below — one list, one
+	// place, so allocations never collide. To add a new protocol: take the
+	// next free block (leave a gap between blocks; next free is +30), add
+	// the constants here, and extend the ledger test in
+	// reserved_msgs_test.go. Values are wire-stable: never renumber an
+	// allocated type.
+	ReservedMsgsStart MessageType = 64
+
+	// leader — leader election (the leader package's defaults; configurable
+	// per election via its Config).
+	LeaderHeartbeatMsg  MessageType = ReservedMsgsStart + 1
+	LeaderForgetMessage MessageType = ReservedMsgsStart + 2
+
+	// lock — distributed lock pool protocol.
+	LockAcquireMsg       MessageType = ReservedMsgsStart + 10
+	LockReleaseMsg       MessageType = ReservedMsgsStart + 11
+	LockExtendMsg        MessageType = ReservedMsgsStart + 12
+	LockQueryMsg         MessageType = ReservedMsgsStart + 13
+	LockReplicaPushMsg   MessageType = ReservedMsgsStart + 14
+	LockReplicaGossipMsg MessageType = ReservedMsgsStart + 15
+	LockStateQueryMsg    MessageType = ReservedMsgsStart + 16
+
+	// kv — replicated KV store protocol.
+	KVWritePushMsg MessageType = ReservedMsgsStart + 20
+	KVGossipMsg    MessageType = ReservedMsgsStart + 21
+	KVFullSyncMsg  MessageType = ReservedMsgsStart + 22
+
+	_                         // skip to 128
+	UserMsg MessageType = 128 // User messages start here
 )
 
 var (

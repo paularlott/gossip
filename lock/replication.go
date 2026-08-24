@@ -15,7 +15,10 @@ const stateQueryConcurrency = 64
 
 // replicationTargets returns the pool's peers as candidate replica targets,
 // drawn from the election's candidate list — group-scoped for a group-scoped
-// election. The local node is excluded — it is already one of the W replicas.
+// election, and already event-maintained by the cluster's node tracking, so
+// there is nothing to cache here: every mutation is a network round trip,
+// making the query cost irrelevant. The local node is excluded — it is
+// already one of the W replicas.
 func (p *Pool) replicationTargets() []*gossip.Node {
 	nodes := p.leadership.Candidates()
 
@@ -219,6 +222,28 @@ func (p *Pool) catchUp() bool {
 		}
 	}
 	return answered
+}
+
+// regossipAll pushes every batch to every peer — the complete sweep used by
+// rare, high-signal triggers (membership events), where healing must be
+// total rather than spread over successive rounds. Bounded by payload-sized
+// batching.
+func (p *Pool) regossipAll() {
+	peers := p.replicationTargets()
+	if len(peers) == 0 {
+		return
+	}
+	snap := p.tbl.snapshot()
+	if len(snap) == 0 {
+		return
+	}
+
+	for _, batch := range chunkEntries(snap, p.entriesPerPacket(len(snap))) {
+		msg := &replicaGossipBroadcast{PoolName: p.config.Name, Entries: batch}
+		for _, peer := range peers {
+			_ = p.cluster.SendTo(peer, lockReplicaGossip, msg)
+		}
+	}
 }
 
 // regossip pushes one random, payload-sized batch of entries to each peer in

@@ -1,4 +1,4 @@
-package leader
+package baseline
 
 import (
 	"sync"
@@ -7,7 +7,13 @@ import (
 	"github.com/paularlott/gossip"
 )
 
-// baselineTracker maintains the cluster size that quorum is calculated against.
+// Package baseline provides the adaptive cluster-size tracker that quorum and
+// write-bar calculations are measured against. It is shared by the leader
+// package (election quorum) and the kv package (write water mark), so the
+// growth and shrinkage rules — and their split-safety argument — live in
+// exactly one place.
+//
+// Tracker maintains the cluster size that quorum is calculated against.
 //
 // The problem it solves: quorum derived purely from the currently observed count
 // is unsafe, because two sides of a partition each compute a majority of their
@@ -52,7 +58,7 @@ import (
 // departure is relevant to this election is decided by the caller, from the
 // transition's previous state and the election's criteria (see
 // wasEligibleForBaseline), which is both fresher and less state than a snapshot.
-type baselineTracker struct {
+type Tracker struct {
 	mu sync.Mutex
 
 	stabilityPeriod time.Duration
@@ -73,8 +79,8 @@ type baselineTracker struct {
 	departed map[gossip.NodeID]struct{}
 }
 
-func newBaselineTracker(stabilityPeriod, shrinkDwell time.Duration, autoShrink bool, cluster *gossip.Cluster) *baselineTracker {
-	return &baselineTracker{
+func New(stabilityPeriod, shrinkDwell time.Duration, autoShrink bool, cluster *gossip.Cluster) *Tracker {
+	return &Tracker{
 		stabilityPeriod: stabilityPeriod,
 		shrinkDwell:     shrinkDwell,
 		autoShrink:      autoShrink,
@@ -85,7 +91,7 @@ func newBaselineTracker(stabilityPeriod, shrinkDwell time.Duration, autoShrink b
 
 // observe records the current eligible count and advances the stability timer.
 // Called on every election check.
-func (b *baselineTracker) observe(nodes []*gossip.Node, now time.Time) {
+func (b *Tracker) Observe(nodes []*gossip.Node, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -153,7 +159,7 @@ func (b *baselineTracker) observe(nodes []*gossip.Node, now time.Time) {
 // election — see wasEligibleForBaseline on LeaderElection, which decides from
 // the transition's previous state and the election's criteria rather than from
 // any cached membership. Only counted once per node.
-func (b *baselineTracker) noteGracefulDeparture(id gossip.NodeID) bool {
+func (b *Tracker) NoteGracefulDeparture(id gossip.NodeID) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -178,7 +184,7 @@ func (b *baselineTracker) noteGracefulDeparture(id gossip.NodeID) bool {
 // operator has asserted externally that a node is gone for good. The caller is
 // responsible for having established that the node is genuinely known to this
 // cluster — the tracker itself will spend the decrement on any ID, once.
-func (b *baselineTracker) forget(id gossip.NodeID) bool {
+func (b *Tracker) Forget(id gossip.NodeID) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -196,14 +202,14 @@ func (b *baselineTracker) forget(id gossip.NodeID) bool {
 }
 
 // size returns the current baseline.
-func (b *baselineTracker) size() int {
+func (b *Tracker) Size() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.baseline
 }
 
 // departedCount reports how many nodes are currently discounted. Diagnostics.
-func (b *baselineTracker) departedCount() int {
+func (b *Tracker) DepartedCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.departed)
@@ -211,7 +217,7 @@ func (b *baselineTracker) departedCount() int {
 
 // reset clears all state, restoring the tracker to its initial condition. The
 // next observation re-seeds the baseline from what is visible then.
-func (b *baselineTracker) reset() {
+func (b *Tracker) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.baseline = 0
