@@ -91,8 +91,8 @@ func DefaultConfig() *Config {
 	return &Config{
 		LeaderCheckInterval:  1 * time.Second,
 		LeaderTimeout:        3 * time.Second,
-		HeartbeatMessageType: gossip.ReservedMsgsStart + 1,
-		ForgetMessageType:    gossip.ReservedMsgsStart + 2,
+		HeartbeatMessageType: gossip.LeaderHeartbeatMsg,
+		ForgetMessageType:    gossip.LeaderForgetMessage,
 		MetadataCriteria:     nil,
 	}
 }

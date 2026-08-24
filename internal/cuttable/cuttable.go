@@ -28,6 +28,11 @@ type Transport struct {
 
 	cutOff atomic.Bool
 
+	// peerCuts holds peer IDs whose traffic is dropped selectively — the
+	// building block for partition tests that split a cluster into groups
+	// without severing any node completely.
+	peerCuts sync.Map
+
 	mu     sync.Mutex
 	closed bool
 	ch     chan *gossip.Packet
@@ -66,6 +71,10 @@ func (t *Transport) Start(ctx context.Context, wg *sync.WaitGroup) error {
 					p.Release()
 					continue
 				}
+				if _, drop := t.peerCuts.Load(p.SenderID); drop {
+					p.Release()
+					continue
+				}
 				t.mu.Lock()
 				closed := t.closed
 				dst := t.ch
@@ -100,11 +109,17 @@ func (t *Transport) Send(tt gossip.TransportType, node *gossip.Node, packet *gos
 	if t.cutOff.Load() {
 		return ErrTransportCut
 	}
+	if _, drop := t.peerCuts.Load(node.ID); drop {
+		return ErrTransportCut
+	}
 	return t.inner.Send(tt, node, packet)
 }
 
 func (t *Transport) SendWithReply(node *gossip.Node, packet *gossip.Packet) (*gossip.Packet, error) {
 	if t.cutOff.Load() {
+		return nil, ErrTransportCut
+	}
+	if _, drop := t.peerCuts.Load(node.ID); drop {
 		return nil, ErrTransportCut
 	}
 	return t.inner.SendWithReply(node, packet)
@@ -119,4 +134,21 @@ func (t *Transport) Cut() {
 // believing it was running throughout, exactly like a healed partition.
 func (t *Transport) Uncut() {
 	t.cutOff.Store(false)
+}
+
+// CutPeers selectively drops traffic to and from the given peers while the
+// node keeps talking to everyone else — the tool for splitting a cluster
+// into disjoint groups. Configure both sides: each group cuts the other's
+// IDs. Restored by UncutPeers.
+func (t *Transport) CutPeers(ids ...gossip.NodeID) {
+	for _, id := range ids {
+		t.peerCuts.Store(id, struct{}{})
+	}
+}
+
+// UncutPeers restores traffic to previously cut peers.
+func (t *Transport) UncutPeers(ids ...gossip.NodeID) {
+	for _, id := range ids {
+		t.peerCuts.Delete(id)
+	}
 }

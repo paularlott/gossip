@@ -22,6 +22,7 @@ This flexible architecture supports the development of resilient distributed sys
 - **Version Checking**: Application and protocol version compatibility verification
 - **Automatic Transport Selection**: UDP will be used wherever possible, however if the packet exceeds the MTU size, TCP will be used instead
 - **[Distributed Locks](lock/)**: Advisory distributed locks backed by leader election, with fencing tokens and automatic failover
+- **[Replicated KV Store](kv/)**: Leaderless, eventually-consistent key-value store with deterministic LWW merges, tombstoned deletes, TTLs, ack'd writes, and cluster- or group-scoped replication
 - **[Leader Election](leader/)**: Quorum-based leader election with adaptive baseline and split-brain protection
 
 ## Installation
@@ -220,6 +221,6 @@ The `examples` directory contains various examples demonstrating the library's c
 - **[basic](examples/basic)**: A basic usage example that creates a cluster and joins nodes to it. Nodes can communicate over TCP/UDP or HTTP.
 - **[events](examples/events)**: Example that installs an event handler to display cluster events.
 - **[usermessages](examples/usermessages)**: Example that demonstrates user defined message handling.
-- **[kv](examples/kv)**: Example Key Value store.
+- **[kv](examples/kv)**: Example replicated key-value store built on the [kv package](kv/).
 - **[leader](examples/leader)**: Example demonstrating leader election.
 - **[lock](examples/lock)**: Example demonstrating distributed advisory locks.

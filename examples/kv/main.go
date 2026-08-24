@@ -93,7 +93,11 @@ func main() {
 				return
 			}
 
-			store.Set(args[1], strings.Join(args[2:], " "))
+			if err := store.Set(args[1], strings.Join(args[2:], " ")); err != nil {
+				fmt.Println("Error setting value:", err)
+				return
+			}
+			fmt.Println("Key set:", args[1])
 		},
 	})
 	common.Commands = append(common.Commands, common.Command{
@@ -122,7 +126,10 @@ func main() {
 				return
 			}
 
-			store.Delete(args[1])
+			if err := store.Delete(args[1]); err != nil {
+				fmt.Println("Error deleting key:", err)
+				return
+			}
 			fmt.Println("Key deleted:", args[1])
 		},
 	})

@@ -6,15 +6,16 @@ import (
 	"github.com/paularlott/gossip"
 )
 
-// Message types for the lock protocol (reserved internal range).
+// Message types for the lock protocol, allocated from the library's central
+// reserved registry in packet.go (lock block: ReservedMsgsStart+10..+16).
 const (
-	lockAcquireMsg     gossip.MessageType = gossip.ReservedMsgsStart + 10
-	lockReleaseMsg     gossip.MessageType = gossip.ReservedMsgsStart + 11
-	lockExtendMsg      gossip.MessageType = gossip.ReservedMsgsStart + 12
-	lockQueryMsg       gossip.MessageType = gossip.ReservedMsgsStart + 13
-	lockReplicaPushMsg gossip.MessageType = gossip.ReservedMsgsStart + 14
-	lockReplicaGossip  gossip.MessageType = gossip.ReservedMsgsStart + 15
-	lockStateQueryMsg  gossip.MessageType = gossip.ReservedMsgsStart + 16
+	lockAcquireMsg     = gossip.LockAcquireMsg
+	lockReleaseMsg     = gossip.LockReleaseMsg
+	lockExtendMsg      = gossip.LockExtendMsg
+	lockQueryMsg       = gossip.LockQueryMsg
+	lockReplicaPushMsg = gossip.LockReplicaPushMsg
+	lockReplicaGossip  = gossip.LockReplicaGossipMsg
+	lockStateQueryMsg  = gossip.LockStateQueryMsg
 )
 
 // Config holds configuration for a lock pool.
