@@ -20,7 +20,8 @@ import (
 
 const (
 	replyExpectedFlag    = 0x4000
-	headerSizeMask       = 0x3FFF
+	streamFlag           = 0x2000 // the packet opens a stream, see stream.go
+	headerSizeMask       = 0x1FFF
 	transportMaxWaitTime = 5 * time.Second
 	// readBoundedBodyFallback is used when TCPMaxPacketSize is not configured.
 	readBoundedBodyFallback = 1 << 20 // 1 MiB
@@ -36,6 +37,8 @@ type HTTPTransport struct {
 	// context.Background and is replaced with the cluster's shutdown context
 	// when Start is called, so in-flight requests are cancelled on shutdown.
 	ctx context.Context
+
+	streamHandler func(packet *Packet, w io.Writer) error
 }
 
 func NewHTTPTransport(config *Config) *HTTPTransport {
@@ -186,6 +189,81 @@ func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, err
 	return ht.packetFromBuffer(body)
 }
 
+// SetStreamHandler implements streamTransport.
+func (ht *HTTPTransport) SetStreamHandler(handler func(packet *Packet, w io.Writer) error) {
+	ht.streamHandler = handler
+}
+
+// OpenStream implements streamTransport: the request is POSTed and the reply
+// streamed back as frames in the response body. HTTPS protects it, so frames
+// are not encrypted again.
+func (ht *HTTPTransport) OpenStream(ctx context.Context, node *Node, packet *Packet) (io.ReadCloser, error) {
+	raw, err := ht.packetToBuffer(packet, false)
+	if err != nil {
+		return nil, err
+	}
+	setStreamFlag(raw)
+
+	if err := ht.ensureNodeAddressResolved(node); err != nil {
+		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+	}
+
+	// The stream lives as long as the caller's context, ended early by
+	// cluster shutdown.
+	ctx, cancel := context.WithCancel(ctx)
+	stopShutdown := context.AfterFunc(ht.ctx, cancel)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node.GetAddress().URL, bytes.NewReader(raw))
+	if err != nil {
+		stopShutdown()
+		cancel()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if ht.config.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ht.config.BearerToken)
+	}
+
+	resp, err := ht.client.Do(req)
+	if err != nil {
+		stopShutdown()
+		cancel()
+		node.ClearAddress()
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		stopShutdown()
+		cancel()
+		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
+	}
+
+	body := &cancelBody{ReadCloser: resp.Body, cancel: func() { stopShutdown(); cancel() }}
+	return newFrameReader(body, body, nil, nil), nil
+}
+
+// serveStream answers a stream request in the response body; the client
+// going away or the transport shutting down ends it.
+func (ht *HTTPTransport) serveStream(w http.ResponseWriter, r *http.Request, packet *Packet) {
+	if ht.streamHandler == nil {
+		packet.Release()
+		http.Error(w, "Streams not supported", http.StatusNotImplemented)
+		return
+	}
+	// A stream may outlast the server's write timeout.
+	http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	stop := context.AfterFunc(ht.ctx, cancel)
+	defer stop()
+	fw := newFrameWriter(ctx, w, nil, nil)
+	fw.finish(ht.streamHandler(packet, fw))
+}
+
 func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Request) {
 	if ht.config.BearerToken != "" {
 		authHeader := r.Header.Get("Authorization")
@@ -228,6 +306,11 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 
 	flags := binary.LittleEndian.Uint16(body[:2])
 	replyExpected := flags&replyExpectedFlag != 0
+
+	if flags&streamFlag != 0 {
+		ht.serveStream(w, r, packet)
+		return
+	}
 
 	if replyExpected {
 		replyChan := make(chan *Packet, 1)

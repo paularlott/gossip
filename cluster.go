@@ -160,6 +160,10 @@ func NewCluster(config *Config) (*Cluster, error) {
 		})
 	})
 
+	if st, ok := cluster.transport.(streamTransport); ok {
+		st.SetStreamHandler(cluster.serveStream)
+	}
+
 	cluster.logger.Info("cluster selected transport", "transport", cluster.transport.Name())
 
 	return cluster, nil

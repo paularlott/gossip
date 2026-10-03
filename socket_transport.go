@@ -25,6 +25,7 @@ type SocketTransport struct {
 	packetChannel chan *Packet
 	resolver      Resolver
 	udpBufferPool sync.Pool // Pool for UDP packet buffers
+	streamHandler func(packet *Packet, w io.Writer) error
 }
 
 func NewSocketTransport(config *Config) *SocketTransport {
@@ -205,6 +206,73 @@ func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, e
 	return replyPacket, nil
 }
 
+// SetStreamHandler implements streamTransport.
+func (st *SocketTransport) SetStreamHandler(handler func(packet *Packet, w io.Writer) error) {
+	st.streamHandler = handler
+}
+
+// OpenStream implements streamTransport: the request goes as a packet on a
+// new connection and the reply comes back on it as frames.
+func (st *SocketTransport) OpenStream(ctx context.Context, node *Node, packet *Packet) (io.ReadCloser, error) {
+	raw, err := st.packetToBuffer(packet, false)
+	if err != nil {
+		return nil, err
+	}
+	setStreamFlag(raw)
+
+	conn, err := st.dialPeer(node)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.writeRawPacket(conn, raw); err != nil {
+		conn.Close()
+		node.ClearAddress()
+		return nil, err
+	}
+
+	fr := newFrameReader(conn, conn, st.openFrame(), func() {
+		conn.SetReadDeadline(time.Now().Add(st.config.StreamIdleTimeout))
+	})
+	fr.closeWith(ctx)
+	return fr, nil
+}
+
+// serveStream answers a stream request on its connection; shutting down
+// the transport ends it.
+func (st *SocketTransport) serveStream(ctx context.Context, conn net.Conn, packet *Packet) {
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	// The packet does not own the connection; the reply is written here.
+	packet.SetConn(nil)
+
+	fw := newFrameWriter(ctx, conn, st.sealFrame(), func() {
+		conn.SetWriteDeadline(time.Now().Add(st.config.StreamIdleTimeout))
+	})
+	if st.streamHandler == nil {
+		packet.Release()
+		fw.finish(ErrStreamsUnsupported)
+		return
+	}
+	fw.finish(st.streamHandler(packet, fw))
+}
+
+// sealFrame and openFrame encrypt and decrypt stream frames with the cluster
+// key, as packets are; nil when the cluster is not encrypted.
+func (st *SocketTransport) sealFrame() func([]byte) ([]byte, error) {
+	if st.config.Cipher == nil {
+		return nil
+	}
+	return func(b []byte) ([]byte, error) { return st.config.Cipher.Encrypt(st.config.EncryptionKey, b) }
+}
+
+func (st *SocketTransport) openFrame() func([]byte) ([]byte, error) {
+	if st.config.Cipher == nil {
+		return nil
+	}
+	return func(b []byte) ([]byte, error) { return st.config.Cipher.Decrypt(st.config.EncryptionKey, b) }
+}
+
 func (st *SocketTransport) tcpListen(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -267,10 +335,16 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
-	packet, replyExpected, err := st.readPacket(conn)
+	packet, flags, err := st.readPacketFlags(conn)
 	if err != nil {
 		st.logger.WithError(err).Error("failed to read packet")
 		conn.Close()
+		return
+	}
+	replyExpected := flags&replyExpectedFlag != 0
+
+	if flags&streamFlag != 0 {
+		st.serveStream(ctx, conn, packet)
 		return
 	}
 
@@ -701,9 +775,15 @@ func (st *SocketTransport) writeRawPacket(conn net.Conn, rawPacket []byte) error
 }
 
 func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, bool, error) {
+	packet, flags, err := st.readPacketFlags(conn)
+	return packet, flags&replyExpectedFlag != 0, err
+}
+
+// readPacketFlags reads a packet and its wire flags from a connection.
+func (st *SocketTransport) readPacketFlags(conn net.Conn) (*Packet, uint16, error) {
 	err := conn.SetReadDeadline(time.Now().Add(st.config.TCPDeadline))
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 
 	bufferedReader := bufio.NewReader(conn)
@@ -711,20 +791,24 @@ func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, bool, error) {
 	lengthBytes := make([]byte, 4)
 	_, err = io.ReadFull(bufferedReader, lengthBytes)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 
 	dataLen := binary.LittleEndian.Uint32(lengthBytes)
 
 	if dataLen > uint32(st.config.TCPMaxPacketSize) {
-		return nil, false, fmt.Errorf("packet size too large: %d bytes", dataLen)
+		return nil, 0, fmt.Errorf("packet size too large: %d bytes", dataLen)
 	}
 
 	receivedData := make([]byte, dataLen)
 	_, err = io.ReadFull(bufferedReader, receivedData)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 
-	return st.packetFromBuffer(receivedData)
+	packet, _, err := st.packetFromBuffer(receivedData)
+	if err != nil {
+		return nil, 0, err
+	}
+	return packet, binary.LittleEndian.Uint16(receivedData[:2]), nil
 }

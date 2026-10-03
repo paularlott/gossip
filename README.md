@@ -20,6 +20,7 @@ This flexible architecture supports the development of resilient distributed sys
 - **Flexible Codec Support**: Pluggable serialization with support for multiple msgpack implementations
 - **Metadata Sharing**: Distribute custom node metadata across the cluster
 - **Version Checking**: Application and protocol version compatibility verification
+- **Direct Streams**: Node-to-node replies of any size for bulk data such as files or state transfers, over the socket and HTTP transports
 - **Automatic Transport Selection**: UDP will be used wherever possible, however if the packet exceeds the MTU size, TCP will be used instead
 - **[Distributed Locks](lock/)**: Advisory distributed locks backed by leader election, with fencing tokens and automatic failover
 - **[Replicated KV Store](kv/)**: Leaderless, eventually-consistent key-value store with deterministic LWW merges, tombstoned deletes, TTLs, ack'd writes, and cluster- or group-scoped replication
@@ -129,7 +130,44 @@ config.ListenFunc = srv.Listen   // Custom TCP listen function, defaults to net.
 
 // Logging
 config.Logger = logger.NewNullLogger()                 // Default: no logging
+
+// Streams
+config.StreamIdleTimeout = 30 * time.Second  // How long a stream may wait for its next frame
 ```
+
+## Direct Streams
+
+Messages are limited to a single packet (`TCPMaxPacketSize`, 4MB by default) sent within `TCPDeadline`. For bulk data, a node can open a stream to another node: the request is sent as a packet and the reply, of any size, is read as an `io.Reader` from a direct connection. Streams are never gossiped.
+
+```go
+const FileMsg gossip.MessageType = gossip.UserMsg + 1
+
+// Serving node: write the reply to w. Returning an error ends the stream
+// with that error at the caller.
+cluster.HandleStreamFunc(FileMsg, func(sender *gossip.Node, packet *gossip.Packet, w io.Writer) error {
+	var req FileRequest
+	if err := packet.Unmarshal(&req); err != nil {
+		return err
+	}
+	f, err := os.Open(req.Path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
+})
+
+// Calling node: read the reply as it arrives.
+r, err := cluster.OpenStream(ctx, node, FileMsg, &FileRequest{Path: "data.bin"})
+if err != nil {
+	return err
+}
+defer r.Close()
+_, err = io.Copy(dst, r) // io.EOF only once the whole reply has arrived
+```
+
+The reply travels in frames of up to 64KB. On the socket transport each frame is encrypted with the cluster key, as packets are; on the HTTP transport the connection's TLS protects it. A reader gets `io.EOF` only after a complete reply, the handler's error if it failed, and `io.ErrUnexpectedEOF` if the connection broke, so a partial reply is never mistaken for a whole one. Each frame must arrive within `StreamIdleTimeout`; cancelling the context passed to `OpenStream` aborts the stream. Streams are accepted only from known cluster members, and `OpenStream` returns `ErrStreamsUnsupported` on a transport without stream support.
 
 ## Logging
 

@@ -34,6 +34,7 @@ type Config struct {
 	StateGossipInterval      time.Duration           // Medium state sync (~30-60s)
 	TCPDialTimeout           time.Duration           // TCPDialTimeout is the duration to wait for a TCP connection to be established
 	TCPDeadline              time.Duration           // TCPDeadline is the duration to wait for a TCP operation to complete
+	StreamIdleTimeout        time.Duration           // StreamIdleTimeout is how long a stream may wait for its next frame
 	UDPDeadline              time.Duration           // UDPDeadline is the duration to wait for a UDP operation to complete
 	UDPMaxPacketSize         int                     // UDPMaxSize is the maximum size of a UDP packet in bytes
 	TCPMaxPacketSize         int                     // TCPMaxSize is the maximum size of a TCP packet in bytes
@@ -92,6 +93,7 @@ func DefaultConfig() *Config {
 		StateGossipInterval:      45 * time.Second,
 		TCPDialTimeout:           2 * time.Second,
 		TCPDeadline:              2 * time.Second,
+		StreamIdleTimeout:        30 * time.Second,
 		UDPDeadline:              2 * time.Second,
 		UDPMaxPacketSize:         1400,
 		TCPMaxPacketSize:         4194304, // 4MB

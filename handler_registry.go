@@ -15,8 +15,9 @@ type Handler func(*Node, *Packet) error
 type ReplyHandler func(*Node, *Packet) (interface{}, error)
 
 type msgHandler struct {
-	handler      Handler
-	replyHandler ReplyHandler
+	handler       Handler
+	replyHandler  ReplyHandler
+	streamHandler StreamHandler
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type
