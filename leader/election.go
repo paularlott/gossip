@@ -477,8 +477,9 @@ func (le *LeaderElection) electLeader() {
 
 	localNode := le.cluster.LocalNode()
 
-	var wasLeader, hadLeader bool
+	var wasLeader, isLeader, hadLeader bool
 	var prevLeaderID gossip.NodeID
+	var term uint64
 	le.applyState(func() bool {
 		wasLeader = le.isLeader
 		prevLeaderID = le.leaderID
@@ -491,19 +492,22 @@ func (le *LeaderElection) electLeader() {
 		le.lastHeartbeat = time.Now()
 		le.leaderTime = le.lastHeartbeat
 		le.isLeader = (candidateNode.ID == localNode.ID)
+		// Snapshot under the lock; the fields may change once it is released.
+		isLeader = le.isLeader
+		term = le.currentTerm
 		return true
 	})
 
 	le.cluster.Logger().
 		With("leaderId", candidateNode.ID.String()).
-		With("term", le.currentTerm).
-		With("isLocal", le.IsLeader()).
+		With("term", term).
+		With("isLocal", isLeader).
 		Debug("New leader elected", "quorum_eligible", numEligible, "quorum_required", requiredQuorum)
 
-	// Dispatch events based on state changes
+	// Dispatch events based on the transition this call made
 	leaderChanged := !hadLeader || prevLeaderID != candidateNode.ID
-	becameLeader := !wasLeader && le.IsLeader()
-	steppedDown := wasLeader && !le.IsLeader()
+	becameLeader := !wasLeader && isLeader
+	steppedDown := wasLeader && !isLeader
 
 	if steppedDown {
 		le.eventHandlers.dispatch(SteppedDownEvent, localNode.ID)
@@ -571,9 +575,10 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 		return err
 	}
 
-	var wasLeader, hadLeader bool
+	var wasLeader, isLeader, hadLeader bool
 	var prevLeaderID gossip.NodeID
 	var localNodeID gossip.NodeID
+	var term uint64
 
 	accepted := le.applyState(func() bool {
 		// Priority order for deciding leadership:
@@ -624,6 +629,10 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 		le.currentTerm = msg.Term
 		localNodeID = le.cluster.LocalNode().ID
 		le.isLeader = (sender.ID == localNodeID)
+		// Snapshot what the events below need: once the lock is released another
+		// goroutine (e.g. handleNodeStateChange) may change these fields.
+		isLeader = le.isLeader
+		term = le.currentTerm
 		return true
 	})
 
@@ -634,8 +643,8 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 	// Events run outside the lock — a handler may call back into the election
 	// (IsLeader and friends), which would deadlock under our writer lock.
 	leaderChanged := !hadLeader || prevLeaderID != sender.ID
-	becameLeader := !wasLeader && le.isLeader
-	steppedDown := wasLeader && !le.isLeader
+	becameLeader := !wasLeader && isLeader
+	steppedDown := wasLeader && !isLeader
 
 	if steppedDown {
 		le.cluster.Logger().Debug("stepping down as leader due to heartbeat", "sender_id", sender.ID)
@@ -648,7 +657,7 @@ func (le *LeaderElection) handleLeaderHeartbeat(sender *gossip.Node, packet *gos
 
 	if leaderChanged {
 		le.cluster.Logger().
-			Debug("leader updated via heartbeat", "leaderId", sender.ID.String(), "term", le.currentTerm)
+			Debug("leader updated via heartbeat", "leaderId", sender.ID.String(), "term", term)
 		le.eventHandlers.dispatch(LeaderElectedEvent, sender.ID)
 	}
 
@@ -691,13 +700,14 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	le.lock.RLock()
 	isCurrentLeader := le.hasLeader && (node.ID == le.leaderID)
 	currentLeaderID := le.leaderID
+	currentTerm := le.currentTerm
 	le.lock.RUnlock()
 
 	// If the current leader has failed...
 	if isCurrentLeader && node.GetObservedState() != gossip.NodeAlive {
 		le.cluster.Logger().
 			With("leaderId", node.ID.String()).
-			With("currentTerm", le.currentTerm).
+			With("currentTerm", currentTerm).
 			Warn("Leader node is down, clearing leader state")
 
 		le.eventHandlers.dispatch(LeaderLostEvent, currentLeaderID)
