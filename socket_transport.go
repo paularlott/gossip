@@ -1,7 +1,6 @@
 package gossip
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -26,6 +25,7 @@ type SocketTransport struct {
 	resolver      Resolver
 	udpBufferPool sync.Pool // Pool for UDP packet buffers
 	streamHandler func(packet *Packet, w io.Writer) error
+	pool          *connPool // idle request/response connections per peer
 }
 
 func NewSocketTransport(config *Config) *SocketTransport {
@@ -54,6 +54,7 @@ func NewSocketTransport(config *Config) *SocketTransport {
 	if st.resolver == nil {
 		st.resolver = NewDefaultResolver()
 	}
+	st.pool = newConnPool(config.TCPPoolSize, config.TCPIdleTimeout)
 
 	return st
 }
@@ -140,6 +141,7 @@ func (st *SocketTransport) shutdown(wg *sync.WaitGroup) {
 	if st.udpListener != nil {
 		st.udpListener.Close()
 	}
+	st.pool.closeAll()
 
 	// packetChannel is deliberately NOT closed.
 	//
@@ -185,25 +187,63 @@ func (st *SocketTransport) Send(transportType TransportType, node *Node, packet 
 	return nil
 }
 
+// SendWithReply sends packet and waits for the reply. Connections are pooled per peer address and reused for later
+// requests. A pooled connection is checked before use; one the peer has closed is discarded and never written to.
+// Nothing is retried after the request has been sent, so a request is never delivered twice.
 func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) {
+	raw, err := st.packetToBuffer(packet, true)
+	if err != nil {
+		return nil, err
+	}
+	conn, addr, uses, err := st.replyConn(node)
+	if err != nil {
+		return nil, err
+	}
+	reply, err := st.roundTrip(conn, raw)
+	if err != nil {
+		conn.Close()
+		node.ClearAddress()
+		return nil, err
+	}
+	st.pool.put(addr, conn, uses+1)
+	return reply, nil
+}
+
+// replyConn returns a live pooled connection to node (with the number of replies it has carried), or dials one.
+func (st *SocketTransport) replyConn(node *Node) (net.Conn, string, int, error) {
+	if err := st.ensureNodeAddressResolved(node); err == nil {
+		addr := node.GetAddress()
+		key := addr.String()
+		for {
+			conn, uses := st.pool.get(key)
+			if conn == nil {
+				break
+			}
+			if alive, _ := connAlive(conn); alive {
+				return conn, key, uses, nil
+			}
+			conn.Close()
+			if uses == 1 {
+				// Closed right after its first reply: an older peer that does not keep connections open.
+				st.pool.refuse(key)
+			}
+		}
+	}
 	conn, err := st.dialPeer(node)
 	if err != nil {
+		return nil, "", 0, err
+	}
+	addr := node.GetAddress()
+	return conn, addr.String(), 0, nil
+}
+
+// roundTrip writes a request and reads its reply.
+func (st *SocketTransport) roundTrip(conn net.Conn, raw []byte) (*Packet, error) {
+	if err := st.writeRawPacket(conn, raw); err != nil {
 		return nil, err
 	}
-	defer conn.Close()
-
-	if err := st.writePacket(conn, packet, true); err != nil {
-		node.ClearAddress()
-		return nil, err
-	}
-
-	replyPacket, _, err := st.readPacket(conn)
-	if err != nil {
-		node.ClearAddress()
-		return nil, err
-	}
-
-	return replyPacket, nil
+	reply, _, _, err := st.readPacketFlags(conn, st.config.TCPDeadline)
+	return reply, err
 }
 
 // SetStreamHandler implements streamTransport.
@@ -334,62 +374,86 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
+// packetToQueue reads packets from an accepted connection. A fire-and-forget packet owns the connection (it is
+// closed when the packet is released). After answering a request the connection stays open for the client's next
+// request until it is closed or idle for TCPIdleTimeout, so clients can reuse it; older clients simply close it.
 func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
-	packet, flags, err := st.readPacketFlags(conn)
-	if err != nil {
-		st.logger.WithError(err).Error("failed to read packet")
-		conn.Close()
-		return
-	}
-	replyExpected := flags&replyExpectedFlag != 0
-
-	if flags&streamFlag != 0 {
-		st.serveStream(ctx, conn, packet)
-		return
-	}
-
-	packet.SetConn(conn)
-
-	if replyExpected {
-		replyChan := make(chan *Packet, 1)
-		packet.SetReplyChan(replyChan)
-
-		select {
-		case <-ctx.Done():
-			packet.Release()
-			close(replyChan)
+	timeout := st.config.TCPDeadline
+	for first := true; ; first = false {
+		packet, flags, n, err := st.readPacketFlags(conn, timeout)
+		if err != nil {
+			// EOF or an idle timeout between requests is the normal end of a reused connection.
+			if first || n > 0 {
+				st.logger.WithError(err).Error("failed to read packet")
+			}
+			conn.Close()
 			return
-		case st.packetChannel <- packet:
 		}
 
-		defer close(replyChan)
+		if flags&streamFlag != 0 {
+			st.serveStream(ctx, conn, packet)
+			return
+		}
 
-		select {
-		case replyPacket := <-replyChan:
-			if replyPacket != nil {
-				if err := st.writePacket(conn, replyPacket, false); err != nil {
-					st.logger.WithError(err).Error("failed to write reply packet")
-				}
-				replyPacket.Release()
-			}
-		case <-time.After(st.config.TCPDeadline):
-		case <-ctx.Done():
+		if flags&replyExpectedFlag == 0 {
+			packet.SetConn(conn)
 			select {
-			case replyPacket := <-replyChan:
-				if replyPacket != nil {
-					replyPacket.Release()
-				}
-			default:
+			case <-ctx.Done():
+				packet.Release()
+			case st.packetChannel <- packet:
 			}
+			return
 		}
-		return
+
+		if !st.serveRequest(ctx, conn, packet) {
+			conn.Close()
+			return
+		}
+		timeout = st.config.TCPIdleTimeout
+		if timeout <= 0 {
+			timeout = st.config.TCPDeadline
+		}
 	}
+}
+
+// serveRequest queues a request, waits for its reply and writes it to conn. The packet does not own the
+// connection, so releasing it leaves the connection open. It reports whether conn can carry another request; after
+// a timeout it cannot, since a late reply would be read as the answer to the next request.
+func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, packet *Packet) bool {
+	replyChan := make(chan *Packet, 1)
+	packet.SetReplyChan(replyChan)
+	defer close(replyChan)
 
 	select {
 	case <-ctx.Done():
 		packet.Release()
-		return
+		return false
 	case st.packetChannel <- packet:
+	}
+
+	select {
+	case replyPacket := <-replyChan:
+		if replyPacket == nil {
+			return false
+		}
+		err := st.writePacket(conn, replyPacket, false)
+		replyPacket.Release()
+		if err != nil {
+			st.logger.WithError(err).Error("failed to write reply packet")
+			return false
+		}
+		return true
+	case <-time.After(st.config.TCPDeadline):
+		return false
+	case <-ctx.Done():
+		select {
+		case replyPacket := <-replyChan:
+			if replyPacket != nil {
+				replyPacket.Release()
+			}
+		default:
+		}
+		return false
 	}
 }
 
@@ -774,41 +838,34 @@ func (st *SocketTransport) writeRawPacket(conn net.Conn, rawPacket []byte) error
 	return nil
 }
 
-func (st *SocketTransport) readPacket(conn net.Conn) (*Packet, bool, error) {
-	packet, flags, err := st.readPacketFlags(conn)
-	return packet, flags&replyExpectedFlag != 0, err
-}
-
-// readPacketFlags reads a packet and its wire flags from a connection.
-func (st *SocketTransport) readPacketFlags(conn net.Conn) (*Packet, uint16, error) {
-	err := conn.SetReadDeadline(time.Now().Add(st.config.TCPDeadline))
-	if err != nil {
-		return nil, 0, err
+// readPacketFlags reads one length-prefixed packet and its wire flags, waiting at most timeout. It reads exactly
+// one packet's bytes (no read-ahead), so the connection can carry further packets. n is the number of bytes read.
+func (st *SocketTransport) readPacketFlags(conn net.Conn, timeout time.Duration) (*Packet, uint16, int, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, 0, 0, err
 	}
 
-	bufferedReader := bufio.NewReader(conn)
-
 	lengthBytes := make([]byte, 4)
-	_, err = io.ReadFull(bufferedReader, lengthBytes)
+	n, err := io.ReadFull(conn, lengthBytes)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, n, err
 	}
 
 	dataLen := binary.LittleEndian.Uint32(lengthBytes)
-
 	if dataLen > uint32(st.config.TCPMaxPacketSize) {
-		return nil, 0, fmt.Errorf("packet size too large: %d bytes", dataLen)
+		return nil, 0, n, fmt.Errorf("packet size too large: %d bytes", dataLen)
 	}
 
 	receivedData := make([]byte, dataLen)
-	_, err = io.ReadFull(bufferedReader, receivedData)
+	m, err := io.ReadFull(conn, receivedData)
+	n += m
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, n, err
 	}
 
 	packet, _, err := st.packetFromBuffer(receivedData)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, n, err
 	}
-	return packet, binary.LittleEndian.Uint16(receivedData[:2]), nil
+	return packet, binary.LittleEndian.Uint16(receivedData[:2]), n, nil
 }

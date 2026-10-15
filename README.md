@@ -133,7 +133,16 @@ config.Logger = logger.NewNullLogger()                 // Default: no logging
 
 // Streams
 config.StreamIdleTimeout = 30 * time.Second  // How long a stream may wait for its next frame
+
+// Request/response connection reuse (socket transport, Unix platforms)
+config.TCPPoolSize = 16                      // Idle connections kept per peer; 0 dials for every request
+config.TCPIdleTimeout = 60 * time.Second     // Server closes idle connections after this; clients reuse for half of it
 ```
+
+`SendToWithResponse` reuses TCP connections per peer instead of dialing for every request, which avoids exhausting
+ephemeral ports under load. A pooled connection is checked before use and discarded if the peer has closed it;
+nothing is retried once a request has been sent, so a request is never delivered twice. Peers running an older
+version close after one reply and are detected automatically (pooling to them is paused for a few minutes).
 
 ## Direct Streams
 

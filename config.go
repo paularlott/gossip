@@ -35,6 +35,8 @@ type Config struct {
 	TCPDialTimeout           time.Duration           // TCPDialTimeout is the duration to wait for a TCP connection to be established
 	TCPDeadline              time.Duration           // TCPDeadline is the duration to wait for a TCP operation to complete
 	StreamIdleTimeout        time.Duration           // StreamIdleTimeout is how long a stream may wait for its next frame
+	TCPPoolSize              int                     // TCPPoolSize is the number of idle request/response connections kept per peer for reuse; 0 disables reuse
+	TCPIdleTimeout           time.Duration           // TCPIdleTimeout is how long a server keeps an idle request/response connection open; clients reuse a pooled connection for at most half of it
 	UDPDeadline              time.Duration           // UDPDeadline is the duration to wait for a UDP operation to complete
 	UDPMaxPacketSize         int                     // UDPMaxSize is the maximum size of a UDP packet in bytes
 	TCPMaxPacketSize         int                     // TCPMaxSize is the maximum size of a TCP packet in bytes
@@ -94,6 +96,8 @@ func DefaultConfig() *Config {
 		TCPDialTimeout:           2 * time.Second,
 		TCPDeadline:              2 * time.Second,
 		StreamIdleTimeout:        30 * time.Second,
+		TCPPoolSize:              16,
+		TCPIdleTimeout:           60 * time.Second,
 		UDPDeadline:              2 * time.Second,
 		UDPMaxPacketSize:         1400,
 		TCPMaxPacketSize:         4194304, // 4MB
