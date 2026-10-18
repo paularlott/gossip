@@ -144,6 +144,19 @@ ephemeral ports under load. A pooled connection is checked before use and discar
 nothing is retried once a request has been sent, so a request is never delivered twice. Peers running an older
 version close after one reply and are detected automatically (pooling to them is paused for a few minutes).
 
+### TCP-only operation
+
+Set `config.ForceReliableTransport = true` to run the socket transport over TCP only: every message — gossip,
+health probes and state exchange — is sent over TCP and no UDP listener is bound, so only the TCP port needs to be
+reachable. Use it where UDP is blocked or unreliable (some container platforms, NAT'd or load-balanced networks).
+All nodes in a cluster should use the same setting. Setting `ListenFunc` enables it automatically. See
+`Example_tcpOnly` in `example_tcp_only_test.go`.
+
+### Node helpers
+
+`Node.Routable()` reports whether a node is alive or suspect — worth sending to — and `Cluster.RoutableNodes()`
+returns all such nodes (the local node included). `AliveNodes()` remains the stricter set for quorum decisions.
+
 ## Direct Streams
 
 Messages are limited to a single packet (`TCPMaxPacketSize`, 4MB by default) sent within `TCPDeadline`. For bulk data, a node can open a stream to another node: the request is sent as a packet and the reply, of any size, is read as an `io.Reader` from a direct connection. Streams are never gossiped.

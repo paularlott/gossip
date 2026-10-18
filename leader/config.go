@@ -82,6 +82,30 @@ type Config struct {
 	// leave or an explicit ForgetNode.
 	AutoShrinkDisabled bool
 
+	// ExpectedClusterSize pins the quorum baseline to the cluster's intended
+	// size. When positive:
+	//
+	//   - BaselineSize() never reports less than ExpectedClusterSize, from the
+	//     moment the election is created — including on a node that has just
+	//     restarted and can see only itself.
+	//   - The baseline never drops below it: graceful leaves (and Stop, which
+	//     leaves), ForgetNode, ResetQuorumBaseline and auto-shrink all stop at
+	//     the pinned size.
+	//   - QuorumSize() and WriteQuorum() are therefore at least
+	//     ExpectedClusterSize/2+1.
+	//
+	// The baseline still grows above it if more eligible nodes are observed
+	// stably, and can shrink back down to (but not below) it by the usual
+	// rules. Resizing the cluster below the pinned size requires changing this
+	// value and restarting.
+	//
+	// Use it when the cluster size is known up front and correctness depends
+	// on quorum (replicated writes, locks): an adaptive baseline that has been
+	// lowered by graceful leaves during a rolling restart or scale-down can let
+	// a later minority reach "quorum". Zero (the default) keeps the purely
+	// adaptive behaviour.
+	ExpectedClusterSize int
+
 	// ForgetMessageType carries ForgetNode broadcasts so a single call
 	// propagates to the whole cluster.
 	ForgetMessageType gossip.MessageType

@@ -115,6 +115,16 @@ func (node *Node) Suspect() bool {
 	return node.observedState == NodeSuspect
 }
 
+// Routable reports whether the node is worth sending to: alive, or suspect
+// (a suspect node is usually just slow and is still being probed). Leaving,
+// dead and removed nodes are not routable. This is the state set node groups
+// and tag lookups draw from.
+func (node *Node) Routable() bool {
+	node.mu.RLock()
+	defer node.mu.RUnlock()
+	return node.observedState == NodeAlive || node.observedState == NodeSuspect
+}
+
 func (node *Node) Removed() bool {
 	node.mu.RLock()
 	defer node.mu.RUnlock()

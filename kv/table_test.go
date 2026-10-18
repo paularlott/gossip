@@ -299,6 +299,28 @@ func TestTableWitnessMakesLocalWin(t *testing.T) {
 	}
 }
 
+// A remote version whose HLC counter is already at its maximum must still be
+// beaten by the next local write, and a burst of overwrites from the clock's
+// counter mode must keep increasing past the counter's capacity.
+func TestTableWitnessCounterMaxLocalWins(t *testing.T) {
+	tbl, _, _ := newTestTable(time.Now())
+
+	remote := hlc.FromTime(time.Now().Add(time.Second)) | hlc.Timestamp(1<<hlc.CounterBits-1)
+	tbl.apply(&Entry{Key: "k", Version: uint64(remote), Origin: nodeID(9), Value: []byte("remote")})
+
+	prev := uint64(remote)
+	for i := 0; i < 3*(1<<hlc.CounterBits); i++ {
+		e := tbl.setLocal(nodeID(1), "k", []byte("local"), 0)
+		if e.Version <= prev {
+			t.Fatalf("write %d: version %d did not beat %d", i, e.Version, prev)
+		}
+		prev = e.Version
+	}
+	if v, _ := tbl.get("k"); string(v) != "local" {
+		t.Fatalf("value = %q want local", v)
+	}
+}
+
 func TestTableCloseStopsWrites(t *testing.T) {
 	tbl, _, _ := newTestTable(time.Now())
 	tbl.close()

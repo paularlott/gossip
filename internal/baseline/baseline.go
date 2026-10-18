@@ -68,6 +68,12 @@ type Tracker struct {
 
 	baseline int // adopted cluster size that quorum is measured against
 
+	// floor pins the baseline from below: when positive the baseline never
+	// drops under it, whatever the cause (graceful leave, Forget, dwell
+	// shrink, Reset, a restart that observes fewer nodes). Set by operators
+	// who know the cluster's intended size and want quorum fixed to it.
+	floor int
+
 	candidate     int       // observed count currently being timed for stability
 	candidateFrom time.Time // when that count was first seen
 
@@ -87,6 +93,37 @@ func New(stabilityPeriod, shrinkDwell time.Duration, autoShrink bool, cluster *g
 		cluster:         cluster,
 		departed:        make(map[gossip.NodeID]struct{}),
 	}
+}
+
+// SetFloor pins the baseline so it never drops below n. Zero or less removes
+// the floor, restoring the purely adaptive behaviour. Growth above the floor
+// is still adopted under the usual stability rule.
+func (b *Tracker) SetFloor(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	b.floor = n
+	if b.baseline > 0 && b.baseline < n {
+		b.baseline = n
+	}
+}
+
+// Floor returns the configured floor (0 when unset).
+func (b *Tracker) Floor() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.floor
+}
+
+// minimum is the lowest value the baseline may take once seeded: the floor,
+// and never less than one. Caller holds mu.
+func (b *Tracker) minimum() int {
+	if b.floor > 1 {
+		return b.floor
+	}
+	return 1
 }
 
 // observe records the current eligible count and advances the stability timer.
@@ -118,6 +155,9 @@ func (b *Tracker) Observe(nodes []*gossip.Node, now time.Time) {
 	// back for a whole stability period before it can elect anything.
 	if b.baseline == 0 {
 		b.baseline = count
+		if b.baseline < b.floor {
+			b.baseline = b.floor
+		}
 		b.candidate = count
 		b.candidateFrom = now
 		return
@@ -145,7 +185,7 @@ func (b *Tracker) Observe(nodes []*gossip.Node, now time.Time) {
 	// baseline minus one, needing A = B = N-1 with A+B = N, which solves only at
 	// N=2 where MinClusterSize already blocks both sides. Any larger shortfall is
 	// left alone because it cannot be distinguished from a partition of that size.
-	if b.autoShrink && count == b.baseline-1 && steady >= b.shrinkDwell {
+	if b.autoShrink && count == b.baseline-1 && count >= b.floor && steady >= b.shrinkDwell {
 		b.baseline = count
 		// The count now equals the baseline, so this cannot immediately fire
 		// again; a further step requires another node to go missing.
@@ -169,7 +209,7 @@ func (b *Tracker) NoteGracefulDeparture(id gossip.NodeID) bool {
 
 	b.departed[id] = struct{}{}
 
-	if b.baseline > 1 {
+	if b.baseline > b.minimum() {
 		b.baseline--
 	}
 
@@ -193,7 +233,7 @@ func (b *Tracker) Forget(id gossip.NodeID) bool {
 	}
 
 	b.departed[id] = struct{}{}
-	if b.baseline > 1 {
+	if b.baseline > b.minimum() {
 		b.baseline--
 	}
 	b.candidate = -1
@@ -201,10 +241,14 @@ func (b *Tracker) Forget(id gossip.NodeID) bool {
 	return true
 }
 
-// size returns the current baseline.
+// Size returns the current baseline. With a floor set it is never below the
+// floor, even before the first observation.
 func (b *Tracker) Size() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.baseline < b.floor {
+		return b.floor
+	}
 	return b.baseline
 }
 
@@ -215,8 +259,9 @@ func (b *Tracker) DepartedCount() int {
 	return len(b.departed)
 }
 
-// reset clears all state, restoring the tracker to its initial condition. The
-// next observation re-seeds the baseline from what is visible then.
+// Reset clears all state, restoring the tracker to its initial condition. The
+// next observation re-seeds the baseline from what is visible then. The floor
+// is configuration, not state, and survives a reset.
 func (b *Tracker) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()

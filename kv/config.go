@@ -69,6 +69,14 @@ type Config struct {
 	// a graceful leave or an explicit Store.Forget.
 	AutoShrinkDisabled bool
 
+	// ExpectedClusterSize pins the water mark to the group's intended size:
+	// when positive the mark never drops below it (graceful leaves,
+	// Store.Forget, auto-shrink and restarts all stop there), so a store that
+	// can see fewer members than this keeps requiring min(WriteReplicas,
+	// ExpectedClusterSize)-1 peer acks instead of degrading. Growth above it
+	// is still adopted. Zero (the default) keeps the adaptive behaviour.
+	ExpectedClusterSize int
+
 	// Persister optionally backs the store with long-term storage (see
 	// persist.go). Nil — the default — is memory-only. When set, note that
 	// TombstoneRetention must exceed the worst-case node downtime: a node

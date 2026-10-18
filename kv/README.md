@@ -231,6 +231,7 @@ before any replication is attempted.
 | `StabilityPeriod` | `2 x DeadNodeTimeout` | How long growth must hold steady before raising the mark. |
 | `ShrinkDwell` | `4 x DeadNodeTimeout` | How long exactly-one-missing must persist before the mark follows down. |
 | `AutoShrinkDisabled` | `false` | Shrink only via graceful leave or `Store.Forget`. |
+| `ExpectedClusterSize` | `0` (adaptive) | Pins the water mark: it never drops below this, so a store that sees fewer members keeps refusing under-replicated writes. |
 | `Persister` | `nil` | Optional long-term storage; nil is memory-only. |
 | `SnapshotWrites` | `1000` | Table changes before a snapshot is saved. |
 | `SnapshotInterval` | `30s` | Max age of unsaved changes; clean stores never save. |

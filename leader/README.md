@@ -66,6 +66,27 @@ The baseline tracks the cluster's settled size:
 - **Rejoin**: a departing node that comes back is un-marked, so rolling
   restarts do not leak decrements.
 
+### Pinning the baseline to a known cluster size
+
+When the intended cluster size is known up front, set `ExpectedClusterSize`:
+
+```go
+ec.ExpectedClusterSize = 3 // this cluster is three nodes
+```
+
+The baseline is then never below that value: graceful leaves (including the
+`Leave()` that a clean shutdown performs), `ForgetNode`, `ResetQuorumBaseline`
+and auto-shrink all stop at it, and a node that restarts while it can see only
+itself still measures quorum against the pinned size rather than seeding a
+baseline of one. `BaselineSize()` reports at least `ExpectedClusterSize`, and
+`QuorumSize()` / `WriteQuorum()` at least `ExpectedClusterSize/2+1`. Growth
+above the pinned size is still adopted under the usual stability rule.
+
+This trades the adaptive scale-down for a fixed guarantee: with the cluster
+pinned at 3, a lone survivor never leads and never reaches write quorum,
+however the other two went away. Shrinking below the pinned size needs a
+configuration change. Zero (the default) keeps the adaptive behaviour.
+
 ### Reclaiming availability after crashes
 
 A crashed node cannot be distinguished from a partitioned one, so the cluster
@@ -88,6 +109,10 @@ a node that misses it keeps the higher baseline — the strict, safe direction.
 - `BaselineSize()` — the cluster size quorum is currently measured against.
   When leadership cannot be established, look here first.
 - `QuorumSize()` — how many eligible nodes are currently required.
+- `WriteQuorum()` — `BaselineSize()/2+1` (raised to `MinClusterSize`): the
+  number of nodes, the writer included, that make a majority of the cluster.
+  Independent of what is visible right now, so it is the stable figure to
+  replicate writes against.
 - `Term()` / `LeaderTermSnapshot()` — the election term and a consistent
   (leader, term) pair; the term is what downstream consumers such as
   [distributed locks](../lock/) use for fencing tokens.

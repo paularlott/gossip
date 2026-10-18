@@ -128,6 +128,9 @@ func NewStore(cluster *gossip.Cluster, membership Membership, config *Config) *S
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
 	}
+	if config.ExpectedClusterSize > 0 {
+		s.mark.SetFloor(config.ExpectedClusterSize)
+	}
 
 	s.registry = getOrCreateRegistry(cluster)
 	s.registry.registerStore(config.Name, s)

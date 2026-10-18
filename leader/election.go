@@ -175,6 +175,9 @@ func NewLeaderElection(cluster *gossip.Cluster, config *Config) *LeaderElection 
 		eventHandlers: newLeaderEventHandlers(cluster.Logger()),
 		baseline:      baseline.New(stability, shrinkDwell, !config.AutoShrinkDisabled, cluster),
 	}
+	if config.ExpectedClusterSize > 0 {
+		election.baseline.SetFloor(config.ExpectedClusterSize)
+	}
 
 	// The node group must exist before any handler is registered. Handlers run on
 	// the cluster's inbound goroutines, and both the heartbeat and state-change
@@ -690,10 +693,17 @@ func (le *LeaderElection) handleNodeStateChange(node *gossip.Node, prevState gos
 	// discounted, keeping quorum conservative.
 	if node.GetObservedState() == gossip.NodeLeaving && le.baseline != nil &&
 		le.wasEligibleForBaseline(node, prevState) {
+		before := le.baseline.Size()
 		if le.baseline.NoteGracefulDeparture(node.ID) {
-			le.cluster.Logger().Info("node left gracefully; quorum baseline reduced",
-				"node_id", node.ID.String(),
-				"baseline", le.baseline.Size())
+			if after := le.baseline.Size(); after < before {
+				le.cluster.Logger().Info("node left gracefully; quorum baseline reduced",
+					"node_id", node.ID.String(),
+					"baseline", after)
+			} else {
+				le.cluster.Logger().Info("node left gracefully; quorum baseline pinned",
+					"node_id", node.ID.String(),
+					"baseline", after)
+			}
 		}
 	}
 
@@ -786,7 +796,8 @@ func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 
 // BaselineSize returns the cluster size quorum is currently measured against.
 // Exposed for diagnostics: when leadership cannot be established, this is
-// usually the number to look at first.
+// usually the number to look at first. With Config.ExpectedClusterSize set it
+// is never less than that value.
 func (le *LeaderElection) BaselineSize() int {
 	if le.baseline == nil {
 		return 0
@@ -798,6 +809,23 @@ func (le *LeaderElection) BaselineSize() int {
 // retain a leader.
 func (le *LeaderElection) QuorumSize() int {
 	return le.calculateQuorumForNodes(len(le.getEligibleNodes()))
+}
+
+// WriteQuorum returns the number of nodes — the local node included — that
+// must hold a replicated write for it to be a majority of the cluster:
+// BaselineSize()/2+1, raised to MinClusterSize if that is larger, and never
+// less than 1.
+//
+// Unlike QuorumSize it does not depend on how many nodes are currently
+// visible, only on the cluster size quorum is measured against, so it is the
+// stable figure to replicate writes against. With Config.ExpectedClusterSize
+// set it is at least ExpectedClusterSize/2+1.
+func (le *LeaderElection) WriteQuorum() int {
+	q := le.BaselineSize()/2 + 1
+	if le.config.MinClusterSize > q {
+		q = le.config.MinClusterSize
+	}
+	return q
 }
 
 // ForgetNode discounts a node from the quorum baseline across the whole cluster
@@ -847,10 +875,11 @@ func (le *LeaderElection) ForgetNodeLocal(id gossip.NodeID) bool {
 		return false // unknown here — nothing to forget, no decrement
 	}
 
+	before := le.baseline.Size()
 	discounted := le.baseline.Forget(id)
 	le.cluster.ForgetNode(id)
 
-	if discounted {
+	if discounted && le.baseline.Size() < before {
 		le.cluster.Logger().Info("node forgotten; quorum baseline reduced",
 			"node_id", id.String(),
 			"baseline", le.baseline.Size(),
@@ -874,7 +903,8 @@ func (le *LeaderElection) handleForget(sender *gossip.Node, packet *gossip.Packe
 
 // ResetQuorumBaseline discards the tracked baseline so it is re-derived from
 // what is currently visible. Use after a deliberate resize when the accumulated
-// baseline no longer reflects reality.
+// baseline no longer reflects reality. Config.ExpectedClusterSize, when set,
+// still applies: the re-derived baseline is never below it.
 func (le *LeaderElection) ResetQuorumBaseline() {
 	if le.baseline != nil {
 		le.baseline.Reset()

@@ -865,6 +865,13 @@ func (c *Cluster) AliveNodes() []*Node {
 	return c.nodes.getAllInStates([]NodeState{NodeAlive})
 }
 
+// RoutableNodes returns the nodes that are alive or suspect (see
+// Node.Routable), the local node included — the candidates worth sending
+// to. Use AliveNodes when only fully healthy nodes should count, e.g. quorum.
+func (c *Cluster) RoutableNodes() []*Node {
+	return c.nodes.getAllInStates([]NodeState{NodeAlive, NodeSuspect})
+}
+
 func (c *Cluster) GetNodesByTag(tag string) []*Node {
 	return c.nodes.getByTag(tag)
 }
