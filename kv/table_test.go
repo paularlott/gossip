@@ -335,3 +335,52 @@ func TestTableCloseStopsWrites(t *testing.T) {
 		t.Fatal("apply accepted after close")
 	}
 }
+
+func TestTableApplyRefusesFarFutureVersion(t *testing.T) {
+	tbl, clock, _ := newTestTable(time.Now())
+
+	far := uint64(hlc.FromTime(time.Now().Add(time.Hour)))
+	if tbl.apply(&Entry{Key: "far", Version: far, Origin: nodeID(9), Value: []byte("x")}) {
+		t.Fatal("an entry versioned 1h ahead was applied")
+	}
+	if _, ok := tbl.get("far"); ok {
+		t.Fatal("a refused entry is readable")
+	}
+	if got := tbl.rejectedSkew.Load(); got != 1 {
+		t.Fatalf("rejectedSkew = %d want 1", got)
+	}
+	if clock.Now().Time().After(time.Now().Add(time.Minute)) {
+		t.Fatal("a refused entry dragged the clock forward")
+	}
+
+	near := uint64(hlc.FromTime(time.Now().Add(10 * time.Second)))
+	if !tbl.apply(&Entry{Key: "near", Version: near, Origin: nodeID(9), Value: []byte("y")}) {
+		t.Fatal("an entry versioned 10s ahead was refused")
+	}
+	if v, _ := tbl.get("near"); string(v) != "y" {
+		t.Fatalf("near = %q want y", v)
+	}
+	if got := tbl.rejectedSkew.Load(); got != 1 {
+		t.Fatalf("rejectedSkew = %d want still 1", got)
+	}
+}
+
+func TestTableMaxClockSkewConfigurable(t *testing.T) {
+	tbl, _, _ := newTestTable(time.Now())
+	tbl.cfg.MaxClockSkew = time.Minute
+	e := &Entry{Key: "k", Version: uint64(hlc.FromTime(time.Now().Add(45 * time.Second))), Origin: nodeID(9), Value: []byte("v")}
+	if !tbl.apply(e) {
+		t.Fatal("45s ahead refused with a 1m bound")
+	}
+	if (&Config{}).validate().MaxClockSkew != DefaultMaxClockSkew {
+		t.Fatal("zero MaxClockSkew did not default to 30s")
+	}
+}
+
+func TestTablePersistedSnapshotNotBounded(t *testing.T) {
+	tbl, _, _ := newTestTable(time.Now())
+	far := uint64(hlc.FromTime(time.Now().Add(time.Hour)))
+	if n, r := tbl.applyAll([]*Entry{{Key: "k", Version: far, Origin: nodeID(1), Value: []byte("v")}}, false); n != 1 || r != 0 {
+		t.Fatalf("applyAll(unbounded) = %d, %d want 1, 0", n, r)
+	}
+}

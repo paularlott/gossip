@@ -10,6 +10,7 @@ import (
 
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/hlc"
 	"github.com/paularlott/gossip/internal/cuttable"
 	"github.com/paularlott/gossip/kv"
 	"github.com/paularlott/logger"
@@ -1364,5 +1365,71 @@ func TestLoadWrongStoreNameIgnored(t *testing.T) {
 	// The snapshot belongs to another store: ignored, not merged.
 	if _, ok := nodes[0].store.Get("k"); ok {
 		t.Fatal("foreign store's snapshot leaked into this store")
+	}
+}
+
+// poisonedClockCfg returns a store config whose HLC has already witnessed a
+// time ahead of the wall clock, so the node mints versions that far ahead.
+func poisonedClockCfg(ahead time.Duration) *kv.Config {
+	cfg := kv.DefaultConfig()
+	cfg.Clock = hlc.NewClock()
+	cfg.Clock.Witness(hlc.FromTime(time.Now().Add(ahead)))
+	return cfg
+}
+
+// A peer whose versions are an hour ahead is refused and counted: its write is
+// not applied (nor acknowledged), and the receiver's clock stays put.
+func TestFarFutureVersionRefusedAndCounted(t *testing.T) {
+	receiverClock := hlc.NewClock()
+	var n int
+	nodes := build(t, harnessOpts{basePort: 21520, count: 2, storeCfg: func() *kv.Config {
+		n++
+		if n == 1 {
+			return poisonedClockCfg(time.Hour)
+		}
+		cfg := kv.DefaultConfig()
+		cfg.Clock = receiverClock
+		return cfg
+	}})
+	defer teardown(nodes)
+
+	// The receiver refuses to acknowledge, so the writer fails closed.
+	if err := nodes[0].store.Set("far", []byte("v"), 0); !errors.Is(err, kv.ErrWriteQuorum) {
+		t.Fatalf("set with a version 1h ahead: %v, want ErrWriteQuorum", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for nodes[1].store.RejectedSkew() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if nodes[1].store.RejectedSkew() == 0 {
+		t.Fatal("the refused entry was not counted")
+	}
+	if _, ok := nodes[1].store.Get("far"); ok {
+		t.Fatal("an entry versioned 1h ahead was applied")
+	}
+	// The refused version did not drag the receiver's clock forward.
+	if ahead := receiverClock.Now().Ahead(time.Now()); ahead > time.Minute {
+		t.Fatalf("the receiver's clock is %s ahead after refusing the entry", ahead)
+	}
+}
+
+// A peer whose versions are 10s ahead (within MaxClockSkew) is accepted.
+func TestNearFutureVersionAccepted(t *testing.T) {
+	var n int
+	nodes := build(t, harnessOpts{basePort: 21530, count: 2, storeCfg: func() *kv.Config {
+		n++
+		if n == 1 {
+			return poisonedClockCfg(10 * time.Second)
+		}
+		return kv.DefaultConfig()
+	}})
+	defer teardown(nodes)
+
+	if err := nodes[0].store.Set("near", []byte("v"), 0); err != nil {
+		t.Fatalf("set with a version 10s ahead: %v", err)
+	}
+	waitValue(t, nodes[1].store, "near", "v", 5*time.Second)
+	if got := nodes[1].store.RejectedSkew(); got != 0 {
+		t.Fatalf("RejectedSkew = %d want 0", got)
 	}
 }

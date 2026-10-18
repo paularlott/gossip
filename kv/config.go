@@ -20,6 +20,10 @@ const (
 // gossip packet sizes and the full-sync exchange.
 const DefaultMaxValueSize = 64 * 1024
 
+// DefaultMaxClockSkew is how far ahead of the local clock an entry received
+// from the network may be versioned before it is refused.
+const DefaultMaxClockSkew = 30 * time.Second
+
 // Config holds configuration for a store.
 type Config struct {
 	// Name identifies this store. All nodes participating in the same logical
@@ -129,6 +133,19 @@ type Config struct {
 	// Default: 10m.
 	TombstoneRetention time.Duration
 
+	// MaxClockSkew bounds how far ahead of this node's wall clock the version
+	// of an entry received from the network (a write push, gossip or a full
+	// sync) may be. A version further ahead is refused: the entry is not
+	// applied (a write push is not acknowledged), the refusal is counted
+	// (Store.RejectedSkew) and logged at Warn at most once a minute. Without
+	// the bound one poisoned or wildly fast-clocked peer would drag every
+	// node's HLC forward permanently (the clock only ever witnesses forward),
+	// so all later versions, tombstone ages and retention windows would
+	// inherit the offset. Set it comfortably above the clock skew between
+	// healthy nodes. Entries loaded from the Persister and local writes are
+	// never subject to it. Default: 30s (zero or negative).
+	MaxClockSkew time.Duration
+
 	// Clock overrides the HLC clock used to version writes. Intended for
 	// tests; production callers leave it nil.
 	Clock *hlc.Clock
@@ -147,6 +164,7 @@ func DefaultConfig() *Config {
 		SyncTimeout:        5 * time.Second,
 		MaxValueSize:       DefaultMaxValueSize,
 		MaxKeys:            0,
+		MaxClockSkew:       DefaultMaxClockSkew,
 		MaxTTL:             24 * time.Hour,
 		TombstoneRetention: 10 * time.Minute,
 		SnapshotWrites:     1000,
@@ -180,6 +198,9 @@ func (c *Config) validate() *Config {
 	}
 	if out.MaxKeys < 0 {
 		out.MaxKeys = 0
+	}
+	if out.MaxClockSkew <= 0 {
+		out.MaxClockSkew = defaults.MaxClockSkew
 	}
 	if out.MaxTTL <= 0 {
 		out.MaxTTL = defaults.MaxTTL

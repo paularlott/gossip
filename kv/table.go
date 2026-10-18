@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/paularlott/gossip"
@@ -27,6 +28,10 @@ type table struct {
 	clock   *hlc.Clock
 	nowFn   func() time.Time
 	closed  bool
+
+	// rejectedSkew counts network entries refused for a version further
+	// ahead of the clock than the configured MaxClockSkew.
+	rejectedSkew atomic.Uint64
 }
 
 func newTable(cfg *Config) *table {
@@ -163,72 +168,101 @@ func (t *table) deletePrefixLocal(origin gossip.NodeID, prefix string) []*Entry 
 	return out
 }
 
-// apply merges one remote entry using the version-ordered rules. Returns
-// false when the entry was dominated.
+// maxSkew is the configured bound on network versions (the default when the
+// table was built from an unvalidated Config).
+func (t *table) maxSkew() time.Duration {
+	if t.cfg.MaxClockSkew > 0 {
+		return t.cfg.MaxClockSkew
+	}
+	return DefaultMaxClockSkew
+}
+
+// apply merges one entry received from the network using the version-ordered
+// rules. Returns false when the entry was dominated or refused (a version
+// too far ahead of the clock, counted in rejectedSkew).
 func (t *table) apply(in *Entry) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.applyLocked(in)
+	applied, _ := t.applyLocked(in, true)
+	return applied
 }
 
-func (t *table) applyLocked(in *Entry) bool {
+// applyLocked merges one entry. With bounded set (entries from the network)
+// the entry's version must be within MaxClockSkew of the clock's wall time:
+// an entry beyond it is neither witnessed nor applied, and refused is true.
+// Unbounded merges (the store's own persisted snapshot) witness anything.
+func (t *table) applyLocked(in *Entry, bounded bool) (applied, refused bool) {
 	if t.closed || in == nil || in.Key == "" {
-		return false
+		return false, false
 	}
 
 	// Whatever arrives, the clock has now seen it: a local write minted
-	// afterwards is guaranteed to beat it.
-	t.clock.Witness(hlc.Timestamp(in.Version))
+	// afterwards is guaranteed to beat it. A network version far in the
+	// future is the exception: it is refused rather than allowed to drag the
+	// clock (and every version minted from it) forward.
+	if bounded {
+		if !t.clock.WitnessBounded(hlc.Timestamp(in.Version), t.maxSkew()) {
+			t.rejectedSkew.Add(1)
+			return false, true
+		}
+	} else {
+		t.clock.Witness(hlc.Timestamp(in.Version))
+	}
 
 	cur, ok := t.entries[in.Key]
 	if !ok {
 		t.entries[in.Key] = in
-		return true
+		return true, false
 	}
 
 	switch {
 	case in.Version > cur.Version:
 		t.entries[in.Key] = in
-		return true
+		return true, false
 	case in.Version < cur.Version:
-		return false // dominated; stale write arriving late
+		return false, false // dominated; stale write arriving late
 	case in.Tombstone != cur.Tombstone:
 		if in.Tombstone {
 			t.entries[in.Key] = in // a delete cannot be resurrected
-			return true
+			return true, false
 		}
-		return false // a value cannot resurrect over its tombstone
+		return false, false // a value cannot resurrect over its tombstone
 	case in.Tombstone:
 		// Two tombstones at the same version: keep the later delete time so
 		// no node GCs earlier than any node saw.
 		if in.DeletedAtMs > cur.DeletedAtMs {
 			t.entries[in.Key] = in
 		}
-		return true
+		return true, false
 	default:
 		// Two values at the same version: the higher origin wins, making the
 		// outcome identical on every replica. Equal origin is the same write
 		// redelivered — keep what we have.
 		if compareNodeID(in.Origin, cur.Origin) > 0 {
 			t.entries[in.Key] = in
-			return true
+			return true, false
 		}
-		return false
+		return false, false
 	}
 }
 
-// applyAll merges a batch of entries and reports how many were adopted.
-func (t *table) applyAll(entries []*Entry) int {
+// applyAll merges a batch of entries and reports how many were adopted. With
+// bounded set the entries came from the network (see applyLocked) and the
+// second result counts those refused for a version too far ahead.
+func (t *table) applyAll(entries []*Entry, bounded bool) (adopted, refused int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	n := 0
 	for _, e := range entries {
-		if t.applyLocked(e) {
-			n++
+		a, r := t.applyLocked(e, bounded)
+		if a {
+			adopted++
+		}
+		if r {
+			refused++
 		}
 	}
-	return n
+	return adopted, refused
 }
 
 // keys returns the sorted live keys under prefix.

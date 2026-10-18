@@ -40,6 +40,8 @@ type Store struct {
 	mu     sync.Mutex
 	closed bool
 
+	lastSkewLog atomic.Int64 // unix nanos of the last refused-entry warning (rate limit)
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 
@@ -452,12 +454,42 @@ func (s *Store) markDirty(n int) {
 
 // adopt merges a batch of remote entries and counts what actually changed,
 // so a replica that only ever receives gossip still persists its view of
-// the data to its own Persister.
-func (s *Store) adopt(entries []*Entry) int {
-	n := s.tbl.applyAll(entries)
-	s.markDirty(n)
-	return n
+// the data to its own Persister. Entries versioned further ahead of the
+// local clock than Config.MaxClockSkew are refused (not applied); the second
+// result is how many.
+func (s *Store) adopt(entries []*Entry) (adopted, refused int) {
+	adopted, refused = s.tbl.applyAll(entries, true)
+	s.markDirty(adopted)
+	if refused > 0 {
+		s.warnSkew(refused)
+	}
+	return adopted, refused
 }
+
+// skewLogInterval rate-limits the refused-entry warning.
+const skewLogInterval = time.Minute
+
+// warnSkew logs, at most once per skewLogInterval, that entries were refused
+// for being versioned too far ahead, with the running total.
+func (s *Store) warnSkew(batch int) {
+	now := time.Now().UnixNano()
+	last := s.lastSkewLog.Load()
+	if last != 0 && now-last < int64(skewLogInterval) {
+		return
+	}
+	if !s.lastSkewLog.CompareAndSwap(last, now) {
+		return
+	}
+	s.cluster.Logger().Warn("kv: refused entries versioned too far ahead of this node's clock (a peer's clock is "+
+		"wrong or a version is corrupt)",
+		"store", s.config.Name, "batch", batch, "total", s.tbl.rejectedSkew.Load(),
+		"max_clock_skew", s.tbl.maxSkew().String())
+}
+
+// RejectedSkew reports how many entries received from the network have been
+// refused because their version was more than Config.MaxClockSkew ahead of
+// this node's clock, since the store was created.
+func (s *Store) RejectedSkew() uint64 { return s.tbl.rejectedSkew.Load() }
 
 // maybeSnapshotAsync hands a due snapshot to a dedicated goroutine. A save
 // in flight holds the single-flight flag, so a slow Persister makes later
@@ -550,7 +582,7 @@ func (s *Store) loadSnapshot() {
 		s.cluster.Logger().Warn(fmt.Sprintf("kv: snapshot is for store %q, not %q; starting empty", snap.Store, s.config.Name))
 		return
 	}
-	s.tbl.applyAll(snap.Entries) // not markDirty: these came from storage
+	s.tbl.applyAll(snap.Entries, false) // not markDirty: these came from storage
 }
 
 // Snapshot forces an immediate save and returns once it is complete — the

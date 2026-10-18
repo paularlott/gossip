@@ -104,8 +104,10 @@ func (r *registry) handleWritePush(sender *gossip.Node, packet *gossip.Packet) (
 		return &writeAck{Applied: false}, nil
 	}
 
-	s.adopt(req.Entries)
-	return &writeAck{Applied: true}, nil
+	// A batch with an entry refused for a version too far ahead is not
+	// acknowledged: this node does not hold that write.
+	_, refused := s.adopt(req.Entries)
+	return &writeAck{Applied: refused == 0}, nil
 }
 
 // handleGossip applies a fire-and-forget entry broadcast. Same merge rules
