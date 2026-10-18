@@ -281,10 +281,14 @@ func TestClusterForgetNodeReclaimsQuorum(t *testing.T) {
 	}
 
 	// The operator asserts the two nodes are gone for good, on each survivor.
+	// ForgetNode also broadcasts, so a survivor may already have applied a
+	// peer's forget by the time its own call runs — then its call correctly
+	// reports false (already discounted, node already dropped). Either way
+	// the node must be gone afterwards; the outcome is asserted below.
 	for _, n := range survivors {
 		for _, id := range deadIDs {
-			if !n.election.ForgetNode(id) {
-				t.Errorf("%s: ForgetNode(%v) should have discounted the node", n.label, id)
+			if !n.election.ForgetNode(id) && n.cluster.GetNode(id) != nil {
+				t.Errorf("%s: ForgetNode(%v) neither discounted the node nor found it already forgotten", n.label, id)
 			}
 		}
 	}

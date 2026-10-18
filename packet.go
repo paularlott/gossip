@@ -127,6 +127,15 @@ func (p *Packet) CanReply() bool {
 	return p.conn != nil || p.replyChan != nil
 }
 
+// awaitingReply reports whether a requester is waiting for a reply to this
+// packet. Only a reply channel can carry one: a connection on its own (a
+// fire-and-forget packet delivered over TCP, which owns the connection only
+// so it is closed on release) has no reply path, even though CanReply
+// reports true for it.
+func (p *Packet) awaitingReply() bool {
+	return p.replyChan != nil
+}
+
 // SendReply sends a reply packet using the available reply mechanism
 func (p *Packet) SendReply() (err error) {
 	// Recover from panic if channel is closed
@@ -145,6 +154,19 @@ func (p *Packet) SendReply() (err error) {
 		}
 	}
 	return fmt.Errorf("no reply mechanism available")
+}
+
+// closeAndDrainReplies closes a request's reply channel and releases any reply
+// still buffered in it. A reply that lands after the waiter gave up (timeout,
+// shutdown, client gone) would otherwise keep its reference forever; one sent
+// after the close fails in SendReply and is released by the dispatcher.
+func closeAndDrainReplies(ch chan *Packet) {
+	close(ch)
+	for p := range ch {
+		if p != nil {
+			p.Release()
+		}
+	}
 }
 
 // SetReplyChan sets the reply channel for this packet

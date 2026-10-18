@@ -1195,6 +1195,10 @@ func TestFullOutageRestoreUnion(t *testing.T) {
 		persister: func(i int) kv.Persister { return persisters[i] },
 	}
 	nodes := build(t, opts)
+	// Deferred as a closure so it tears down the rebuilt nodes, not the
+	// originals; without it the restarted listeners outlive the test and a
+	// repeat run (-count>1) cannot bind the ports.
+	defer func() { teardown(nodes) }()
 
 	if err := nodes[0].store.Set("from-n0", []byte("v"), 0); err != nil {
 		t.Fatalf("set from-n0: %v", err)

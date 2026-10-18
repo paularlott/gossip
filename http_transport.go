@@ -315,7 +315,7 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 	if replyExpected {
 		replyChan := make(chan *Packet, 1)
 		packet.SetReplyChan(replyChan)
-		defer close(replyChan)
+		defer closeAndDrainReplies(replyChan)
 
 		select {
 		case ht.packetChannel <- packet:

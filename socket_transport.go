@@ -422,7 +422,7 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, packet *Packet) bool {
 	replyChan := make(chan *Packet, 1)
 	packet.SetReplyChan(replyChan)
-	defer close(replyChan)
+	defer closeAndDrainReplies(replyChan)
 
 	select {
 	case <-ctx.Done():

@@ -562,8 +562,14 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		senderNode.updateLastActivity()
 	}
 
-	// Forward packets to nodes with matching tags
-	if !packet.CanReply() {
+	// Forward packets to nodes with matching tags. Requests awaiting a reply
+	// are point-to-point and never forwarded; everything else is, however it
+	// arrived. (This used to test CanReply, which is also true for
+	// fire-and-forget packets delivered over TCP — they carry their
+	// connection — so nothing received over TCP was ever re-gossiped: in
+	// TCP-only clusters, and for any packet too large for UDP, broadcasts
+	// stopped at the sender's first fan-out.)
+	if !packet.awaitingReply() {
 		var transportType TransportType
 		if packet.conn != nil {
 			transportType = TransportReliable
@@ -585,13 +591,18 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 		return
 	}
 
-	// Run the message handler
-	h := c.handlers.getHandler(packet.MessageType)
-	if h != nil {
-		err := h.dispatch(c, senderNode, packet)
-		if err != nil {
-			c.logger.Warn("error dispatching packet", "error", err, "message_type", packet.MessageType)
-		}
+	// Run the message handler. dispatch takes ownership of the packet and
+	// releases it before returning, so anything needed afterwards (here the
+	// message type for the log line) must be captured first: once released the
+	// packet may already have been reused from the pool by another goroutine.
+	msgType := packet.MessageType
+	h := c.handlers.getHandler(msgType)
+	if h == nil {
+		packet.Release()
+		return
+	}
+	if err := h.dispatch(c, senderNode, packet); err != nil {
+		c.logger.Warn("error dispatching packet", "error", err, "message_type", msgType)
 	}
 }
 
@@ -809,6 +820,8 @@ func (c *Cluster) enqueuePacketForBroadcast(packet *Packet, transportType Transp
 
 		item.packet.Release()
 		item.packet = nil
+		item.excludePeers = nil
+		item.peers = nil
 		c.broadcastQItemPool.Put(item)
 	}
 }
@@ -837,9 +850,14 @@ func (c *Cluster) broadcastWorker() {
 						c.logger.Debug("failed to send packet to peers", "error", err)
 					}
 				}
-			} // Release the broadcast item back to the pool
+			}
+			// Release the packet and return the item to the pool. Clear every
+			// reference so a pooled item never pins (or leaks) a packet or a
+			// peer slice from a previous broadcast.
 			item.packet.Release()
 			item.packet = nil
+			item.excludePeers = nil
+			item.peers = nil
 			c.broadcastQItemPool.Put(item)
 
 		case <-c.shutdownContext.Done():

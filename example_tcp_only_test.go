@@ -20,7 +20,8 @@ import (
 func Example_tcpOnly() {
 	config := gossip.DefaultConfig()
 	config.BindAddr = "0.0.0.0:3500"
-	config.ForceReliableTransport = true // TCP only: no UDP listener, no UDP sends
+	config.ForceReliableTransport = true                 // TCP only: no UDP listener, no UDP sends
+	config.Transport = gossip.NewSocketTransport(config) // after setting the flag; the transport reads this config
 
 	cluster, err := gossip.NewCluster(config)
 	if err != nil {

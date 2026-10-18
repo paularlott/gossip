@@ -8,10 +8,16 @@ import (
 	"github.com/paularlott/gossip/hlc"
 )
 
-// Message handler for fire and forget messages
+// Message handler for fire and forget messages.
+//
+// The packet is pooled and is only valid until the handler returns: it is
+// released (and may be reused for another message) immediately afterwards.
+// Unmarshal what you need inside the handler; do not retain the packet or
+// its Payload() slice, or use them from a goroutine started by the handler.
 type Handler func(*Node, *Packet) error
 
-// Message handler for request / reply messages, must return reply data
+// Message handler for request / reply messages, must return reply data.
+// The same packet lifetime rule as Handler applies.
 type ReplyHandler func(*Node, *Packet) (interface{}, error)
 
 type msgHandler struct {
@@ -20,7 +26,12 @@ type msgHandler struct {
 	streamHandler StreamHandler
 }
 
-// Dispatch invokes the appropriate handler based on the packet's message type
+// Dispatch invokes the appropriate handler based on the packet's message type.
+//
+// dispatch takes ownership of the caller's reference: the packet is released
+// before dispatch returns, on every path including errors. The caller must not
+// read or write the packet afterwards — capture anything it needs (e.g. the
+// message type for logging) before calling.
 func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 	if packet == nil {
 		return fmt.Errorf("packet is nil")
@@ -35,7 +46,10 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			return err
 		}
 
-		if replyData != nil && c != nil && packet.CanReply() {
+		// Only a packet with a waiting requester is turned into the reply. A
+		// fire-and-forget packet may at this moment be shared with the
+		// broadcast queue for forwarding, so it must never be mutated.
+		if replyData != nil && c != nil && packet.awaitingReply() {
 			// Update the packet with the reply data
 			packet.AddRef()
 			packet.MessageType = replyMsg
