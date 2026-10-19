@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/paularlott/gossip/hlc"
 )
@@ -49,7 +50,9 @@ type Node struct {
 	metadata           *Metadata
 	ProtocolVersion    uint16
 	ApplicationVersion string
-	mu                 sync.RWMutex // Protects observedState, lastMessageTime, and address
+	keyWindow          atomic.Uint32 // the encryption key window the node advertises (0: it reads only the original format)
+	caps               atomic.Uint32 // the capabilities the node advertises (capKeepsConnections)
+	mu                 sync.RWMutex  // Protects observedState, lastMessageTime, and address
 }
 
 // newNode creates a new node with optional tags

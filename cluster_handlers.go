@@ -37,6 +37,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		accepted = false
 		rejectReason = fmt.Sprintf("incompatible application version: %s", joinMsg.ApplicationVersion)
 	} else if sender == nil {
+		c.remembered(joinMsg.ID) // it joined us itself: no longer forgotten
 		// Check add the peer to our list of known peers unless it already exists
 		node = newNodeWithTags(joinMsg.ID, joinMsg.AdvertiseAddr, joinMsg.Tags)
 		node.ProtocolVersion = joinMsg.ProtocolVersion
@@ -53,6 +54,7 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 	}
 
 	if node != nil {
+		node.learn(joinMsg.KeyWindow, joinMsg.Caps)
 		if node.metadata.update(joinMsg.Metadata, joinMsg.MetadataTimestamp, false) {
 			c.nodes.notifyMetadataChanged(node)
 		}
@@ -67,6 +69,8 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
 		Nodes:             []joinNode{},
+		KeyWindow:         c.keyWindow(),
+		Caps:              c.capabilities(),
 	}
 
 	if accepted {
@@ -148,6 +152,7 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 		return err
 	}
 
+	sender.learn(metadataUpdate.KeyWindow, metadataUpdate.Caps)
 	if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
 		c.nodes.notifyMetadataChanged(sender)
 	}
@@ -170,6 +175,10 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 
 	c.logger.Trace("handlePing", "sender_id", pingMsg.SenderID.String())
 
+	if sender != nil {
+		sender.learn(pingMsg.KeyWindow, pingMsg.Caps)
+	}
+
 	// If we don't know the sender, add them to our cluster view
 	if sender == nil {
 		req := &joinRequest{
@@ -190,5 +199,7 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 		NodeState:         c.localNode.GetObservedState(),
 		MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 		Metadata:          c.localNode.metadata.GetAll(),
+		KeyWindow:         c.keyWindow(),
+		Caps:              c.capabilities(),
 	}, nil
 }

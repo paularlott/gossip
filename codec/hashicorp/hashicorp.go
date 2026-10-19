@@ -10,9 +10,12 @@ type MsgpackCodec struct {
 }
 
 func New() *MsgpackCodec {
-	return &MsgpackCodec{
-		handle: new(codec.MsgpackHandle),
-	}
+	h := new(codec.MsgpackHandle)
+	// Strings inside interface{} values (node metadata, user maps) decode as strings, as with the other codecs,
+	// rather than as []byte, which Metadata.GetString and similar readers do not recognise. Decoding only: what is
+	// sent is unchanged.
+	h.RawToString = true
+	return &MsgpackCodec{handle: h}
 }
 
 func (c *MsgpackCodec) Name() string {

@@ -9,18 +9,27 @@ import (
 	"github.com/paularlott/logger"
 )
 
+// getFreeTCPAddress returns a loopback address whose port is free for both TCP and UDP: a node binds both on the
+// same port, and with test packages running in parallel a port free for TCP may be held for UDP by another process.
 func getFreeTCPAddress(t *testing.T) string {
 	t.Helper()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to allocate free port: %v", err)
+	for range 100 {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Failed to allocate free port: %v", err)
+		}
+		addr := ln.Addr().String()
+		udp, err := net.ListenPacket("udp", addr)
+		ln.Close()
+		if err != nil {
+			continue // the UDP side is taken: try another port
+		}
+		udp.Close()
+		return addr
 	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatalf("Failed to release free port: %v", err)
-	}
-	return addr
+	t.Fatal("no port free for both TCP and UDP")
+	return ""
 }
 
 // TestTagTransferOnJoin verifies that node tags are properly transferred when nodes join the cluster

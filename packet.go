@@ -83,6 +83,9 @@ type Packet struct {
 	// Reply channel for async replies (works for all transports)
 	replyChan chan<- *Packet
 
+	// keyed reports that the packet arrived in the keyed encryption format, so a reply goes back in it
+	keyed bool
+
 	refCount atomic.Int32
 }
 
@@ -109,6 +112,7 @@ func (p *Packet) Release() {
 		p.SenderID = EmptyNodeID
 		p.TargetNodeID = nil
 		p.Tag = nil
+		p.keyed = false
 
 		packetPool.Put(p)
 	}
@@ -203,6 +207,8 @@ type joinMessage struct {
 	Tags               []string               `msgpack:"tags,omitempty" json:"tags,omitempty"`
 	MetadataTimestamp  hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata           map[string]interface{} `msgpack:"md" json:"md"`
+	KeyWindow          uint32                 `msgpack:"kw,omitempty" json:"kw,omitempty"` // encryption key window the sender reads (0: original format only)
+	Caps               uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
 }
 
 type joinReplyMessage struct {
@@ -214,6 +220,8 @@ type joinReplyMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	Nodes             []joinNode             `msgpack:"nodes" json:"nodes"`
+	KeyWindow         uint32                 `msgpack:"kw,omitempty" json:"kw,omitempty"`
+	Caps              uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
 }
 
 type joinNode struct {
@@ -233,11 +241,15 @@ type metadataUpdateMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	NodeState         NodeState              `msgpack:"state" json:"state"`
+	KeyWindow         uint32                 `msgpack:"kw,omitempty" json:"kw,omitempty"`
+	Caps              uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
 }
 
 type pingMessage struct {
 	SenderID      NodeID `msgpack:"sid" json:"sid"`
 	AdvertiseAddr string `msgpack:"addr" json:"addr"`
+	KeyWindow     uint32 `msgpack:"kw,omitempty" json:"kw,omitempty"`
+	Caps          uint32 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
 }
 
 type pongMessage struct {
@@ -246,4 +258,6 @@ type pongMessage struct {
 	MetadataTimestamp hlc.Timestamp          `msgpack:"mdts" json:"mdts"`
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	NodeState         NodeState              `msgpack:"state" json:"state"`
+	KeyWindow         uint32                 `msgpack:"kw,omitempty" json:"kw,omitempty"`
+	Caps              uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
 }

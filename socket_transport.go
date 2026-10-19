@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/paularlott/logger"
@@ -26,6 +27,53 @@ type SocketTransport struct {
 	udpBufferPool sync.Pool // Pool for UDP packet buffers
 	streamHandler func(packet *Packet, w io.Writer) error
 	pool          *connPool // idle request/response connections per peer
+
+	// keys is the encryption keyring (nil without encryption), replaced whole by setEncryptionKeys. It is built from
+	// the config on first use when the cluster has not set it.
+	keys     atomic.Pointer[keyring]
+	keysOnce sync.Once
+}
+
+// keyring returns the transport's keys, nil when the cluster is not encrypted.
+func (st *SocketTransport) keyring() *keyring {
+	st.keysOnce.Do(func() {
+		if st.keys.Load() != nil || st.config.Cipher == nil || len(st.config.EncryptionKey) == 0 {
+			return
+		}
+		k, err := newKeyring(st.config.Cipher, st.config.EncryptionKeyWindow, st.config.EncryptionKey, st.config.PreviousEncryptionKeys)
+		if err != nil {
+			st.logger.WithError(err).Error("invalid encryption keys")
+			return
+		}
+		st.keys.CompareAndSwap(nil, k)
+	})
+	return st.keys.Load()
+}
+
+// setEncryptionKeys replaces the keys: current encrypts, all decrypt.
+func (st *SocketTransport) setEncryptionKeys(current []byte, previous [][]byte) error {
+	if st.config.Cipher == nil {
+		return errors.New("the cluster is not encrypted: no cipher is configured")
+	}
+	k, err := newKeyring(st.config.Cipher, st.config.EncryptionKeyWindow, current, previous)
+	if err != nil {
+		return err
+	}
+	st.keysOnce.Do(func() {}) // the config's keys are superseded
+	st.keys.Store(k)
+	return nil
+}
+
+// encryptionWindow is the key window (seconds) this node reads the keyed format with: 0 for none.
+func (st *SocketTransport) encryptionWindow() uint32 { return st.keyring().windowSeconds() }
+
+// capabilities: a socket transport keeps a connection open after answering a request (packetToQueue).
+func (st *SocketTransport) capabilities() uint32 { return capKeepsConnections }
+
+// keyedFor reports whether packets to node use the keyed format: it reads it, with the same key window.
+func (st *SocketTransport) keyedFor(node *Node) bool {
+	w := st.keyring().windowSeconds()
+	return w != 0 && node != nil && node.keyWindow.Load() == w
 }
 
 func NewSocketTransport(config *Config) *SocketTransport {
@@ -55,6 +103,7 @@ func NewSocketTransport(config *Config) *SocketTransport {
 		st.resolver = NewDefaultResolver()
 	}
 	st.pool = newConnPool(config.TCPPoolSize, config.TCPIdleTimeout)
+	config.socket = st
 
 	return st
 }
@@ -161,7 +210,7 @@ func (st *SocketTransport) PacketChannel() chan *Packet {
 }
 
 func (st *SocketTransport) Send(transportType TransportType, node *Node, packet *Packet) error {
-	rawPacket, err := st.packetToBuffer(packet, false)
+	rawPacket, err := st.encode(packet, false, false, st.keyedFor(node))
 	if err != nil {
 		return err
 	}
@@ -191,9 +240,25 @@ func (st *SocketTransport) Send(transportType TransportType, node *Node, packet 
 // requests. A pooled connection is checked before use; one the peer has closed is discarded and never written to.
 // Nothing is retried after the request has been sent, so a request is never delivered twice.
 func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) {
-	raw, err := st.packetToBuffer(packet, true)
+	raw, err := st.encode(packet, true, false, st.keyedFor(node))
 	if err != nil {
 		return nil, err
+	}
+	if node.caps.Load()&capKeepsConnections == 0 {
+		// A peer not known to keep connections open (one that predates connection reuse, or not heard from yet)
+		// gets a connection of its own, closed after the reply. Reusing one such a peer has already closed would
+		// fail the request, and could not safely be retried.
+		conn, err := st.dialPeer(node)
+		if err != nil {
+			return nil, err
+		}
+		reply, err := st.roundTrip(conn, raw)
+		conn.Close()
+		if err != nil {
+			node.ClearAddress()
+			return nil, err
+		}
+		return reply, nil
 	}
 	conn, addr, uses, err := st.replyConn(node)
 	if err != nil {
@@ -254,11 +319,10 @@ func (st *SocketTransport) SetStreamHandler(handler func(packet *Packet, w io.Wr
 // OpenStream implements streamTransport: the request goes as a packet on a
 // new connection and the reply comes back on it as frames.
 func (st *SocketTransport) OpenStream(ctx context.Context, node *Node, packet *Packet) (io.ReadCloser, error) {
-	raw, err := st.packetToBuffer(packet, false)
+	raw, err := st.encode(packet, false, true, st.keyedFor(node))
 	if err != nil {
 		return nil, err
 	}
-	setStreamFlag(raw)
 
 	conn, err := st.dialPeer(node)
 	if err != nil {
@@ -286,7 +350,7 @@ func (st *SocketTransport) serveStream(ctx context.Context, conn net.Conn, packe
 	// The packet does not own the connection; the reply is written here.
 	packet.SetConn(nil)
 
-	fw := newFrameWriter(ctx, conn, st.sealFrame(), func() {
+	fw := newFrameWriter(ctx, conn, st.sealFrame(packet.keyed), func() {
 		conn.SetWriteDeadline(time.Now().Add(st.config.StreamIdleTimeout))
 	})
 	if st.streamHandler == nil {
@@ -298,19 +362,24 @@ func (st *SocketTransport) serveStream(ctx context.Context, conn net.Conn, packe
 }
 
 // sealFrame and openFrame encrypt and decrypt stream frames with the cluster
-// key, as packets are; nil when the cluster is not encrypted.
-func (st *SocketTransport) sealFrame() func([]byte) ([]byte, error) {
-	if st.config.Cipher == nil {
+// keys, as packets are; nil when the cluster is not encrypted. A stream's
+// frames use the format of the request that opened it; frames carry no
+// additional data, so a frame cannot pass for a packet or the reverse.
+func (st *SocketTransport) sealFrame(keyed bool) func([]byte) ([]byte, error) {
+	if st.keyring() == nil {
 		return nil
 	}
-	return func(b []byte) ([]byte, error) { return st.config.Cipher.Encrypt(st.config.EncryptionKey, b) }
+	return func(b []byte) ([]byte, error) { return st.keyring().seal(keyed, nil, b) }
 }
 
 func (st *SocketTransport) openFrame() func([]byte) ([]byte, error) {
-	if st.config.Cipher == nil {
+	if st.keyring() == nil {
 		return nil
 	}
-	return func(b []byte) ([]byte, error) { return st.config.Cipher.Decrypt(st.config.EncryptionKey, b) }
+	return func(b []byte) ([]byte, error) {
+		plain, _, err := st.keyring().open(nil, b)
+		return plain, err
+	}
 }
 
 func (st *SocketTransport) tcpListen(ctx context.Context, wg *sync.WaitGroup) {
@@ -420,6 +489,7 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 // connection, so releasing it leaves the connection open. It reports whether conn can carry another request; after
 // a timeout it cannot, since a late reply would be read as the answer to the next request.
 func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, packet *Packet) bool {
+	keyed := packet.keyed // the reply answers in the request's format
 	replyChan := make(chan *Packet, 1)
 	packet.SetReplyChan(replyChan)
 	defer closeAndDrainReplies(replyChan)
@@ -436,7 +506,7 @@ func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, pack
 		if replyPacket == nil {
 			return false
 		}
-		err := st.writePacket(conn, replyPacket, false)
+		err := st.writePacketAs(conn, replyPacket, false, keyed)
 		replyPacket.Release()
 		if err != nil {
 			st.logger.WithError(err).Error("failed to write reply packet")
@@ -688,7 +758,14 @@ const (
 	compressionFlag = 0x8000
 )
 
+// packetToBuffer encodes a packet in the original format (see encode).
 func (st *SocketTransport) packetToBuffer(packet *Packet, replyExpected bool) ([]byte, error) {
+	return st.encode(packet, replyExpected, false, false)
+}
+
+// encode encodes a packet for the wire: flags (2 bytes), then the header and payload, encrypted when the cluster is
+// (in the keyed format when keyed, which also authenticates the flags; see keyring).
+func (st *SocketTransport) encode(packet *Packet, replyExpected, stream, keyed bool) ([]byte, error) {
 	headerBytes, err := st.config.MsgCodec.Marshal(packet)
 	if err != nil {
 		return nil, err
@@ -699,6 +776,9 @@ func (st *SocketTransport) packetToBuffer(packet *Packet, replyExpected bool) ([
 	// Set reply expected flag if requested
 	if replyExpected {
 		headerSize |= replyExpectedFlag
+	}
+	if stream {
+		headerSize |= streamFlag
 	}
 
 	var compressedData []byte
@@ -738,8 +818,8 @@ func (st *SocketTransport) packetToBuffer(packet *Packet, replyExpected bool) ([
 	}
 
 	payloadBytes := payloadBuf.Bytes()
-	if st.config.Cipher != nil {
-		payloadBytes, err = st.config.Cipher.Encrypt(st.config.EncryptionKey, payloadBytes)
+	if k := st.keyring(); k != nil {
+		payloadBytes, err = k.seal(keyed, buf.Bytes()[:2], payloadBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -765,9 +845,10 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 
 	encryptedPortion := data[2:]
 
-	if st.config.Cipher != nil {
+	keyed := false
+	if k := st.keyring(); k != nil {
 		var err error
-		encryptedPortion, err = st.config.Cipher.Decrypt(st.config.EncryptionKey, encryptedPortion)
+		encryptedPortion, keyed, err = k.open(data[:2], encryptedPortion)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to decrypt packet: %w", err)
 		}
@@ -785,6 +866,7 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 	}
 
 	packet.SetCodec(st.config.MsgCodec)
+	packet.keyed = keyed
 
 	if st.config.Compressor != nil && isCompressed {
 		payload, err := st.config.Compressor.Decompress(encryptedPortion[headerSize:])
@@ -801,7 +883,12 @@ func (st *SocketTransport) packetFromBuffer(data []byte) (*Packet, bool, error) 
 }
 
 func (st *SocketTransport) writePacket(conn net.Conn, packet *Packet, replyExpected bool) error {
-	buf, err := st.packetToBuffer(packet, replyExpected)
+	return st.writePacketAs(conn, packet, replyExpected, false)
+}
+
+// writePacketAs is writePacket in the keyed format when keyed.
+func (st *SocketTransport) writePacketAs(conn net.Conn, packet *Packet, replyExpected, keyed bool) error {
+	buf, err := st.encode(packet, replyExpected, false, keyed)
 	if err != nil {
 		return err
 	}

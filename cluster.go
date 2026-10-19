@@ -47,6 +47,12 @@ type Cluster struct {
 	healthMonitor        *HealthMonitor
 	joinQueue            chan *joinRequest
 	peerRecoveryMu       sync.RWMutex
+
+	// forgotten holds the nodes ForgetNode dropped, with when, so that second-hand reports of them (state
+	// exchange, join replies) do not bring them back while other nodes still remember them; the node itself
+	// contacting us again (a join either way) clears it.
+	forgottenMu sync.Mutex
+	forgotten   map[NodeID]time.Time
 }
 
 type broadcastQItem struct {
@@ -145,6 +151,11 @@ func NewCluster(config *Config) (*Cluster, error) {
 	if len(cluster.config.EncryptionKey) == 0 && cluster.config.Cipher != nil {
 		return nil, fmt.Errorf("crypter is set but no encryption key is provided")
 	}
+	if st := cluster.socketTransport(); st != nil && cluster.config.Cipher != nil {
+		if err := st.setEncryptionKeys(cluster.config.EncryptionKey, cluster.config.PreviousEncryptionKeys); err != nil {
+			return nil, err
+		}
+	}
 
 	// Add the local node to the node list and setup handlers
 	cluster.nodes.addOrUpdate(cluster.localNode)
@@ -157,6 +168,8 @@ func NewCluster(config *Config) (*Cluster, error) {
 			MetadataTimestamp: ts,
 			Metadata:          data,
 			NodeState:         cluster.localNode.GetObservedState(),
+			KeyWindow:         cluster.keyWindow(),
+			Caps:              cluster.capabilities(),
 		})
 	})
 
@@ -330,6 +343,8 @@ func (c *Cluster) joinPeer(peerAddr string) {
 		Metadata:           c.localNode.metadata.GetAll(),
 		ProtocolVersion:    PROTOCOL_VERSION,
 		ApplicationVersion: c.config.ApplicationVersion,
+		KeyWindow:          c.keyWindow(),
+		Caps:               c.capabilities(),
 	}
 
 	// Create a node for the peer
@@ -350,9 +365,11 @@ func (c *Cluster) joinPeer(peerAddr string) {
 
 	c.logger.Debug("received join reply", "peer_id", joinReply.NodeID.String(), "peer_tags", joinReply.Tags)
 
-	// Create node with tags from join reply
+	// Create node with tags from join reply: the node answered us itself, so it is not forgotten
+	c.remembered(joinReply.NodeID)
 	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
+	node.learn(joinReply.KeyWindow, joinReply.Caps)
 
 	// Update the copy of the nodes metadata and notify so that NodeGroups
 	// (which filter by metadata criteria) can evaluate the node.
@@ -366,6 +383,9 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	// Run the list of nodes that we've been given and attempt to join with any we don't know
 	// or any we have marked as dead/leaving (they may have recovered)
 	for _, peer := range joinReply.Nodes {
+		if c.isForgotten(peer.ID) {
+			continue
+		}
 		existing := c.nodes.get(peer.ID)
 		if existing == nil || existing.DeadOrLeft() {
 			if existing == nil {
@@ -540,6 +560,15 @@ func (c *Cluster) acceptPackets() {
 func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// If the sender is us or already seen then ignore the message
 	if packet.SenderID == c.localNode.ID || c.msgHistory.contains(packet.SenderID, packet.MessageID) {
+		packet.Release()
+		return
+	}
+
+	// With MaxPacketAge, a packet from too far in the past or future is refused: the history keeps every message
+	// until it would be refused here, so no captured packet can be replayed once it has left the history.
+	if c.config.MaxPacketAge > 0 && !withinAge(packet.MessageID, c.config.MaxPacketAge, time.Now()) {
+		c.logger.Debug("refusing packet outside MaxPacketAge", "sender_id", packet.SenderID.String(),
+			"message_time", hlc.Timestamp(packet.MessageID).Time())
 		packet.Release()
 		return
 	}
@@ -719,8 +748,8 @@ func (c *Cluster) exchangeState(nodes []*Node, exclude []NodeID) {
 // Combine the received states with our own to form a complete view of the cluster state
 func (c *Cluster) combineStates(remoteStates []exchangeNodeState) {
 	for _, state := range remoteStates {
-		// Skip us
-		if state.ID == c.localNode.ID {
+		// Skip us, and nodes we were told to forget (second-hand news of them is stale)
+		if state.ID == c.localNode.ID || c.isForgotten(state.ID) {
 			continue
 		}
 
@@ -944,8 +973,34 @@ func (c *Cluster) ForgetNode(id NodeID) bool {
 	if c.nodes.get(id) == nil {
 		return false
 	}
+	c.forgottenMu.Lock()
+	if c.forgotten == nil {
+		c.forgotten = map[NodeID]time.Time{}
+	}
+	c.forgotten[id] = time.Now()
+	c.forgottenMu.Unlock()
 	c.nodes.remove(id)
 	return true
+}
+
+// isForgotten reports whether ForgetNode dropped id within NodeRetentionTime: until then other nodes may still
+// gossip it (as a tombstone or from a stale view), and that must not bring it back.
+func (c *Cluster) isForgotten(id NodeID) bool {
+	c.forgottenMu.Lock()
+	defer c.forgottenMu.Unlock()
+	at, ok := c.forgotten[id]
+	if ok && time.Since(at) > c.config.NodeRetentionTime {
+		delete(c.forgotten, id)
+		return false
+	}
+	return ok
+}
+
+// remembered clears a forgotten node: it contacted us itself, so it is back.
+func (c *Cluster) remembered(id NodeID) {
+	c.forgottenMu.Lock()
+	delete(c.forgotten, id)
+	c.forgottenMu.Unlock()
 }
 
 // Get the number of nodes that are currently alive
@@ -1154,6 +1209,8 @@ func (c *Cluster) gossipMetadata() {
 			MetadataTimestamp: c.localNode.metadata.GetTimestamp(),
 			Metadata:          c.localNode.metadata.GetAll(),
 			NodeState:         c.localNode.GetObservedState(),
+			KeyWindow:         c.keyWindow(),
+			Caps:              c.capabilities(),
 		},
 	)
 }

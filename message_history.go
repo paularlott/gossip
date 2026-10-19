@@ -95,12 +95,15 @@ func (mh *messageHistory) pruneHistory() {
 		for {
 			select {
 			case <-pruneTimer.C:
-				cutoff := time.Now().Add(-mh.config.MsgHistoryMaxAge).UnixNano()
+				now := time.Now()
+				cutoff := now.Add(-mh.config.MsgHistoryMaxAge).UnixNano()
 
 				for _, shard := range mh.shards {
 					shard.mutex.Lock()
 					for key, timestamp := range shard.entries {
-						if timestamp < cutoff {
+						// With MaxPacketAge, a message is kept until its own time is that far gone: until then
+						// a replay of it passes the age check, so the history must still catch it.
+						if timestamp < cutoff && (mh.config.MaxPacketAge <= 0 || !withinAge(key.messageID, mh.config.MaxPacketAge, now)) {
 							delete(shard.entries, key)
 						}
 					}
@@ -112,4 +115,10 @@ func (mh *messageHistory) pruneHistory() {
 			}
 		}
 	}()
+}
+
+// withinAge reports whether the time of message id is within maxAge of now, either way.
+func withinAge(id MessageID, maxAge time.Duration, now time.Time) bool {
+	d := now.Sub(hlc.Timestamp(id).Time())
+	return d <= maxAge && d >= -maxAge
 }

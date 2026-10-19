@@ -1,7 +1,6 @@
 package gossip
 
 import (
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +17,6 @@ import (
 func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 	const n = 8
 	const msgs = 5
-	const basePort = 23600
 
 	var mu sync.Mutex
 	perMsg := make(map[int]int)
@@ -31,7 +29,7 @@ func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 
 	for i := 0; i < n; i++ {
 		cfg := DefaultConfig()
-		addr := fmt.Sprintf("127.0.0.1:%d", basePort+i)
+		addr := getFreeTCPAddress(t)
 		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
 		cfg.MsgCodec = codec.NewJSONCodec()
 		cfg.Logger = logger.NewNullLogger()
@@ -56,7 +54,7 @@ func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 		c.Start()
 		clusters = append(clusters, c)
 		if i > 0 {
-			if err := c.Join([]string{fmt.Sprintf("127.0.0.1:%d", basePort)}); err != nil {
+			if err := c.Join([]string{clusters[0].LocalNode().AdvertisedAddr()}); err != nil {
 				t.Fatalf("node %d join: %v", i, err)
 			}
 		}

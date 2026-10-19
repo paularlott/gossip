@@ -66,4 +66,13 @@ func (e *Encryptor) Decrypt(key []byte, data []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-var _ encryption.Cipher = (*Encryptor)(nil)
+// NewAEAD returns AES-GCM for key (16, 24 or 32 bytes).
+func (e *Encryptor) NewAEAD(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+var _ encryption.AEADCipher = (*Encryptor)(nil)

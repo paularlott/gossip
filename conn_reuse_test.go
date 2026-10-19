@@ -107,6 +107,7 @@ func startEchoServer(t *testing.T, cfg *Config, delay func(n int64) time.Duratio
 	addr := ln.Addr().(*net.TCPAddr)
 	node := newNode(NodeID(uuid.New()), addr.String())
 	node.address = Address{IP: addr.IP, Port: addr.Port}
+	node.caps.Store(capKeepsConnections) // as a current peer advertises
 	return st, ln, node, &requests
 }
 
@@ -218,22 +219,23 @@ func startOldServer(t *testing.T) (*Node, *atomic.Int64) {
 	return node, &accepted
 }
 
+// TestSendWithReplyFallsBackForOlderServer: a peer that does not advertise keeping connections open (one that
+// predates connection reuse) gets a fresh connection per request, so no request is ever sent on a connection it has
+// already closed. (Reusing one used to fail a request whenever its close arrived after the client's check.)
 func TestSendWithReplyFallsBackForOlderServer(t *testing.T) {
 	node, accepted := startOldServer(t)
 	client := startClient(t, reuseConfig())
-	for i := range 5 {
+	for i := range 50 {
 		got, err := request(t, client, node, fmt.Sprint(i))
 		if err != nil || got != fmt.Sprintf("echo:%d", i) {
 			t.Fatalf("request %d against older server: %q %v", i, got, err)
 		}
 	}
-	// One wasted reuse attempt, then pooling is off for that address: 5 requests need 5 connections.
-	if n := accepted.Load(); n != 5 {
-		t.Fatalf("expected 5 connections, got %d", n)
+	if n := accepted.Load(); n != 50 {
+		t.Fatalf("expected 50 connections, got %d", n)
 	}
-	addr := node.GetAddress()
-	if client.pool.enabled(addr.String()) {
-		t.Fatal("pooling should be off for an older server")
+	if n := client.pool.size(); n != 0 {
+		t.Fatalf("%d connections to an older server pooled", n)
 	}
 }
 
@@ -295,6 +297,7 @@ func TestSendWithReplyNoReplyNotResent(t *testing.T) {
 	addr := ln.Addr().(*net.TCPAddr)
 	node := newNode(NodeID(uuid.New()), addr.String())
 	node.address = Address{IP: addr.IP, Port: addr.Port}
+	node.caps.Store(capKeepsConnections)
 	client := startClient(t, reuseConfig())
 	if _, err := request(t, client, node, "first"); err != nil {
 		t.Fatal(err)
@@ -383,4 +386,15 @@ func TestPooledConnectionReusedAfterDeadlinePassed(t *testing.T) {
 	if n := ln.accepted.Load(); n != 1 || !client.pool.enabled(addr.String()) {
 		t.Fatalf("connection not reused after its deadline passed: %d connections, pooling %v", n, client.pool.enabled(addr.String()))
 	}
+}
+
+// size is the number of idle connections the pool holds.
+func (p *connPool) size() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, c := range p.idle {
+		n += len(c)
+	}
+	return n
 }

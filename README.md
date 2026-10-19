@@ -46,7 +46,7 @@ import (
   "github.com/paularlott/gossip"
   "github.com/paularlott/gossip/codec/shamaton"
   "github.com/paularlott/gossip/compression/snappy"
-  "github.com/paularlott/gossip/encryption"
+  "github.com/paularlott/gossip/encryption/aes"
 )
 
 func main() {
@@ -54,8 +54,8 @@ func main() {
   config := gossip.DefaultConfig()
   config.NodeID = "01960f9b-72ca-7a51-9efa-47c12f42a138"       // Optional: auto-generated if not specified
   config.BindAddr = "127.0.0.1:8000"                           // Listen on TCP and UDP
-  config.EncryptionKey = "your-32-byte-key"                    // Optional: enables encryption
-	config.Cipher = encryption.NewAESEncryptor()                 // Encryption algorithm
+  config.EncryptionKey = []byte("an-example-32-byte-key-123456789") // Optional: enables encryption (16, 24 or 32 bytes)
+  config.Cipher = aes.New()                                    // Encryption algorithm
   config.MsgCodec = shamaton.New()                             // Message serialization
   config.Compressor = snappy.New()                             // Optional: enables compression
 
@@ -117,9 +117,12 @@ config.BindAddr = "0.0.0.0:3500"               // Address to bind for listening
 config.AdvertiseAddr = "192.168.1.1:3500"      // Address to advertise to peers (optional)
 
 // Communication
-config.EncryptionKey = "your-32-byte-key"              // Optional: enables encryption
-config.Cipher = encryption.NewAESEncryptor()           // Encryption algorithm
-config.Compressor = compression.NewSnappyCompressor()  // Enable payload compression using the provided compressor
+config.EncryptionKey = []byte("an-example-32-byte-key-123456789") // Optional: enables encryption (16, 24 or 32 bytes)
+config.Cipher = aes.New()                              // Encryption algorithm
+config.PreviousEncryptionKeys = nil                    // Keys being rotated out: they decrypt, never encrypt
+config.EncryptionKeyWindow = time.Hour                 // How long one derived traffic key is used (default 1h)
+config.MaxPacketAge = 0                                // Refuse packets this far from the local clock (0 = off)
+config.Compressor = snappy.New()                       // Enable payload compression using the provided compressor
 config.CompressMinSize = 1024                          // Minimum size of a packet that will be considered for compression
 config.Transport = gossip.NewSocketTransport(config)   // Socket based transport
 
@@ -190,6 +193,31 @@ _, err = io.Copy(dst, r) // io.EOF only once the whole reply has arrived
 ```
 
 The reply travels in frames of up to 64KB. On the socket transport each frame is encrypted with the cluster key, as packets are; on the HTTP transport the connection's TLS protects it. A reader gets `io.EOF` only after a complete reply, the handler's error if it failed, and `io.ErrUnexpectedEOF` if the connection broke, so a partial reply is never mistaken for a whole one. Each frame must arrive within `StreamIdleTimeout`; cancelling the context passed to `OpenStream` aborts the stream. Streams are accepted only from known cluster members, and `OpenStream` returns `ErrStreamsUnsupported` on a transport without stream support.
+
+## Encryption and Key Rotation
+
+With an `EncryptionKey` and a cipher, every packet and stream frame is encrypted. With the AES cipher (any cipher
+implementing `encryption.AEADCipher`) nodes of this version use a keyed format between themselves:
+
+- **Traffic keys per window.** Each node derives a traffic key from the configured key for every
+  `EncryptionKeyWindow` (default one hour, the same on every node), so no key encrypts more than a window's traffic.
+  Clocks may differ by up to a window.
+- **Authenticated header.** The packet flags are authenticated with the payload.
+- **One byte of overhead.** A single byte in front of the ciphertext names the window and the key.
+- **Upgrades.** Nodes advertise that they read the keyed format; a node that does not (an older release, or a
+  cipher without an AEAD) is always sent the original format, and every node still reads the original format, so a
+  cluster can be upgraded one node at a time.
+
+The key of a running cluster is rotated with `Cluster.SetEncryptionKeys(current, previous...)` in three rounds over
+every node, so no node ever receives traffic it cannot read:
+
+1. add the new key as a previous key;
+2. make the new key current and the old one previous;
+3. once every node has done step 2, drop the old key.
+
+`MaxPacketAge` (off by default) refuses packets whose message time is further than that from the local clock, and
+keeps each message in the duplicate history until then, so a captured packet cannot be replayed once it has left the
+history. Set it well above the clock skew your nodes can have.
 
 ## Logging
 

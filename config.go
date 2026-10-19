@@ -20,6 +20,9 @@ type Config struct {
 	Tags               []string // Tags for tag-based message routing
 
 	EncryptionKey            []byte                  // Encryption key for the messages, must be either 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
+	PreviousEncryptionKeys   [][]byte                // Keys being rotated out: they still decrypt, never encrypt (see Cluster.SetEncryptionKeys)
+	EncryptionKeyWindow      time.Duration           // How long one derived traffic key is used, with an AEAD cipher (default 1h, at least 1m); must be the same on every node, or nodes fall back to the original format between them
+	MaxPacketAge             time.Duration           // Refuse packets whose message id is further than this from the local clock, closing the replay window beyond MsgHistoryMaxAge; 0 disables (needs clocks within this of each other)
 	Transport                Transport               // Transport layer to communicate over UDP or TCP
 	Logger                   logger.Logger           // Logger is the logger to use for logging messages
 	MsgCodec                 codec.Serializer        // The codec to use for encoding and decoding messages
@@ -73,6 +76,10 @@ type Config struct {
 
 	DialFunc   func(ctx context.Context, network, addr string) (net.Conn, error) // Custom dial function for TCP connections (e.g. tsnet.Server.Dial), defaults to net.Dialer with TCPDialTimeout
 	ListenFunc func(network, addr string) (net.Listener, error)                  // Custom listen function for TCP connections (e.g. tsnet.Server.Listen), defaults to net.ListenTCP. Automatically sets ForceReliableTransport to true
+
+	// socket is the socket transport built with this config (NewSocketTransport), so the cluster can reach it
+	// when Transport wraps it in another type (for its key window, capabilities and keys).
+	socket *SocketTransport
 }
 
 func DefaultConfig() *Config {
@@ -103,6 +110,7 @@ func DefaultConfig() *Config {
 		TCPMaxPacketSize:         4194304, // 4MB
 		MsgHistoryGCInterval:     1 * time.Second,
 		MsgHistoryMaxAge:         30 * time.Second,
+		EncryptionKeyWindow:      DefaultEncryptionKeyWindow,
 		MsgHistoryShardCount:     16,
 		NodeShardCount:           4,
 		NumSendWorkers:           8,
