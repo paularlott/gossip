@@ -223,6 +223,31 @@ func TestLiveKeyRotation(t *testing.T) {
 	allTalk("step 3")
 	require.Equal(t, "stream reply", streamFrom(t, nodes[0], nodes[2]))
 
+	// repeated rotations replace the keys rather than add to them
+	current := newKey
+	for i := byte(0); i < 20; i++ {
+		next := testKey(100+i, 32)
+		for _, n := range nodes {
+			require.NoError(t, n.SetEncryptionKeys(current, next))
+		}
+		for _, n := range nodes {
+			require.NoError(t, n.SetEncryptionKeys(next, current))
+		}
+		for _, n := range nodes {
+			require.NoError(t, n.SetEncryptionKeys(next))
+		}
+		current = next
+	}
+	allTalk("after repeated rotations")
+	for _, n := range nodes {
+		k := n.socketTransport().keyring()
+		require.Len(t, k.keys, 1)
+		require.Equal(t, current, k.keys[0])
+		k.mu.RLock()
+		require.LessOrEqual(t, len(k.cache), 5)
+		k.mu.RUnlock()
+	}
+
 	// a node with only the old key cannot take part (Join itself retries quietly in the background)
 	stale := startKeyedNode(t, aes.New(), oldKey)
 	stale.Join([]string{nodes[0].LocalNode().AdvertisedAddr()})

@@ -230,3 +230,36 @@ func TestKeyringCacheBounded(t *testing.T) {
 		t.Fatalf("%d traffic keys cached", n)
 	}
 }
+
+// Traffic over many windows, under every configured key, keeps at most the windows around now for each key: the
+// cache does not grow as the traffic keys rotate.
+func TestKeyringCacheBoundedOverTime(t *testing.T) {
+	keys := [][]byte{testKey(1, 32), testKey(2, 32), testKey(3, 32)}
+	base := time.Unix(1_800_000_000, 0).Truncate(time.Hour)
+	recv := mustKeyring(t, aes.New(), keys[0], keys[1:]...)
+	senders := make([]*keyring, len(keys))
+	for i, key := range keys {
+		senders[i] = mustKeyring(t, aes.New(), key)
+	}
+	for h := 0; h < 500; h++ {
+		now := base.Add(time.Duration(h)*time.Hour + 30*time.Minute)
+		at(recv, now)
+		for _, s := range senders {
+			for _, skew := range []time.Duration{-time.Hour, 0, time.Hour} { // the previous, current and next window
+				sealed, _ := at(s, now.Add(skew)).seal(true, nil, []byte("x"))
+				if _, keyed, err := recv.open(nil, sealed); err != nil || !keyed {
+					t.Fatalf("hour %d skew %v: %v", h, skew, err)
+				}
+			}
+		}
+		if _, err := recv.seal(true, nil, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		recv.mu.RLock()
+		n := len(recv.cache)
+		recv.mu.RUnlock()
+		if n > 5*len(keys) {
+			t.Fatalf("hour %d: %d traffic keys cached for %d keys", h, n, len(keys))
+		}
+	}
+}
