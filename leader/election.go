@@ -3,6 +3,7 @@ package leader
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/paularlott/gossip"
@@ -36,6 +37,7 @@ type LeaderElection struct {
 	nodeGroup     *gossip.NodeGroup
 	stateHandler  gossip.HandlerID
 	baseline      *baseline.Tracker
+	minSize       atomic.Pointer[int] // replaces Config.MinClusterSize once SetClusterSize has run
 	startStopMu   sync.Mutex
 	wg            sync.WaitGroup
 	started       bool
@@ -787,8 +789,8 @@ func (le *LeaderElection) calculateQuorumForNodes(numNodes int) int {
 		}
 	}
 
-	if le.config.MinClusterSize > required {
-		required = le.config.MinClusterSize
+	if m := le.minClusterSize(); m > required {
+		required = m
 	}
 
 	return required
@@ -822,8 +824,8 @@ func (le *LeaderElection) QuorumSize() int {
 // set it is at least ExpectedClusterSize/2+1.
 func (le *LeaderElection) WriteQuorum() int {
 	q := le.BaselineSize()/2 + 1
-	if le.config.MinClusterSize > q {
-		q = le.config.MinClusterSize
+	if m := le.minClusterSize(); m > q {
+		q = m
 	}
 	return q
 }
@@ -909,6 +911,27 @@ func (le *LeaderElection) ResetQuorumBaseline() {
 	if le.baseline != nil {
 		le.baseline.Reset()
 	}
+}
+
+// SetClusterSize changes Config.ExpectedClusterSize and Config.MinClusterSize while the election runs, for a
+// deliberate resize of the cluster: the baseline's floor becomes expected and the tracked baseline is discarded, so
+// it is re-derived from what is visible and never below the new floor (a smaller size takes effect at once, without
+// waiting for evidence of departures). Values below zero are treated as zero (no floor, no minimum).
+func (le *LeaderElection) SetClusterSize(expected, min int) {
+	m := max(min, 0)
+	le.minSize.Store(&m)
+	if le.baseline != nil {
+		le.baseline.SetFloor(max(expected, 0))
+		le.baseline.Reset()
+	}
+}
+
+// minClusterSize is Config.MinClusterSize, or the value SetClusterSize set.
+func (le *LeaderElection) minClusterSize() int {
+	if m := le.minSize.Load(); m != nil {
+		return *m
+	}
+	return le.config.MinClusterSize
 }
 
 // Candidates returns the nodes currently eligible to become leader.
