@@ -50,11 +50,23 @@ func NewHTTPTransport(config *Config) *HTTPTransport {
 		timeout = config.TCPDialTimeout
 	}
 
+	dial := (&net.Dialer{
+		Timeout:   timeout,          // Connection timeout
+		KeepAlive: 30 * time.Second, // Keep-alive probe interval
+	}).DialContext
+	if config.DialFunc != nil {
+		// A custom dialer (e.g. tsnet, or one enforcing a network policy)
+		// gets the same connection timeout through its context.
+		dialFunc := config.DialFunc
+		dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return dialFunc(ctx, network, addr)
+		}
+	}
+
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   timeout,          // Connection timeout
-			KeepAlive: 30 * time.Second, // Keep-alive probe interval
-		}).DialContext,
+		DialContext:           dial,
 		TLSHandshakeTimeout:   timeout,          // TLS handshake timeout
 		ResponseHeaderTimeout: timeout,          // Time to receive response headers
 		ExpectContinueTimeout: 1 * time.Second,  // Time to wait for 100-continue

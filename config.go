@@ -74,7 +74,7 @@ type Config struct {
 	PeerRecoveryInterval     time.Duration           // How often to check peer connectivity (default: 30s)
 	InsecureSkipVerify       bool                    // Skip TLS certificate verification for HTTPS connections
 
-	DialFunc   func(ctx context.Context, network, addr string) (net.Conn, error) // Custom dial function for TCP connections (e.g. tsnet.Server.Dial), defaults to net.Dialer with TCPDialTimeout
+	DialFunc   func(ctx context.Context, network, addr string) (net.Conn, error) // Custom dial function for TCP connections by the socket and HTTP transports (e.g. tsnet.Server.Dial), defaults to net.Dialer with TCPDialTimeout
 	ListenFunc func(network, addr string) (net.Listener, error)                  // Custom listen function for TCP connections (e.g. tsnet.Server.Listen), defaults to net.ListenTCP. Automatically sets ForceReliableTransport to true
 
 	// socket is the socket transport built with this config (NewSocketTransport), so the cluster can reach it
