@@ -83,6 +83,9 @@ type Packet struct {
 	// Reply channel for async replies (works for all transports)
 	replyChan chan<- *Packet
 
+	// reply carries the reply to a request a transport is waiting on (setReply)
+	reply *replyBox
+
 	// keyed reports that the packet arrived in the keyed encryption format, so a reply goes back in it
 	keyed bool
 
@@ -109,6 +112,7 @@ func (p *Packet) Release() {
 		p.conn = nil
 		p.payload = nil
 		p.replyChan = nil
+		p.reply = nil
 		p.SenderID = EmptyNodeID
 		p.TargetNodeID = nil
 		p.Tag = nil
@@ -128,7 +132,7 @@ func (p *Packet) Codec() codec.Serializer {
 
 // CanReply returns true if the packet can send a reply
 func (p *Packet) CanReply() bool {
-	return p.conn != nil || p.replyChan != nil
+	return p.conn != nil || p.replyChan != nil || p.reply != nil
 }
 
 // awaitingReply reports whether a requester is waiting for a reply to this
@@ -137,7 +141,7 @@ func (p *Packet) CanReply() bool {
 // so it is closed on release) has no reply path, even though CanReply
 // reports true for it.
 func (p *Packet) awaitingReply() bool {
-	return p.replyChan != nil
+	return p.replyChan != nil || p.reply != nil
 }
 
 // SendReply sends a reply packet using the available reply mechanism
@@ -149,6 +153,9 @@ func (p *Packet) SendReply() (err error) {
 		}
 	}()
 
+	if p.reply != nil {
+		return p.reply.send(p)
+	}
 	if p.replyChan != nil {
 		select {
 		case p.replyChan <- p:
@@ -160,17 +167,53 @@ func (p *Packet) SendReply() (err error) {
 	return fmt.Errorf("no reply mechanism available")
 }
 
-// closeAndDrainReplies closes a request's reply channel and releases any reply
-// still buffered in it. A reply that lands after the waiter gave up (timeout,
-// shutdown, client gone) would otherwise keep its reference forever; one sent
-// after the close fails in SendReply and is released by the dispatcher.
-func closeAndDrainReplies(ch chan *Packet) {
-	close(ch)
-	for p := range ch {
+// replyBox carries the one reply to a request from the dispatcher to the transport waiting for it. Its channel is
+// never closed: the waiter gives up (timeout, shutdown, client gone) at any moment, possibly while the dispatcher is
+// sending, and closing a channel another goroutine sends on is a data race (and a recovered panic when the send comes
+// second). Instead send and close take the lock: a reply sent after close is refused (its sender releases it), and
+// one sent before is released by close, so no reply keeps its reference once nobody is waiting.
+type replyBox struct {
+	mu     sync.Mutex
+	closed bool
+	ch     chan *Packet // buffered (1)
+}
+
+func newReplyBox() *replyBox { return &replyBox{ch: make(chan *Packet, 1)} }
+
+// C is where the reply arrives.
+func (b *replyBox) C() <-chan *Packet { return b.ch }
+
+func (b *replyBox) send(p *Packet) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return fmt.Errorf("reply no longer awaited")
+	}
+	select {
+	case b.ch <- p:
+		return nil
+	default:
+		return fmt.Errorf("reply already sent")
+	}
+}
+
+// close stops the box taking replies and releases one that arrived but was not taken.
+func (b *replyBox) close() {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	select {
+	case p := <-b.ch:
 		if p != nil {
 			p.Release()
 		}
+	default:
 	}
+}
+
+// setReply makes b the packet's reply path (transports waiting for a reply to a request).
+func (p *Packet) setReply(b *replyBox) {
+	p.reply = b
 }
 
 // SetReplyChan sets the reply channel for this packet

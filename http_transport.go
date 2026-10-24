@@ -325,14 +325,14 @@ func (ht *HTTPTransport) HandleGossipRequest(w http.ResponseWriter, r *http.Requ
 	}
 
 	if replyExpected {
-		replyChan := make(chan *Packet, 1)
-		packet.SetReplyChan(replyChan)
-		defer closeAndDrainReplies(replyChan)
+		reply := newReplyBox()
+		packet.setReply(reply)
+		defer reply.close()
 
 		select {
 		case ht.packetChannel <- packet:
 			select {
-			case replyPacket := <-replyChan:
+			case replyPacket := <-reply.C():
 				replyData, err := ht.packetToBuffer(replyPacket, false)
 				if err != nil {
 					http.Error(w, "Failed to encode reply", http.StatusInternalServerError)

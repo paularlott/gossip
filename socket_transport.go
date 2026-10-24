@@ -490,9 +490,9 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 // a timeout it cannot, since a late reply would be read as the answer to the next request.
 func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, packet *Packet) bool {
 	keyed := packet.keyed // the reply answers in the request's format
-	replyChan := make(chan *Packet, 1)
-	packet.SetReplyChan(replyChan)
-	defer closeAndDrainReplies(replyChan)
+	reply := newReplyBox()
+	packet.setReply(reply)
+	defer reply.close()
 
 	select {
 	case <-ctx.Done():
@@ -502,7 +502,7 @@ func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, pack
 	}
 
 	select {
-	case replyPacket := <-replyChan:
+	case replyPacket := <-reply.C():
 		if replyPacket == nil {
 			return false
 		}
@@ -516,14 +516,7 @@ func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, pack
 	case <-time.After(st.config.TCPDeadline):
 		return false
 	case <-ctx.Done():
-		select {
-		case replyPacket := <-replyChan:
-			if replyPacket != nil {
-				replyPacket.Release()
-			}
-		default:
-		}
-		return false
+		return false // a reply that arrived meanwhile is released by reply.close
 	}
 }
 
