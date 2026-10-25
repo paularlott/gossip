@@ -875,7 +875,7 @@ func TestSocketTransport_DialPeerAllFail(t *testing.T) {
 	// Use an unreachable address
 	node := newNode(NodeID(uuid.New()), "127.0.0.1:1")
 
-	_, err := st.dialPeer(node)
+	_, err := st.dialPeer(context.Background(), node)
 	if err == nil {
 		t.Fatal("Expected dial error for unreachable address")
 	}

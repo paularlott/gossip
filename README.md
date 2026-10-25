@@ -160,6 +160,30 @@ All nodes in a cluster should use the same setting. Setting `ListenFunc` enables
 `Node.Routable()` reports whether a node is alive or suspect — worth sending to — and `Cluster.RoutableNodes()`
 returns all such nodes (the local node included). `AliveNodes()` remains the stricter set for quorum decisions.
 
+## Deadlines and cancellation
+
+`SendToWithResponse` is bounded by the transport's timeouts: `TCPDialTimeout` for each dial attempt and `TCPDeadline`
+for writing the request and waiting for the reply. When the caller has a deadline of its own (a request handler, a
+quorum round), pass it with `SendToWithResponseContext`: the dial, the write and the wait end at the context's
+deadline or cancellation, whichever comes first, with the context's error.
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+defer cancel()
+var resp Reply
+err := cluster.SendToWithResponseContext(ctx, node, QueryMsg, &Query{Key: "k"}, &resp)
+if errors.Is(err, context.DeadlineExceeded) {
+	// the peer did not answer in time
+}
+```
+
+`OpenStream` takes a context too, and it bounds the stream's dial as well as the reply. Stopping the cluster aborts
+dials and exchanges in flight.
+
+The built-in socket and HTTP transports implement `ContextTransport` (`SendWithReplyContext`). A custom transport that
+implements only `Transport` keeps working unchanged: `SendToWithResponseContext` then stops waiting when the context
+ends, and the exchange runs on until the transport's own timeouts.
+
 ## Direct Streams
 
 Messages are limited to a single packet (`TCPMaxPacketSize`, 4MB by default) sent within `TCPDeadline`. For bulk data, a node can open a stream to another node: the request is sent as a packet and the reply, of any size, is read as an `io.Reader` from a direct connection. Streams are never gossiped.

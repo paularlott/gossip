@@ -26,7 +26,8 @@ type SocketTransport struct {
 	resolver      Resolver
 	udpBufferPool sync.Pool // Pool for UDP packet buffers
 	streamHandler func(packet *Packet, w io.Writer) error
-	pool          *connPool // idle request/response connections per peer
+	pool          *connPool       // idle request/response connections per peer
+	ctx           context.Context // the transport's lifetime (Start): ending it aborts dials and exchanges in flight
 
 	// keys is the encryption keyring (nil without encryption), replaced whole by setEncryptionKeys. It is built from
 	// the config on first use when the cluster has not set it.
@@ -86,6 +87,7 @@ func NewSocketTransport(config *Config) *SocketTransport {
 	}
 
 	st := &SocketTransport{
+		ctx:           context.Background(),
 		config:        config,
 		logger:        lgr,
 		packetChannel: make(chan *Packet, config.IncomingPacketQueueDepth),
@@ -109,6 +111,7 @@ func NewSocketTransport(config *Config) *SocketTransport {
 }
 
 func (st *SocketTransport) Start(ctx context.Context, wg *sync.WaitGroup) error {
+	st.ctx = ctx
 	// Custom listeners (e.g. tsnet) don't support UDP, force reliable transport
 	if st.config.ListenFunc != nil {
 		st.config.ForceReliableTransport = true
@@ -236,23 +239,34 @@ func (st *SocketTransport) Send(transportType TransportType, node *Node, packet 
 	return nil
 }
 
-// SendWithReply sends packet and waits for the reply. Connections are pooled per peer address and reused for later
-// requests. A pooled connection is checked before use; one the peer has closed is discarded and never written to.
-// Nothing is retried after the request has been sent, so a request is never delivered twice.
+// SendWithReply sends packet and waits for the reply, bounded by the transport's timeouts (SendWithReplyContext with
+// no deadline of the caller's own).
 func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) {
+	return st.SendWithReplyContext(context.Background(), node, packet)
+}
+
+// SendWithReplyContext sends packet and waits for the reply. Connections are pooled per peer address and reused for
+// later requests. A pooled connection is checked before use; one the peer has closed is discarded and never written
+// to. Nothing is retried after the request has been sent, so a request is never delivered twice. The exchange (the
+// dial, the write and the wait for the reply) ends at TCPDialTimeout / TCPDeadline, at ctx's deadline or
+// cancellation, or when the transport stops, whichever comes first; a connection so interrupted is closed, never
+// pooled.
+func (st *SocketTransport) SendWithReplyContext(ctx context.Context, node *Node, packet *Packet) (*Packet, error) {
 	raw, err := st.encode(packet, true, false, st.keyedFor(node))
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := st.bound(ctx)
+	defer cancel()
 	if node.caps.Load()&capKeepsConnections == 0 {
 		// A peer not known to keep connections open (one that predates connection reuse, or not heard from yet)
 		// gets a connection of its own, closed after the reply. Reusing one such a peer has already closed would
 		// fail the request, and could not safely be retried.
-		conn, err := st.dialPeer(node)
+		conn, err := st.dialPeer(ctx, node)
 		if err != nil {
 			return nil, err
 		}
-		reply, err := st.roundTrip(conn, raw)
+		reply, err := st.roundTrip(ctx, conn, raw)
 		conn.Close()
 		if err != nil {
 			node.ClearAddress()
@@ -260,11 +274,11 @@ func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, e
 		}
 		return reply, nil
 	}
-	conn, addr, uses, err := st.replyConn(node)
+	conn, addr, uses, err := st.replyConn(ctx, node)
 	if err != nil {
 		return nil, err
 	}
-	reply, err := st.roundTrip(conn, raw)
+	reply, err := st.roundTrip(ctx, conn, raw)
 	if err != nil {
 		conn.Close()
 		node.ClearAddress()
@@ -274,8 +288,15 @@ func (st *SocketTransport) SendWithReply(node *Node, packet *Packet) (*Packet, e
 	return reply, nil
 }
 
+// bound returns ctx ended also when the transport stops.
+func (st *SocketTransport) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(st.ctx, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
 // replyConn returns a live pooled connection to node (with the number of replies it has carried), or dials one.
-func (st *SocketTransport) replyConn(node *Node) (net.Conn, string, int, error) {
+func (st *SocketTransport) replyConn(ctx context.Context, node *Node) (net.Conn, string, int, error) {
 	if err := st.ensureNodeAddressResolved(node); err == nil {
 		addr := node.GetAddress()
 		key := addr.String()
@@ -294,7 +315,7 @@ func (st *SocketTransport) replyConn(node *Node) (net.Conn, string, int, error) 
 			}
 		}
 	}
-	conn, err := st.dialPeer(node)
+	conn, err := st.dialPeer(ctx, node)
 	if err != nil {
 		return nil, "", 0, err
 	}
@@ -302,13 +323,35 @@ func (st *SocketTransport) replyConn(node *Node) (net.Conn, string, int, error) 
 	return conn, addr.String(), 0, nil
 }
 
-// roundTrip writes a request and reads its reply.
-func (st *SocketTransport) roundTrip(conn net.Conn, raw []byte) (*Packet, error) {
+// roundTrip writes a request and reads its reply, within TCPDeadline and ctx: a ctx that ends meanwhile interrupts
+// the connection (the caller then closes it).
+func (st *SocketTransport) roundTrip(ctx context.Context, conn net.Conn, raw []byte) (*Packet, error) {
+	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
+	defer stop()
 	if err := st.writeRawPacket(conn, raw); err != nil {
-		return nil, err
+		return nil, ctxErr(ctx, err)
 	}
-	reply, _, _, err := st.readPacketFlags(conn, st.config.TCPDeadline)
-	return reply, err
+	timeout := st.config.TCPDeadline
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < timeout {
+		timeout = time.Until(dl)
+	}
+	reply, _, _, err := st.readPacketFlags(conn, timeout)
+	return reply, ctxErr(ctx, err)
+}
+
+// ctxErr is err, or ctx's error when ctx ended or its deadline has passed (the cause of an interrupted connection's
+// error: a read bounded by the deadline can time out an instant before ctx says so).
+func ctxErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return err
 }
 
 // SetStreamHandler implements streamTransport.
@@ -324,7 +367,9 @@ func (st *SocketTransport) OpenStream(ctx context.Context, node *Node, packet *P
 		return nil, err
 	}
 
-	conn, err := st.dialPeer(node)
+	dctx, cancel := st.bound(ctx)
+	defer cancel()
+	conn, err := st.dialPeer(dctx, node) // the caller's deadline, and the transport stopping, bound the dial too
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +566,7 @@ func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, pack
 }
 
 func (st *SocketTransport) sendTCP(node *Node, rawPacket []byte) error {
-	conn, err := st.dialPeer(node)
+	conn, err := st.dialPeer(st.ctx, node)
 	if err != nil {
 		node.ClearAddress()
 		return err
@@ -565,19 +610,24 @@ func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
 	return sendErr
 }
 
-func (st *SocketTransport) dialPeer(node *Node) (net.Conn, error) {
+// dialPeer connects to node, each attempt bounded by TCPDialTimeout and every attempt by ctx (the caller's deadline,
+// and the transport's lifetime).
+func (st *SocketTransport) dialPeer(ctx context.Context, node *Node) (net.Conn, error) {
 	if err := st.ensureNodeAddressResolved(node); err != nil {
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
 
 	tryDial := func(addr Address) (net.Conn, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		tcpAddr := &net.TCPAddr{IP: addr.IP, Port: addr.Port}
+		ctx, cancel := context.WithTimeout(ctx, st.config.TCPDialTimeout)
+		defer cancel()
 		if st.config.DialFunc != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), st.config.TCPDialTimeout)
-			defer cancel()
 			return st.config.DialFunc(ctx, "tcp", tcpAddr.String())
 		}
-		return net.DialTimeout("tcp", tcpAddr.String(), st.config.TCPDialTimeout)
+		return (&net.Dialer{}).DialContext(ctx, "tcp", tcpAddr.String())
 	}
 
 	addr := node.GetAddress()

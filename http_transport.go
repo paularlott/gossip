@@ -123,7 +123,7 @@ func (ht *HTTPTransport) requestTimeout() time.Duration {
 // It resolves the node address, builds the request with auth headers, and
 // executes it. The caller is responsible for closing the returned response
 // body (and draining it if connection reuse is desired).
-func (ht *HTTPTransport) sendRequest(node *Node, packet *Packet, replyExpected bool) (*http.Response, error) {
+func (ht *HTTPTransport) sendRequest(ctx context.Context, node *Node, packet *Packet, replyExpected bool) (*http.Response, error) {
 	rawPacket, err := ht.packetToBuffer(packet, replyExpected)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,10 @@ func (ht *HTTPTransport) sendRequest(node *Node, packet *Packet, replyExpected b
 		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
 	}
 
-	ctx, cancel := context.WithTimeout(ht.ctx, ht.requestTimeout())
+	// The request lives within the transport's timeout and the caller's ctx, and ends when the transport stops.
+	ctx, cancelTimeout := context.WithTimeout(ctx, ht.requestTimeout())
+	stopShutdown := context.AfterFunc(ht.ctx, cancelTimeout)
+	cancel := func() { stopShutdown(); cancelTimeout() }
 
 	addr := node.GetAddress()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, addr.URL, bytes.NewReader(rawPacket))
@@ -162,7 +165,7 @@ func (ht *HTTPTransport) sendRequest(node *Node, packet *Packet, replyExpected b
 }
 
 func (ht *HTTPTransport) Send(transportType TransportType, node *Node, packet *Packet) error {
-	resp, err := ht.sendRequest(node, packet, false)
+	resp, err := ht.sendRequest(ht.ctx, node, packet, false)
 	if err != nil {
 		return err
 	}
@@ -176,8 +179,16 @@ func (ht *HTTPTransport) Name() string {
 	return "http"
 }
 
+// SendWithReply sends packet and waits for the reply, bounded by the transport's timeout (SendWithReplyContext with
+// no deadline of the caller's own).
 func (ht *HTTPTransport) SendWithReply(node *Node, packet *Packet) (*Packet, error) {
-	resp, err := ht.sendRequest(node, packet, true)
+	return ht.SendWithReplyContext(context.Background(), node, packet)
+}
+
+// SendWithReplyContext sends packet and waits for the reply, within the transport's timeout and ctx (its deadline or
+// cancellation), and not past the transport stopping.
+func (ht *HTTPTransport) SendWithReplyContext(ctx context.Context, node *Node, packet *Packet) (*Packet, error) {
+	resp, err := ht.sendRequest(ctx, node, packet, true)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/paularlott/gossip/hlc"
@@ -110,17 +111,42 @@ func (c *Cluster) SendToPeersReliable(dstNodes []*Node, msgType MessageType, dat
 	return c.sendMessage(dstNodes, TransportReliable, 1, msgType, data)
 }
 
-// Send a message to the peer then accept a response message.
+// SendToWithResponse sends a message to the peer and waits for its response message, bounded by the transport's
+// timeouts (TCPDialTimeout, TCPDeadline): SendToWithResponseContext with no deadline of the caller's own.
+func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
+	return c.SendToWithResponseContext(context.Background(), dstNode, msgType, payload, responsePayload)
+}
+
+// SendToWithResponseContext sends a message to the peer and waits for its response message, also within ctx: its
+// deadline or cancellation ends the exchange, the dial included, with ctx's error. With a transport that is not a
+// ContextTransport the wait ends with ctx while the exchange runs on to the transport's own timeouts.
+func (c *Cluster) SendToWithResponseContext(ctx context.Context, dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	return c.sendToWithResponseContext(ctx, dstNode, msgType, payload, responsePayload)
+}
+
+// sendToWithResponse is SendToWithResponse for any message type (the cluster's own included).
 func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
+	return c.sendToWithResponseContext(context.Background(), dstNode, msgType, payload, responsePayload)
+}
+
+func (c *Cluster) sendToWithResponseContext(ctx context.Context, dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	packet, err := c.createPacketWithTarget(c.localNode.ID, &dstNode.ID, msgType, 1, payload)
 	if err != nil {
 		return err
 	}
 	defer packet.Release()
 
-	responsePacket, err := c.transport.SendWithReply(dstNode, packet)
+	responsePacket, err := c.sendWithReply(ctx, dstNode, packet)
 	if err != nil {
-		dstNode.ClearAddress()
+		if ctx.Err() == nil {
+			dstNode.ClearAddress() // the peer failed, not the caller's deadline
+		}
 		return err
 	}
 	if responsePacket == nil {
@@ -141,12 +167,35 @@ func (c *Cluster) sendToWithResponse(dstNode *Node, msgType MessageType, payload
 	return nil
 }
 
-// Send a message to the peer then accept a response message.
-// Uses a TCP connection to send the packet and receive the response.
-func (c *Cluster) SendToWithResponse(dstNode *Node, msgType MessageType, payload interface{}, responsePayload interface{}) error {
-	if msgType < ReservedMsgsStart {
-		return fmt.Errorf("invalid message type")
+// sendWithReply runs the transport's exchange within ctx: through ContextTransport when the transport is one,
+// otherwise by waiting for it no longer than ctx (a reply that arrives after is released).
+func (c *Cluster) sendWithReply(ctx context.Context, node *Node, packet *Packet) (*Packet, error) {
+	if ct, ok := c.transport.(ContextTransport); ok {
+		return ct.SendWithReplyContext(ctx, node, packet)
 	}
-
-	return c.sendToWithResponse(dstNode, msgType, payload, responsePayload)
+	if ctx.Done() == nil {
+		return c.transport.SendWithReply(node, packet)
+	}
+	type result struct {
+		reply *Packet
+		err   error
+	}
+	done := make(chan result, 1)
+	own := packet.AddRef() // the exchange may outlive this call
+	go func() {
+		defer own.Release()
+		reply, err := c.transport.SendWithReply(node, own)
+		done <- result{reply, err}
+	}()
+	select {
+	case r := <-done:
+		return r.reply, r.err
+	case <-ctx.Done():
+		go func() {
+			if r := <-done; r.reply != nil {
+				r.reply.Release()
+			}
+		}()
+		return nil, ctx.Err()
+	}
 }

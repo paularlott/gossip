@@ -240,3 +240,35 @@ func TestSocketTransport_UsesDialFunc(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// A stream's dial is bounded by the caller's context as well as TCPDialTimeout: a 25ms deadline ends a dial that
+// would take far longer.
+func TestSocketTransport_StreamDialHonoursContext(t *testing.T) {
+	slow := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil, errors.New("dial took too long")
+		}
+	}
+	st := NewSocketTransport(&Config{
+		BindAddr: "127.0.0.1:0", IncomingPacketQueueDepth: 10, Logger: logger.NewNullLogger(),
+		MsgCodec: codec.NewJSONCodec(), TCPDeadline: 5 * time.Second, UDPDeadline: 5 * time.Second,
+		TCPDialTimeout: 3 * time.Second, UDPMaxPacketSize: 1024, TCPMaxPacketSize: 65536, DialFunc: slow,
+	})
+	node := newNode(NodeID(uuid.New()), "127.0.0.1:1")
+	node.address = Address{IP: net.ParseIP("127.0.0.1"), Port: 1}
+	packet := testPacket(st.config.MsgCodec, "stream request")
+	defer packet.Release()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := st.OpenStream(ctx, node, packet)
+	if err == nil {
+		t.Fatal("stream opened through a dial that never completes")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("stream dial ignored the caller's 25ms deadline: %s (%v)", elapsed, err)
+	}
+}
