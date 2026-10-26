@@ -85,6 +85,18 @@ func TestFormationNotTakenWhenAnyAnswerIsFormed(t *testing.T) {
 			t.Fatal("a formed node resynced from unformed answers")
 		}
 	})
+	t.Run("a node is down", func(t *testing.T) {
+		// The two joiners formed and committed writes the founder never saw; then one joiner lost its disk while the
+		// other is down. The stale founder answers alone, unformed: it must not be recovered from.
+		fc, _ := formationCluster(t)
+		r, founder, down := fc.nodes[0], fc.nodes[1], fc.nodes[2]
+		founder.store.seedCommitted(1, 2, ep(1, 1))
+		loseData(r)
+		down.down.Store(true)
+		if r.m.syncOnce() || !r.m.Resyncing() {
+			t.Fatal("recovered from the founder alone while another node of the cluster did not answer")
+		}
+	})
 	t.Run("no intact answer", func(t *testing.T) {
 		fc, _ := formationCluster(t)
 		loseData(fc.nodes[0])

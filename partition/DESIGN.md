@@ -294,11 +294,13 @@ participates; if one of those two loses its disk while the other is unreachable,
 would lose that acknowledged write.
 
 The one exception is the formation of a new data set around its founder (the one node that holds it, seeded or
-restored, intact and unformed, the others empty). A resyncing node that is itself unformed, when every answer it received
-(intact or not) reports unformed and at least one is intact, needs one intact answer instead of `resyncQuorum`, and
-syncs from the intact answers. This is safe because no write can have been committed without an unformed node: every
-commit needs a takeover and every takeover a majority of promises, and giving a promise forms its giver. One formed
-answer, even from a node that is itself resyncing, rules the exception out. With the hooks left nil every node counts as
+restored, intact and unformed, the others empty). A resyncing node that is itself unformed, when every other node of the
+cluster answered, every answer (intact or not) reports unformed and at least one is intact, needs one intact answer
+instead of `resyncQuorum`, and syncs from the intact answers. This is safe because no write can have been committed
+without an unformed node: every commit needs a takeover and every takeover a majority of promises, and giving a promise
+forms its giver. One formed answer, even from a node that is itself resyncing, rules the exception out, and so does a node
+that does not answer: it may have formed with another and committed writes the founder never saw. A new data set
+therefore forms once every node has started. With the hooks left nil every node counts as
 formed, and a new data set then forms only with `ForceResync` set on the empty nodes for that start (the operator
 ensures that the seed holds the intended data set).
 

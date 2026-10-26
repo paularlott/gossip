@@ -30,9 +30,9 @@ func (m *Manager) syncLoop() {
 // majority of nodes including this one (in resync mode resyncQuorum of the other nodes; with ForceResync, at least one)
 // are in, it catches every partition up to what the highest reporter has committed; in resync mode it also raises each
 // partition's promise to the highest reported, adopts pending writes and leaves resync mode. In resync mode an intact
-// answer from a node that has not formed (stateResp.Unformed) does not count, unless every answer is unformed and this
-// node has not formed either: that is the formation of a new data set, which one intact answer (the founder's)
-// suffices for. It reports whether every
+// answer from a node that has not formed (stateResp.Unformed) does not count, unless every other node of the cluster
+// answered, all unformed, and this node has not formed either: that is the formation of a new data set, which one
+// intact answer (the founder's) suffices for. It reports whether every
 // partition is caught up to what the answers reported.
 func (m *Manager) syncOnce() bool {
 	resync := m.resync.Load()
@@ -69,10 +69,11 @@ func (m *Manager) syncOnce() bool {
 		have++ // this node's own state is one of the majority
 	case m.cfg.ForceResync:
 		need = 1 // an operator accepted resyncing from whichever intact nodes answer
-	case !m.formed.Load() && !anyFormed && intact > 0:
-		// Formation: this node and every node that answered are unformed, so no write can have been committed without
-		// them (every commit needs a takeover, and a takeover a promise, which forms its giver), and the intact ones,
-		// the founder, hold the data set. Nothing else lowers the quorum.
+	case !m.formed.Load() && !anyFormed && intact > 0 && intact+notIntact == m.cfg.ClusterSize-1:
+		// Formation: this node and EVERY other node of the cluster answered unformed, so no write can have been
+		// committed (every commit needs a takeover, and a takeover a promise, which forms its giver), and the intact
+		// ones, the founder, hold the data set. Every other node must answer: one that is down may have formed with
+		// another and committed writes the founder never saw. Nothing else lowers the quorum.
 		formation, need = true, 1
 	default:
 		// Any formed peer can be stale: another majority may have committed without it. Only an explicit ForceResync
