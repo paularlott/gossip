@@ -327,8 +327,9 @@ majority-intersection argument (§9). In addition to catching up, it:
 ## 8. Reads
 
 **Local reads and staleness.** `CanRead(p)` is true while this node leads `p`, its takeover has settled (§4), and it has had
-majority contact within `StaleAfter`; or, as a follower, while it has seen the owner's heartbeat within `StaleAfter`, has
-not trailed a reported committed position for `StaleAfter` (§6), and `p` has not diverged here. It is false in resync
+majority contact within `StaleAfter`; or, as a follower, while it has seen an owner's heartbeat within `StaleAfter` (a
+relinquish ends the owner's tenure but not this freshness, so a follower keeps serving through a hand-over), has not
+trailed a reported committed position for `StaleAfter` (§6), and `p` has not diverged here. It is false in resync
 mode. A node that is cut off stops serving after that. The owner's copy is current; a follower's is as fresh as the last commit notice or heartbeat (a
 message behind after a write, up to `HeartbeatInterval` if the notice was lost). A deposed owner that has not heard of it
 can serve local reads for up to `StaleAfter`. `WaitApplied(p, pos)` returns once this node's committed Seq is at least

@@ -74,6 +74,7 @@ type partState struct {
 	owner        gossip.NodeID // owner believed in (from heartbeats, or self); EmptyNodeID: none
 	ownerEpoch   Epoch
 	ownerSeen    time.Time // last heartbeat from the owner (for this node as owner: last majority contact)
+	heard        time.Time // follower: last heartbeat from an owner, for read freshness (CanRead); a hand-over keeps it
 	leading      bool      // this node completed a promise round at myEpoch and has not stepped down
 	myEpoch      Epoch
 	settled      bool      // owner only: the takeover has committed the write it settled (takeoverSettled)
@@ -495,7 +496,10 @@ func (m *Manager) canReadLocked(ps *partState, now time.Time) bool {
 	if ps.diverged || (!ps.lagSince.IsZero() && now.Sub(ps.lagSince) >= m.cfg.StaleAfter) {
 		return false
 	}
-	return !ps.ownerSeen.IsZero() && now.Sub(ps.ownerSeen) < m.cfg.StaleAfter
+	// Freshness, not the owner's tenure: a follower keeps serving what it has when its owner hands over (relinquish
+	// clears ownerSeen so that a successor's promise round is not refused), within StaleAfter of the last heartbeat, as
+	// it does between heartbeats.
+	return !ps.heard.IsZero() && now.Sub(ps.heard) < m.cfg.StaleAfter
 }
 
 // HandleOwnershipFunc registers a function called whenever this node's belief about the owner of a partition
@@ -559,6 +563,7 @@ func (m *Manager) setOwner(p int, owner gossip.NodeID, epoch Epoch) {
 func (m *Manager) setOwnerLocked(ps *partState, owner gossip.NodeID, epoch Epoch) bool {
 	changed := ps.owner != owner || ps.ownerEpoch != epoch
 	ps.owner, ps.ownerEpoch, ps.ownerSeen = owner, epoch, m.now()
+	ps.heard = ps.ownerSeen
 	ps.ownerlessSince = time.Time{}
 	return changed
 }

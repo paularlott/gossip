@@ -254,3 +254,28 @@ func TestRelinquishLapsesOwnerSeen(t *testing.T) {
 		t.Fatal("a relinquished partition is not ownerless")
 	}
 }
+
+// A follower keeps serving reads through its owner's hand-over (relinquish ends the owner's tenure, not the freshness
+// of what the follower holds), and stops once StaleAfter has passed since it last heard from an owner.
+func TestRelinquishKeepsReadsWithinStaleAfter(t *testing.T) {
+	fc := newFakeCluster(t, 3, 3, nil)
+	m := fc.nodes[0].m
+	m.setOwner(1, nid(2), ep(3, 2))
+	if !m.CanRead(1) {
+		t.Fatal("setup: a follower that just heard its owner does not read")
+	}
+	m.handleRelinquish(nid(2), &relinquishMsg{Size: 3, P: 1, Epoch: ep(3, 2)})
+	if _, ok := m.Owner(1); ok {
+		t.Fatal("still believes in a relinquished owner")
+	}
+	if !m.CanRead(1) {
+		t.Fatal("reads refused the moment the owner handed over")
+	}
+	ps := m.parts[1]
+	ps.vmu.Lock()
+	ps.heard = time.Now().Add(-m.cfg.StaleAfter - time.Millisecond)
+	ps.vmu.Unlock()
+	if m.CanRead(1) {
+		t.Fatal("reads served past StaleAfter since an owner was last heard")
+	}
+}
