@@ -369,6 +369,12 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	c.remembered(joinReply.NodeID)
 	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
+	// A peer held dead has just answered us itself: it is alive, as a dead-node retry that got an answer finds. Left
+	// dead, every join reply listing it queues another join to it, and two such peers listing each other keep the join
+	// worker dialling them without pause (a connection each) until the next dead-node retry.
+	if node.GetObservedState() == NodeDead {
+		c.nodes.updateState(node.ID, NodeAlive)
+	}
 	node.learn(joinReply.KeyWindow, joinReply.Caps)
 
 	// Update the copy of the nodes metadata and notify so that NodeGroups
@@ -594,13 +600,12 @@ func (c *Cluster) handleIncomingPacket(packet *Packet) {
 	// Forward packets to nodes with matching tags. Requests awaiting a reply
 	// are point-to-point and never forwarded; everything else is, however it
 	// arrived. (This used to test CanReply, which is also true for
-	// fire-and-forget packets delivered over TCP — they carry their
-	// connection — so nothing received over TCP was ever re-gossiped: in
-	// TCP-only clusters, and for any packet too large for UDP, broadcasts
-	// stopped at the sender's first fan-out.)
+	// fire-and-forget packets delivered over TCP, so nothing received over TCP
+	// was ever re-gossiped: in TCP-only clusters, and for any packet too large
+	// for UDP, broadcasts stopped at the sender's first fan-out.)
 	if !packet.awaitingReply() {
 		var transportType TransportType
-		if packet.conn != nil {
+		if packet.arrivedReliably() {
 			transportType = TransportReliable
 		} else {
 			transportType = TransportBestEffort
@@ -1036,8 +1041,30 @@ func (c *Cluster) HandleFuncWithReply(msgType MessageType, replyHandler ReplyHan
 	return nil
 }
 
+// HandleFuncWithResponse is HandleFuncWithReply. The handler runs on one of the cluster's incoming workers
+// (Config.NumIncomingWorkers) until it returns the reply, so a handler that waits for something slow (other nodes, a
+// disk) occupies a worker for that time; HandleFuncWithDeferredReply answers later without doing so.
 func (c *Cluster) HandleFuncWithResponse(msgType MessageType, replyHandler ReplyHandler) error {
 	return c.HandleFuncWithReply(msgType, replyHandler)
+}
+
+// HandleFuncWithDeferredReply registers a handler for a request that answers it through a Replier, now or later from
+// any goroutine, so that the handler does not hold an incoming worker while the answer is prepared: the handler
+// decodes the request, starts the work (typically in a goroutine of its own) and returns, and the worker serves the
+// next message. The requester (SendToWithResponse, SendToWithResponseContext) cannot tell the difference, on the
+// socket and HTTP transports alike, and waits for the reply as long as its own deadline and the transport's
+// (TCPDeadline) allow; a reply that comes later is dropped.
+//
+// The Replier holds the request packet until its Reply is called, so every request must be answered (with a nil
+// payload or an error to send nothing) on every path. Reply sends nothing for an error or a nil payload, nothing for a
+// request that is not waiting for a reply, and does nothing the second time. Decode the request before the handler
+// returns; see Replier and DeferredReplyHandler. Like HandleFuncWithReply it always uses the reliable transport.
+func (c *Cluster) HandleFuncWithDeferredReply(msgType MessageType, handler DeferredReplyHandler) error {
+	if msgType < ReservedMsgsStart {
+		return fmt.Errorf("invalid message type")
+	}
+	c.handlers.registerHandlerWithDeferredReply(msgType, handler)
+	return nil
 }
 
 func (c *Cluster) UnregisterMessageType(msgType MessageType) bool {

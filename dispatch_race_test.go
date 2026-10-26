@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/hlc"
-	"github.com/paularlott/logger"
 )
 
 // Regression test for a use-after-release on the dispatch error path:
@@ -22,16 +20,8 @@ import (
 // broadcasts a packet), so it is the background load here. Meaningful under
 // -race; without it the test only checks the path does not panic or leak.
 func TestDispatchErrorPathDoesNotTouchReleasedPacket(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.MsgCodec = codec.NewJSONCodec()
-	cfg.Transport = &mockTransport{}
-	cfg.Logger = logger.NewNullLogger()
-	c, err := NewCluster(cfg)
-	if err != nil {
-		t.Fatalf("cluster: %v", err)
-	}
+	c := newUnitCluster(t)
 	c.Start()
-	defer c.Stop()
 
 	const failingMsg = UserMsg + 7
 	if err := c.HandleFunc(failingMsg, func(*Node, *Packet) error {
@@ -90,14 +80,14 @@ func TestDispatchErrorPathDoesNotTouchReleasedPacket(t *testing.T) {
 				p.SenderID = sender.ID
 				p.MessageID = MessageID(hlc.Now())
 				p.TTL = uint8(i % 2) // exercise both the forward and no-forward paths
-				p.codec = cfg.MsgCodec
+				p.codec = c.config.MsgCodec
 				p.payload = []byte(`{}`)
 				c.handleIncomingPacket(p)
 			}
 		}(g)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	close(stop)
 	wg.Wait()
 }
@@ -105,7 +95,7 @@ func TestDispatchErrorPathDoesNotTouchReleasedPacket(t *testing.T) {
 // A packet for a message type with no handler must still be released, so a
 // connection-owning packet does not hold its connection open.
 func TestUnhandledPacketIsReleased(t *testing.T) {
-	c := newTestCluster(t)
+	c := newUnitCluster(t)
 	sender := newNode(NodeID(uuid.New()), "127.0.0.1:1")
 	c.nodes.addIfNotExists(sender)
 

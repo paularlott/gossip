@@ -3,6 +3,7 @@ package gossip
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,639 +14,255 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression/snappy"
 	"github.com/paularlott/gossip/hlc"
 	"github.com/paularlott/logger"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestHTTPTransport_NewHTTPTransport(t *testing.T) {
-	config := &Config{
-		IncomingPacketQueueDepth: 10,
-		MsgCodec:                 codec.NewJSONCodec(),
-	}
-
-	transport := NewHTTPTransport(config)
-
-	if transport.Name() != "http" {
-		t.Errorf("Expected name 'http', got %s", transport.Name())
-	}
-
-	// No client-level timeout: the request budget is bounded by the per-call
-	// context derived from the cluster's shutdown context (see sendRequest).
-	if transport.client.Timeout != 0 {
-		t.Errorf("Expected no client-level timeout, got %v", transport.client.Timeout)
-	}
-
-	// Default request timeout falls back to transportMaxWaitTime when
-	// TCPDialTimeout is not configured.
-	if got := transport.requestTimeout(); got != transportMaxWaitTime {
-		t.Errorf("Expected request timeout %v, got %v", transportMaxWaitTime, got)
-	}
-
-	// ctx defaults to Background before Start is called.
-	if transport.ctx == nil {
-		t.Error("Expected non-nil ctx before Start")
-	}
-
-	// Start adopts the supplied context.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := transport.Start(ctx, &sync.WaitGroup{}); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	if transport.ctx != ctx {
-		t.Error("Expected ctx to be replaced after Start")
-	}
-}
-
-func TestHTTPTransport_PacketSerialization(t *testing.T) {
-	config := &Config{
-		MsgCodec: codec.NewJSONCodec(),
-	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
-	}
-
-	decoded, err := transport.packetFromBuffer(data)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet: %v", err)
-	}
-
-	if decoded.MessageType != packet.MessageType {
-		t.Errorf("MessageType mismatch: expected %d, got %d", packet.MessageType, decoded.MessageType)
-	}
-	if string(decoded.Payload()) != string(packet.Payload()) {
-		t.Errorf("Payload mismatch: expected %s, got %s", packet.Payload(), decoded.Payload())
-	}
-
-	packet.Release()
-	decoded.Release()
-}
-
-func TestHTTPTransport_ReplyExpectedFlag(t *testing.T) {
-	config := &Config{
-		MsgCodec: codec.NewJSONCodec(),
-	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	dataWithReply, err := transport.packetToBuffer(packet, true)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet with reply: %v", err)
-	}
-
-	flags := uint16(dataWithReply[0]) | uint16(dataWithReply[1])<<8
-	if flags&replyExpectedFlag == 0 {
-		t.Error("Expected reply flag to be set")
-	}
-
-	dataNoReply, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet without reply: %v", err)
-	}
-
-	flags2 := uint16(dataNoReply[0]) | uint16(dataNoReply[1])<<8
-	if flags2&replyExpectedFlag != 0 {
-		t.Error("Expected reply flag to be unset")
-	}
-
-	packet.Release()
-}
-
-func TestHTTPTransport_HandleGossipRequest_NoReply(t *testing.T) {
-	config := &Config{
+func httpTestConfig(opts ...func(*Config)) *Config {
+	cfg := &Config{
 		IncomingPacketQueueDepth: 10,
 		MsgCodec:                 codec.NewJSONCodec(),
 		Logger:                   logger.NewNullLogger(),
 		TCPMaxPacketSize:         65535,
 	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
+	for _, opt := range opts {
+		opt(cfg)
 	}
-
-	req := httptest.NewRequest("POST", "/gossip", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	w := httptest.NewRecorder()
-
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Expected status %d, got %d", http.StatusNoContent, w.Code)
-	}
-
-	select {
-	case receivedPacket := <-transport.PacketChannel():
-		if string(receivedPacket.Payload()) != "test payload" {
-			t.Errorf("Received wrong payload: %s", receivedPacket.Payload())
-		}
-		receivedPacket.Release()
-	case <-time.After(100 * time.Millisecond):
-		t.Error("Packet not received")
-	}
-
-	packet.Release()
+	return cfg
 }
 
-func TestHTTPTransport_HandleGossipRequest_WithReply(t *testing.T) {
-	config := &Config{
-		IncomingPacketQueueDepth: 10,
-		MsgCodec:                 codec.NewJSONCodec(),
-		Logger:                   logger.NewNullLogger(),
-	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, true)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
-	}
-
-	// Test that reply flag is properly detected
-	flags := uint16(data[0]) | uint16(data[1])<<8
-	if flags&replyExpectedFlag == 0 {
-		t.Error("Expected reply flag to be set")
-	}
-
-	packet.Release()
+func httpTestNode(url string) *Node {
+	return &Node{ID: NodeID(uuid.New()), advertiseAddr: url, address: Address{URL: url}}
 }
 
-func TestHTTPTransport_Authentication(t *testing.T) {
-	config := &Config{
-		IncomingPacketQueueDepth: 10,
-		MsgCodec:                 codec.NewJSONCodec(),
-		Logger:                   logger.NewNullLogger(),
-		BearerToken:              "test-token",
-		TCPMaxPacketSize:         65535,
-	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
-	}
-
-	req := httptest.NewRequest("POST", "/gossip", bytes.NewReader(data))
-	w := httptest.NewRecorder()
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
-	}
-
-	req = httptest.NewRequest("POST", "/gossip", bytes.NewReader(data))
-	req.Header.Set("Authorization", "Bearer wrong-token")
-	w = httptest.NewRecorder()
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
-	}
-
-	req = httptest.NewRequest("POST", "/gossip", bytes.NewReader(data))
-	req.Header.Set("Authorization", "Bearer test-token")
-	w = httptest.NewRecorder()
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Expected status %d, got %d", http.StatusNoContent, w.Code)
-	}
-
-	packet.Release()
+func TestHTTPTransportName(t *testing.T) {
+	assert.Equal(t, "http", NewHTTPTransport(httpTestConfig()).Name())
 }
 
-func TestHTTPTransport_SendWithReply(t *testing.T) {
-	config := &Config{
-		MsgCodec:         codec.NewJSONCodec(),
-		Logger:           logger.NewNullLogger(),
-		TCPMaxPacketSize: 65535,
+// What the gossip endpoint answers: it authenticates before anything else, takes only POSTs of whole packets, and
+// answers 204 once a packet is queued (or with the reply when one is expected) and 503 when it cannot queue it.
+func TestHTTPHandleGossipRequest(t *testing.T) {
+	const token = "secret-token"
+	tests := []struct {
+		name      string
+		token     string // the configured BearerToken
+		method    string
+		auth      string // Authorization header
+		body      string // "packet", "reply packet", or the raw body
+		queueFull bool
+		wantCode  int
+		delivered bool
+	}{
+		{name: "packet", method: "POST", body: "packet", wantCode: 204, delivered: true},
+		{name: "not a POST", method: "GET", body: "packet", wantCode: 405},
+		{name: "garbage", method: "POST", body: "invalid data", wantCode: 400},
+		{name: "empty", method: "POST", body: "", wantCode: 400},
+		{name: "queue full", method: "POST", body: "packet", queueFull: true, wantCode: 503},
+		{name: "reply expected and queue full", method: "POST", body: "reply packet", queueFull: true, wantCode: 503},
+		{name: "reply expected and answered", method: "POST", body: "reply packet", wantCode: 200, delivered: true},
+		{name: "token missing", token: token, method: "POST", body: "packet", wantCode: 401},
+		{name: "token of another scheme", token: token, method: "POST", body: "packet", auth: "Basic abc", wantCode: 401},
+		{name: "wrong token", token: token, method: "POST", body: "packet", auth: "Bearer wrong-token", wantCode: 401},
+		{name: "right token", token: token, method: "POST", body: "packet", auth: "Bearer " + token, wantCode: 204, delivered: true},
+		{name: "authentication comes before the method check", token: token, method: "GET", body: "packet", wantCode: 401},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := httpTestConfig(func(c *Config) { c.BearerToken = tt.token })
+			ht := NewHTTPTransport(cfg)
+
+			p := NewPacket()
+			defer p.Release()
+			p.MessageType, p.SenderID, p.MessageID, p.TTL = UserMsg, NodeID(uuid.New()), MessageID(hlc.Now()), 3
+			p.SetCodec(cfg.MsgCodec)
+			p.SetPayload([]byte("http-request-body"))
+			body := tt.body
+			if body == "packet" || body == "reply packet" {
+				buf, err := ht.packetToBuffer(p, body == "reply packet")
+				require.NoError(t, err)
+				body = string(buf)
+			}
+			if tt.queueFull {
+				for range cap(ht.packetChannel) {
+					ht.packetChannel <- NewPacket()
+				}
+			}
+
+			// The node's side: takes the queued packet, and answers it if it wants a reply.
+			seen := make(chan string, 1)
+			if tt.delivered {
+				go func() {
+					got := <-ht.packetChannel
+					defer got.Release()
+					seen <- string(got.Payload())
+					if got.awaitingReply() {
+						got.SetPayload([]byte("the reply"))
+						got.AddRef()
+						got.SendReply()
+					}
+				}()
+			}
+
+			req := httptest.NewRequest(tt.method, "/gossip", strings.NewReader(body))
+			if tt.auth != "" {
+				req.Header.Set("Authorization", tt.auth)
+			}
+			w := httptest.NewRecorder()
+			ht.HandleGossipRequest(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			if tt.delivered {
+				assert.Equal(t, "http-request-body", <-seen)
+			} else if !tt.queueFull {
+				assert.Empty(t, ht.packetChannel, "nothing was queued")
+			}
+			if tt.wantCode == 200 {
+				reply, err := ht.packetFromBuffer(w.Body.Bytes())
+				require.NoError(t, err)
+				assert.Equal(t, "the reply", string(reply.Payload()))
+				reply.Release()
+			}
+		})
+	}
+}
+
+// Send and SendWithReply put the reply flag, the bearer token and the packet on the wire, and read what comes back.
+func TestHTTPSendWithReply(t *testing.T) {
+	replyPacket := func(cfg *Config) []byte {
+		p := NewPacket()
+		defer p.Release()
+		p.MessageType, p.SenderID, p.MessageID, p.TTL = replyMsg, NodeID(uuid.New()), MessageID(hlc.Now()), 5
+		p.SetCodec(cfg.MsgCodec)
+		p.SetPayload([]byte("server reply"))
+		buf, err := NewHTTPTransport(cfg).packetToBuffer(p, false)
+		require.NoError(t, err)
+		return buf
 	}
 
-	transport := NewHTTPTransport(config)
+	tests := []struct {
+		name      string
+		status    int
+		withReply bool // SendWithReply rather than Send
+		wantReply bool
+		wantErr   bool
+	}{
+		{name: "reply", status: 200, withReply: true, wantReply: true},
+		{name: "no content", status: 204, withReply: true},
+		{name: "server error", status: 500, withReply: true, wantErr: true},
+		{name: "send", status: 204},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := httpTestConfig(func(c *Config) { c.BearerToken = "secret-token" })
+			var mu sync.Mutex
+			var flags uint16
+			var auth string
+			var gotPayload []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				flags, auth = binary.LittleEndian.Uint16(body), r.Header.Get("Authorization")
+				gotPayload = body
+				mu.Unlock()
+				w.WriteHeader(tt.status)
+				if tt.status == 200 {
+					w.Write(replyPacket(cfg))
+				}
+			}))
+			defer server.Close()
 
+			ht := NewHTTPTransport(cfg)
+			p := NewPacket()
+			defer p.Release()
+			p.MessageType, p.SenderID, p.MessageID, p.TTL = UserMsg, NodeID(uuid.New()), MessageID(hlc.Now()), 5
+			p.SetCodec(cfg.MsgCodec)
+			p.SetPayload([]byte("client request"))
+
+			var reply *Packet
+			var err error
+			if tt.withReply {
+				reply, err = ht.SendWithReply(httpTestNode(server.URL), p)
+			} else {
+				err = ht.Send(TransportReliable, httpTestNode(server.URL), p)
+			}
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if tt.wantReply {
+				require.NotNil(t, reply)
+				assert.Equal(t, "server reply", string(reply.Payload()))
+				reply.Release()
+			} else {
+				assert.Nil(t, reply)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, tt.withReply, flags&replyExpectedFlag != 0, "the reply flag on the request")
+			assert.Equal(t, "Bearer secret-token", auth)
+			assert.True(t, bytes.Contains(gotPayload, []byte("client request")))
+		})
+	}
+}
+
+// Send reads the response to its end, which is what returns the connection to the pool: three sends to a server that
+// answers with a large body use one connection.
+func TestHTTPSendReusesConnection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-
-		flags := uint16(body[0])<<8 | uint16(body[1])
-		if flags&replyExpectedFlag == 0 {
-			t.Error("Expected reply flag to be set in request")
-		}
-
-		replyPacket := NewPacket()
-		replyPacket.MessageType = replyMsg
-		replyPacket.SenderID = NodeID(uuid.New())
-		replyPacket.MessageID = MessageID(hlc.Now())
-		replyPacket.TTL = 5
-		replyPacket.SetPayload([]byte("server reply"))
-		replyPacket.SetCodec(config.MsgCodec)
-
-		replyData, _ := transport.packetToBuffer(replyPacket, false)
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		w.Write(replyData)
-		replyPacket.Release()
+		io.Copy(io.Discard, r.Body)
+		w.Write(bytes.Repeat([]byte("x"), 256<<10))
 	}))
 	defer server.Close()
 
-	node := &Node{
-		ID:            NodeID(uuid.New()),
-		advertiseAddr: server.URL,
-		address:       Address{URL: server.URL},
+	d := &recordingDialer{}
+	cfg := httpTestConfig(func(c *Config) { c.DialFunc = d.dial })
+	ht := NewHTTPTransport(cfg)
+	p := testPacket(cfg.MsgCodec, "drain")
+	defer p.Release()
+
+	for range 3 {
+		require.NoError(t, ht.Send(TransportBestEffort, httpTestNode(server.URL), p.AddRef()))
 	}
 
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("client request"))
-	packet.SetCodec(config.MsgCodec)
-
-	reply, err := transport.SendWithReply(node, packet)
-	if err != nil {
-		t.Fatalf("Failed to send with reply: %v", err)
-	}
-
-	if reply == nil {
-		t.Fatal("Expected reply packet")
-	}
-
-	if string(reply.Payload()) != "server reply" {
-		t.Errorf("Expected 'server reply', got %s", reply.Payload())
-	}
-
-	packet.Release()
-	reply.Release()
+	addrs, _ := d.calls()
+	assert.Len(t, addrs, 1, "the connection was dialled once and reused")
 }
 
-func TestHTTPTransport_ErrorCases(t *testing.T) {
-	config := &Config{
-		MsgCodec: codec.NewJSONCodec(),
-		Logger:   logger.NewNullLogger(),
+// The size of a request body is bounded by the cap, whatever Content-Length claims.
+func TestReadBoundedBody(t *testing.T) {
+	tests := []struct {
+		name          string
+		size          int
+		contentLength int64 // what the sender claims
+		max           int64
+		want          int
+	}{
+		{"content length known", 4096, 4096, 1 << 16, 4096},
+		{"content length missing", 31, -1, 1 << 16, 31},
+		{"claims more than is sent", 21, 1024, 1 << 16, 21},
+		{"body over the cap is cut", 8192, 8192, 1024, 1024},
+		{"claim over the cap is not allocated", 2048, 1 << 30, 1024, 1024},
 	}
-
-	transport := NewHTTPTransport(config)
-
-	_, err := transport.packetFromBuffer([]byte{0x00})
-	if err == nil {
-		t.Error("Expected error for packet too small")
-	}
-
-	_, err = transport.packetFromBuffer([]byte{0xFF, 0xFF, 0x00})
-	if err == nil {
-		t.Error("Expected error for invalid header size")
-	}
-
-	req := httptest.NewRequest("GET", "/gossip", nil)
-	w := httptest.NewRecorder()
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
-	}
-
-	config.BearerToken = "test-token"
-	req = httptest.NewRequest("POST", "/gossip", strings.NewReader("test"))
-	req.Header.Set("Authorization", "Invalid format")
-	w = httptest.NewRecorder()
-	transport.HandleGossipRequest(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := bytes.Repeat([]byte("y"), tt.size)
+			got, err := readBoundedBody(bytes.NewReader(payload), tt.contentLength, tt.max)
+			require.NoError(t, err)
+			assert.Equal(t, payload[:tt.want], got)
+		})
 	}
 }
 
-func TestHTTPTransport_NodeAddressResolution(t *testing.T) {
-	transport := NewHTTPTransport(&Config{})
-
-	node := &Node{
-		ID:            NodeID(uuid.New()),
-		advertiseAddr: "",
-		address:       Address{},
-	}
-
-	err := transport.ensureNodeAddressResolved(node)
-	if err == nil {
-		t.Error("Expected error for empty advertise address")
-	}
-
-	node.advertiseAddr = "http://example.com:8080"
-	err = transport.ensureNodeAddressResolved(node)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	expectedURL := "http://example.com:8080"
-	addr := node.GetAddress()
-	actualURL := strings.TrimSuffix(addr.URL, "/")
-	if actualURL != expectedURL {
-		t.Errorf("Expected URL to be set to %s, got %s", expectedURL, actualURL)
-	}
-}
-
-// TestHTTPTransport_CompressionRoundTrip verifies that a Compressor configured
-// on both sides transparently compresses large payloads on the wire and
-// decompresses them on read.
-func TestHTTPTransport_CompressionRoundTrip(t *testing.T) {
-	config := &Config{
-		MsgCodec:         codec.NewJSONCodec(),
-		Logger:           logger.NewNullLogger(),
-		Compressor:       snappy.New(),
-		CompressMinSize:  32, // compress anything >= 32 bytes
-		TCPMaxPacketSize: 65535,
-	}
-
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	payload := bytes.Repeat([]byte("compressible-payload-"), 32) // ~640 bytes, very compressible
-	packet.SetPayload(payload)
-	packet.SetCodec(config.MsgCodec)
-
-	encoded, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("packetToBuffer failed: %v", err)
-	}
-
-	// The compression flag must be set on the wire.
-	flags := binaryLE(encoded[:2])
-	if flags&compressionFlag == 0 {
-		t.Error("Expected compression flag to be set on encoded packet")
-	}
-
-	// Compressed wire form must be smaller than the raw payload.
-	if len(encoded) >= len(payload) {
-		t.Errorf("expected compressed encoding (%d) to be smaller than payload (%d)", len(encoded), len(payload))
-	}
-
-	decoded, err := transport.packetFromBuffer(encoded)
-	if err != nil {
-		t.Fatalf("packetFromBuffer failed: %v", err)
-	}
-	defer decoded.Release()
-
-	if !bytes.Equal(decoded.Payload(), payload) {
-		t.Errorf("payload mismatch after roundtrip: got %d bytes, want %d", len(decoded.Payload()), len(payload))
-	}
-
-	packet.Release()
-}
-
-// TestHTTPTransport_CompressionDisabled verifies that without a Compressor the
-// wire form is never compressed and the flag is never set, even for large
-// payloads. Also verifies the receiver rejects a compressed packet when no
-// compressor is configured.
-func TestHTTPTransport_CompressionDisabled(t *testing.T) {
-	// Receiver with no compressor.
-	recvConfig := &Config{
-		MsgCodec:         codec.NewJSONCodec(),
-		Logger:           logger.NewNullLogger(),
-		TCPMaxPacketSize: 65535,
-	}
-	recv := NewHTTPTransport(recvConfig)
-
-	// Sender with a compressor.
-	sendConfig := &Config{
-		MsgCodec:        codec.NewJSONCodec(),
-		Logger:          logger.NewNullLogger(),
-		Compressor:      snappy.New(),
-		CompressMinSize: 32,
-	}
-	snd := NewHTTPTransport(sendConfig)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload(bytes.Repeat([]byte("compressible-payload-"), 32))
-	packet.SetCodec(sendConfig.MsgCodec)
-
-	encoded, err := snd.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("send packetToBuffer failed: %v", err)
-	}
-	if flags := binaryLE(encoded[:2]); flags&compressionFlag == 0 {
-		t.Error("expected sender to set compression flag")
-	}
-
-	// Receiver has no compressor: must error rather than silently corrupt.
-	if _, err := recv.packetFromBuffer(encoded); err == nil {
-		t.Error("expected error decoding compressed packet without compressor configured")
-	}
-	packet.Release()
-}
-
-// TestHTTPTransport_NoCompressionForSmallPayload verifies that payloads below
-// CompressMinSize are sent uncompressed even when a Compressor is configured.
-func TestHTTPTransport_NoCompressionForSmallPayload(t *testing.T) {
-	config := &Config{
-		MsgCodec:        codec.NewJSONCodec(),
-		Logger:          logger.NewNullLogger(),
-		Compressor:      snappy.New(),
-		CompressMinSize: 1024,
-	}
-	transport := NewHTTPTransport(config)
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("tiny"))
-	packet.SetCodec(config.MsgCodec)
-	defer packet.Release()
-
-	encoded, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("packetToBuffer failed: %v", err)
-	}
-	if flags := binaryLE(encoded[:2]); flags&compressionFlag != 0 {
-		t.Error("expected no compression flag for small payload")
-	}
-}
-
-// TestReadBoundedBody_ContentLength verifies pre-allocation on the happy path.
-func TestReadBoundedBody_ContentLength(t *testing.T) {
-	payload := bytes.Repeat([]byte("x"), 4096)
-	got, err := readBoundedBody(bytes.NewReader(payload), int64(len(payload)), 1<<16)
-	if err != nil {
-		t.Fatalf("readBoundedBody failed: %v", err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Errorf("body mismatch: got %d bytes, want %d", len(got), len(payload))
-	}
-}
-
-// TestReadBoundedBody_MissingContentLength verifies graceful fallback when the
-// hint is absent.
-func TestReadBoundedBody_MissingContentLength(t *testing.T) {
-	payload := []byte("no content length header at all")
-	got, err := readBoundedBody(bytes.NewReader(payload), -1, 1<<16)
-	if err != nil {
-		t.Fatalf("readBoundedBody failed: %v", err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Errorf("body mismatch: got %q, want %q", got, payload)
-	}
-}
-
-// TestReadBoundedBody_WrongContentLength verifies that a wrong hint (larger
-// than the actual body) is tolerated — we read what's actually there.
-func TestReadBoundedBody_WrongContentLength(t *testing.T) {
-	payload := []byte("actual body is short")
-	// Lie: claim 1 KiB when only 21 bytes are coming.
-	got, err := readBoundedBody(bytes.NewReader(payload), 1024, 1<<16)
-	if err != nil {
-		t.Fatalf("readBoundedBody failed: %v", err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Errorf("body mismatch: got %q, want %q", got, payload)
-	}
-}
-
-// TestReadBoundedBody_CapsOverflow verifies the max cap is enforced — a body
-// larger than max is truncated, never causing unbounded allocation.
-func TestReadBoundedBody_CapsOverflow(t *testing.T) {
-	payload := bytes.Repeat([]byte("y"), 8192)
-	max := int64(1024)
-	got, err := readBoundedBody(bytes.NewReader(payload), int64(len(payload)), max)
-	if err != nil {
-		t.Fatalf("readBoundedBody failed: %v", err)
-	}
-	if int64(len(got)) != max {
-		t.Errorf("expected body to be capped at %d bytes, got %d", max, len(got))
-	}
-}
-
-// TestReadBoundedBody_HintLargerThanMax verifies a contentLength larger than
-// max does NOT cause a too-large pre-allocation; the buffer is capped.
-func TestReadBoundedBody_HintLargerThanMax(t *testing.T) {
-	payload := bytes.Repeat([]byte("z"), 2048)
-	// Lie: claim 1 GiB. Max is 1 KiB. The buffer must be capped, not 1 GiB.
-	got, err := readBoundedBody(bytes.NewReader(payload), 1<<30, 1024)
-	if err != nil {
-		t.Fatalf("readBoundedBody failed: %v", err)
-	}
-	if int64(len(got)) > 1024 {
-		t.Errorf("expected body capped at 1024, got %d", len(got))
-	}
-}
-
-// TestHTTPTransport_SendDrainsBody verifies that Send reads the response body
-// to completion, which is what allows the underlying connection to be returned
-// to the pool. We assert by serving a known body and confirming it is consumed
-// in full on the server side.
-func TestHTTPTransport_SendDrainsBody(t *testing.T) {
-	config := &Config{
-		MsgCodec:         codec.NewJSONCodec(),
-		Logger:           logger.NewNullLogger(),
-		TCPMaxPacketSize: 65535,
-	}
-	transport := NewHTTPTransport(config)
-
-	serverPayload := []byte("drain-me-please")
-	var lastSeen int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		lastSeen = len(body)
-		w.WriteHeader(http.StatusNoContent)
-		w.Write(serverPayload)
-	}))
-	defer server.Close()
-
-	node := &Node{
-		ID:            NodeID(uuid.New()),
-		advertiseAddr: server.URL,
-		address:       Address{URL: server.URL},
-	}
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("client request"))
-	packet.SetCodec(config.MsgCodec)
-	defer packet.Release()
-
-	for i := 0; i < 3; i++ {
-		if err := transport.Send(TransportBestEffort, node, packet.AddRef()); err != nil {
-			t.Fatalf("Send failed on iteration %d: %v", i, err)
-		}
-	}
-	if lastSeen == 0 {
-		t.Error("server never observed a request body")
-	}
-}
-
-// TestHTTPTransport_SendRespectsContextCancellation verifies that cancelling
-// the context passed to Start aborts in-flight requests.
+// Stopping the transport (cancelling the context it was started with) aborts a request in flight.
 func TestHTTPTransport_SendRespectsContextCancellation(t *testing.T) {
-	config := &Config{
-		MsgCodec:         codec.NewJSONCodec(),
-		Logger:           logger.NewNullLogger(),
-		TCPMaxPacketSize: 65535,
-	}
-	transport := NewHTTPTransport(config)
+	cfg := httpTestConfig()
+	ht := NewHTTPTransport(cfg)
 
-	// Hang until the client cancels AND we release the server, so the test
-	// can shut down promptly after asserting the cancellation propagated.
-	// (We can't rely solely on r.Context().Done() because HTTP/1.1 servers
-	// only detect client disconnect on the next I/O attempt, which never
-	// comes while the handler is parked.)
+	// The handler waits for the client to give up, or for the test to release it.
 	started := make(chan struct{}, 1)
 	releaseServer := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -664,49 +281,24 @@ func TestHTTPTransport_SendRespectsContextCancellation(t *testing.T) {
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := transport.Start(ctx, &sync.WaitGroup{}); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
+	require.NoError(t, ht.Start(ctx, &sync.WaitGroup{}))
 
-	node := &Node{
-		ID:            NodeID(uuid.New()),
-		advertiseAddr: server.URL,
-		address:       Address{URL: server.URL},
-	}
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("will be cancelled"))
-	packet.SetCodec(config.MsgCodec)
-	defer packet.Release()
-
+	p := testPacket(cfg.MsgCodec, "will be cancelled")
+	defer p.Release()
 	errCh := make(chan error, 1)
-	go func() {
-		errCh <- transport.Send(TransportBestEffort, node, packet.AddRef())
-	}()
+	go func() { errCh <- ht.Send(TransportBestEffort, httpTestNode(server.URL), p.AddRef()) }()
 
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("server never received the request")
 	}
-
-	// Cancel the parent context; the in-flight Send must abort.
 	cancel()
 
 	select {
 	case err := <-errCh:
-		if err == nil {
-			t.Error("expected Send to return an error after context cancellation")
-		}
+		assert.Error(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Send did not return after context cancellation")
 	}
-}
-
-// binaryLE decodes a 2-byte little-endian uint16 (helper for tests).
-func binaryLE(b []byte) uint16 {
-	return uint16(b[0]) | uint16(b[1])<<8
 }

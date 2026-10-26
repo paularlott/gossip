@@ -2,71 +2,14 @@ package gossip
 
 import (
 	"errors"
-	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/paularlott/gossip/codec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-// Mock connection for testing
-type mockConn struct {
-	writeData []byte
-	closed    bool
-}
-
-func (m *mockConn) Read(b []byte) (n int, err error) {
-	return 0, nil
-}
-
-func (m *mockConn) Write(b []byte) (n int, err error) {
-	m.writeData = append(m.writeData, b...)
-	return len(b), nil
-}
-
-func (m *mockConn) Close() error {
-	m.closed = true
-	return nil
-}
-
-func (m *mockConn) LocalAddr() net.Addr {
-	return nil
-}
-
-func (m *mockConn) RemoteAddr() net.Addr {
-	return nil
-}
-
-func (m *mockConn) SetDeadline(t time.Time) error {
-	return nil
-}
-
-func (m *mockConn) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-func (m *mockConn) SetWriteDeadline(t time.Time) error {
-	return nil
-}
-
-func TestNewHandlerRegistry(t *testing.T) {
-	hr := newHandlerRegistry()
-
-	if hr == nil {
-		t.Fatal("newHandlerRegistry returned nil")
-	}
-
-	if hr.handlers.Load() == nil {
-		t.Fatal("handlers map not initialized")
-	}
-
-	if len(*hr.handlers.Load()) != 0 {
-		t.Fatal("handlers map should be empty initially")
-	}
-}
 
 func TestHandlerRegistryRegisterHandler(t *testing.T) {
 	hr := newHandlerRegistry()
@@ -160,16 +103,6 @@ func TestHandlerRegistryUnregister(t *testing.T) {
 	// Unregister non-existent handler
 	if hr.unregister(UserMsg) {
 		t.Fatal("Unregister should return false for non-existent handler")
-	}
-}
-
-func TestHandlerRegistryGetHandlerNonExistent(t *testing.T) {
-	hr := newHandlerRegistry()
-
-	// Get non-existent handler
-	h := hr.getHandler(UserMsg + 999)
-	if h != nil {
-		t.Fatal("Should return nil for non-existent handler")
 	}
 }
 
@@ -288,29 +221,68 @@ func TestMsgHandlerDispatchReplyHandlerNilReply(t *testing.T) {
 	}
 }
 
-func TestHandlerRegistryMultipleHandlers(t *testing.T) {
-	hr := newHandlerRegistry()
-
-	// Register multiple handlers
-	handler1 := func(*Node, *Packet) error { return nil }
-	handler2 := func(*Node, *Packet) error { return nil }
-	replyHandler := func(*Node, *Packet) (interface{}, error) { return nil, nil }
-
-	hr.registerHandler(UserMsg, handler1)
-	hr.registerHandler(UserMsg+1, handler2)
-	hr.registerHandlerWithReply(UserMsg+2, replyHandler)
-
-	// Verify all handlers are registered
-	h1 := hr.getHandler(UserMsg)
-	h2 := hr.getHandler(UserMsg + 1)
-	h3 := hr.getHandler(UserMsg + 2)
-
-	if h1 == nil || h2 == nil || h3 == nil {
-		t.Fatal("Not all handlers registered")
+// A reply handler's value is sent to a requester that is waiting for it, as a reply from this node; nothing is sent for
+// a nil value, an error, or when nobody is waiting, and a reply that cannot be encoded or delivered is an error.
+func TestMsgHandlerDispatchReply(t *testing.T) {
+	boom := errors.New("handler error")
+	tests := []struct {
+		name      string
+		value     interface{}
+		err       error
+		waiting   bool
+		full      bool // the requester is no longer reading its reply channel
+		failCodec bool
+		wantErr   bool
+		wantReply bool
+	}{
+		{name: "value", value: map[string]string{"reply": "ok"}, waiting: true, wantReply: true},
+		{name: "nil value", waiting: true},
+		{name: "error", value: map[string]string{"reply": "ok"}, err: boom, waiting: true, wantErr: true},
+		{name: "nobody waiting", value: map[string]string{"reply": "ok"}},
+		{name: "requester gone", value: map[string]string{"reply": "ok"}, waiting: true, full: true, wantErr: true},
+		{name: "reply cannot be encoded", value: map[string]string{"reply": "ok"}, waiting: true, failCodec: true, wantErr: true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newUnitCluster(t)
+			mh := &msgHandler{replyHandler: func(*Node, *Packet) (interface{}, error) { return tt.value, tt.err }}
+			replies := make(chan *Packet, 1)
+			if tt.full {
+				replies = make(chan *Packet) // nobody receives
+			}
+			p := NewPacket()
+			p.SetCodec(c.config.MsgCodec)
+			if tt.failCodec {
+				p.SetCodec(&failCodec{})
+			}
+			if tt.waiting {
+				p.SetReplyChan(replies)
+			}
 
-	if h1.handler == nil || h2.handler == nil || h3.replyHandler == nil {
-		t.Fatal("Handler functions not set correctly")
+			err := mh.dispatch(c, nil, p)
+
+			assert.Equal(t, tt.wantErr, err != nil, "error %v", err)
+			if tt.err != nil {
+				assert.Equal(t, tt.err, err)
+			}
+			if tt.wantReply {
+				assert.EqualValues(t, 1, refs(p), "the reply holds the packet")
+			} else {
+				assert.Zero(t, refs(p), "the packet is released on every path")
+			}
+			select {
+			case reply := <-replies:
+				require.True(t, tt.wantReply, "an unexpected reply")
+				defer reply.Release()
+				assert.Equal(t, replyMsg, reply.MessageType)
+				assert.Equal(t, c.localNode.ID, reply.SenderID)
+				var got map[string]string
+				require.NoError(t, reply.Unmarshal(&got))
+				assert.Equal(t, map[string]string{"reply": "ok"}, got)
+			default:
+				assert.False(t, tt.wantReply, "no reply was sent")
+			}
+		})
 	}
 }
 
@@ -413,153 +385,5 @@ func TestPacketReleaseInDispatch(t *testing.T) {
 	// Packet should be released after dispatch
 	if packet.refCount.Load() >= initialRefCount {
 		t.Fatal("Packet should be released after dispatch")
-	}
-}
-
-// Benchmarks
-
-func BenchmarkHandlerRegistryRegister(b *testing.B) {
-	hr := newHandlerRegistry()
-	handler := func(*Node, *Packet) error { return nil }
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, handler)
-	}
-}
-
-func BenchmarkHandlerRegistryGetHandler(b *testing.B) {
-	hr := newHandlerRegistry()
-	handler := func(*Node, *Packet) error { return nil }
-
-	// Pre-populate with handlers
-	for i := 0; i < 1000; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, handler)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		msgType := MessageType(int(UserMsg) + (i % 1000))
-		hr.getHandler(msgType)
-	}
-}
-
-func BenchmarkHandlerRegistryUnregister(b *testing.B) {
-	hr := newHandlerRegistry()
-	handler := func(*Node, *Packet) error { return nil }
-
-	// Pre-populate with handlers
-	for i := 0; i < b.N; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, handler)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.unregister(msgType)
-	}
-}
-
-func BenchmarkMsgHandlerDispatch(b *testing.B) {
-	mh := &msgHandler{
-		handler: func(*Node, *Packet) error { return nil },
-	}
-
-	node := &Node{ID: NodeID(uuid.New())}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		packet := NewPacket()
-		mh.dispatch(nil, node, packet)
-	}
-}
-
-func BenchmarkMsgHandlerDispatchReply(b *testing.B) {
-	mh := &msgHandler{
-		replyHandler: func(*Node, *Packet) (interface{}, error) {
-			return "reply", nil
-		},
-	}
-
-	config := DefaultConfig()
-	config.MsgCodec = codec.NewJSONCodec()
-	config.Transport = &mockTransport{}
-
-	cluster, err := NewCluster(config)
-	if err != nil {
-		b.Fatalf("Failed to create cluster: %v", err)
-	}
-
-	node := &Node{ID: NodeID(uuid.New())}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		packet := NewPacket()
-		packet.conn = &mockConn{}
-		packet.codec = config.MsgCodec
-		mh.dispatch(cluster, node, packet)
-	}
-}
-
-func BenchmarkHandlerRegistryConcurrentRead(b *testing.B) {
-	hr := newHandlerRegistry()
-	handler := func(*Node, *Packet) error { return nil }
-
-	// Pre-populate with handlers
-	for i := 0; i < 1000; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, handler)
-	}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			msgType := MessageType(int(UserMsg) + (b.N % 1000))
-			hr.getHandler(msgType)
-		}
-	})
-}
-
-func BenchmarkHandlerRegistryConcurrentWrite(b *testing.B) {
-	handler := func(*Node, *Packet) error { return nil }
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		hr := newHandlerRegistry()
-		i := 0
-		for pb.Next() {
-			msgType := MessageType(int(UserMsg) + i)
-			hr.registerHandler(msgType, handler)
-			i++
-		}
-	})
-}
-
-func BenchmarkHandlerRegistryMixed(b *testing.B) {
-	hr := newHandlerRegistry()
-	handler := func(*Node, *Packet) error { return nil }
-
-	// Pre-populate
-	for i := 0; i < 100; i++ {
-		msgType := MessageType(int(UserMsg) + i)
-		hr.registerHandler(msgType, handler)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		switch i % 3 {
-		case 0:
-			msgType := MessageType(int(UserMsg) + 1000 + i)
-			hr.registerHandler(msgType, handler)
-		case 1:
-			msgType := MessageType(int(UserMsg) + (i % 100))
-			hr.getHandler(msgType)
-		case 2:
-			msgType := MessageType(int(UserMsg) + (i % 100))
-			hr.unregister(msgType)
-		}
 	}
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec/shamaton"
 	"github.com/paularlott/gossip/encryption/aes"
-	"github.com/paularlott/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,23 +31,21 @@ type streamReq struct {
 	Size int `msgpack:"size" json:"size"`
 }
 
-// mkStreamCluster starts a socket cluster serving test streams: testStreamMsg
-// replies with req.Size bytes of a deterministic pattern, testStreamErr
-// writes some data then fails.
-func mkStreamCluster(t *testing.T, addr string, encrypt bool) *Cluster {
+// streamPacketLimit is the packet size limit of the stream tests' nodes: streams are many times larger.
+const streamPacketLimit = 64 * 1024
+
+// startStreamCluster starts a socket cluster serving test streams: testStreamMsg replies with req.Size bytes of a
+// deterministic pattern, testStreamErr writes some data then fails.
+func startStreamCluster(t testing.TB, encrypt bool) *Cluster {
 	t.Helper()
-	cfg := DefaultConfig()
-	cfg.BindAddr = addr
-	cfg.AdvertiseAddr = addr
-	cfg.Transport = NewSocketTransport(cfg)
-	cfg.MsgCodec = shamaton.New()
-	cfg.Logger = logger.NewNullLogger()
-	if encrypt {
-		cfg.EncryptionKey = []byte("0123456789abcdef0123456789abcdef")
-		cfg.Cipher = aes.New()
-	}
-	c, err := NewCluster(cfg)
-	require.NoError(t, err)
+	c := startLiveCluster(t, func(cfg *Config) {
+		cfg.MsgCodec = shamaton.New()
+		cfg.TCPMaxPacketSize = streamPacketLimit
+		if encrypt {
+			cfg.EncryptionKey = []byte("0123456789abcdef0123456789abcdef")
+			cfg.Cipher = aes.New()
+		}
+	})
 	require.NoError(t, c.HandleStreamFunc(testStreamMsg, func(sender *Node, packet *Packet, w io.Writer) error {
 		var req streamReq
 		if err := packet.Unmarshal(&req); err != nil {
@@ -61,7 +58,6 @@ func mkStreamCluster(t *testing.T, addr string, encrypt bool) *Cluster {
 		w.Write(bytes.Repeat([]byte("x"), 100000))
 		return errors.New("disk on fire")
 	}))
-	c.Start()
 	return c
 }
 
@@ -81,25 +77,17 @@ func patternSum(n int) [32]byte {
 	return sha256.Sum256(data)
 }
 
-func joinedPair(t *testing.T, encrypt bool) (*Cluster, *Cluster) {
+func joinedPair(t testing.TB, encrypt bool) (*Cluster, *Cluster) {
 	t.Helper()
-	addr1, addr2 := getFreeTCPAddress(t), getFreeTCPAddress(t)
-	c1 := mkStreamCluster(t, addr1, encrypt)
-	t.Cleanup(c1.Stop)
-	c2 := mkStreamCluster(t, addr2, encrypt)
-	t.Cleanup(c2.Stop)
-	require.NoError(t, c2.Join([]string{addr1}))
-	require.Eventually(t, func() bool {
-		return c1.GetNode(c2.LocalNode().ID) != nil && c2.GetNode(c1.LocalNode().ID) != nil
-	}, 5*time.Second, 50*time.Millisecond)
+	c1, c2 := startStreamCluster(t, encrypt), startStreamCluster(t, encrypt)
+	joinAndWait(t, c1, c2)
 	return c1, c2
 }
 
 func TestStream_SocketLargeReply(t *testing.T) {
 	for _, encrypt := range []bool{false, true} {
 		c1, c2 := joinedPair(t, encrypt)
-		// Far beyond the packet size limit.
-		const size = 24*1024*1024 + 123
+		const size = 16*streamPacketLimit + 123 // far beyond the packet size limit
 		r, err := c2.OpenStream(context.Background(), c2.GetNode(c1.LocalNode().ID), testStreamMsg, &streamReq{Size: size})
 		require.NoError(t, err)
 		data, err := io.ReadAll(r)
@@ -142,13 +130,9 @@ func TestStream_NoHandler(t *testing.T) {
 }
 
 func TestStream_UnknownSenderRefused(t *testing.T) {
-	addr1 := getFreeTCPAddress(t)
-	c1 := mkStreamCluster(t, addr1, false)
-	defer c1.Stop()
-	c2 := mkStreamCluster(t, getFreeTCPAddress(t), false)
-	defer c2.Stop()
+	c1, c2 := startStreamCluster(t, false), startStreamCluster(t, false)
 	// c2 never joins: c1 does not know it.
-	target := newNode(c1.LocalNode().ID, addr1)
+	target := newNode(c1.LocalNode().ID, c1.LocalNode().AdvertisedAddr())
 	r, err := c2.OpenStream(context.Background(), target, testStreamMsg, &streamReq{Size: 10})
 	require.NoError(t, err)
 	defer r.Close()
@@ -197,6 +181,7 @@ func TestStream_HTTPTransport(t *testing.T) {
 	serverCfg := DefaultConfig()
 	serverCfg.MsgCodec = shamaton.New()
 	serverCfg.BearerToken = "secret"
+	serverCfg.TCPMaxPacketSize = streamPacketLimit
 	server := NewHTTPTransport(serverCfg)
 	server.SetStreamHandler(func(packet *Packet, w io.Writer) error {
 		defer packet.Release()
@@ -216,6 +201,7 @@ func TestStream_HTTPTransport(t *testing.T) {
 	clientCfg := DefaultConfig()
 	clientCfg.MsgCodec = shamaton.New()
 	clientCfg.BearerToken = "secret"
+	clientCfg.TCPMaxPacketSize = streamPacketLimit
 	client := NewHTTPTransport(clientCfg)
 
 	open := func(size int) (io.ReadCloser, error) {
@@ -228,7 +214,7 @@ func TestStream_HTTPTransport(t *testing.T) {
 		return client.OpenStream(context.Background(), newNode(NodeID(uuid.New()), srv.URL), p)
 	}
 
-	const size = 9*1024*1024 + 7
+	const size = 16*streamPacketLimit + 7 // far beyond the packet size limit
 	r, err := open(size)
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
@@ -250,12 +236,8 @@ func TestStream_HTTPTransport(t *testing.T) {
 }
 
 func TestStream_UnsupportedTransport(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.MsgCodec = shamaton.New()
-	cfg.Transport = &noStreamTransport{}
-	c, err := NewCluster(cfg)
-	require.NoError(t, err)
-	_, err = c.OpenStream(context.Background(), newNode(NodeID(uuid.New()), "127.0.0.1:1"), testStreamMsg, &streamReq{})
+	c := newUnitCluster(t, func(cfg *Config) { cfg.Transport = &noStreamTransport{} })
+	_, err := c.OpenStream(context.Background(), newNode(NodeID(uuid.New()), "127.0.0.1:1"), testStreamMsg, &streamReq{})
 	assert.True(t, errors.Is(err, ErrStreamsUnsupported), "got %v", err)
 }
 
@@ -312,7 +294,7 @@ func TestStream_ServerStopsMidStream(t *testing.T) {
 	buf := make([]byte, 1<<20)
 	_, err = io.ReadFull(r, buf)
 	require.NoError(t, err)
-	c1.Stop()
+	stopQuietly(c1)
 	_, err = io.Copy(io.Discard, r)
 	assert.Error(t, err)
 	assert.False(t, errors.Is(err, io.EOF))
@@ -352,16 +334,16 @@ func TestStream_HTTPSAndWriteTimeout(t *testing.T) {
 	server := NewHTTPTransport(serverCfg)
 	server.SetStreamHandler(func(packet *Packet, w io.Writer) error {
 		defer packet.Release()
-		for i := 0; i < 8; i++ {
+		for i := 0; i < 5; i++ {
 			if _, err := w.Write(bytes.Repeat([]byte{byte(i)}, 256*1024)); err != nil {
 				return err
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(30 * time.Millisecond)
 		}
 		return nil
 	})
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(server.HandleGossipRequest))
-	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Config.WriteTimeout = 50 * time.Millisecond
 	srv.StartTLS()
 	defer srv.Close()
 
@@ -378,7 +360,7 @@ func TestStream_HTTPSAndWriteTimeout(t *testing.T) {
 	defer r.Close()
 	data, err := io.ReadAll(r)
 	require.NoError(t, err, "a stream outlasting the write timeout must still complete")
-	assert.Len(t, data, 8*256*1024)
+	assert.Len(t, data, 5*256*1024)
 }
 
 // The frame reader never panics or over-allocates on arbitrary input.
@@ -401,8 +383,7 @@ func FuzzFrameReader(f *testing.F) {
 func BenchmarkStreamThroughput(b *testing.B) {
 	for _, encrypt := range []bool{false, true} {
 		b.Run(fmt.Sprintf("encrypt=%v", encrypt), func(b *testing.B) {
-			t := &testing.T{}
-			c1, c2 := joinedPair(t, encrypt)
+			c1, c2 := joinedPair(b, encrypt)
 			node := c2.GetNode(c1.LocalNode().ID)
 			const size = 64 << 20
 			b.SetBytes(size)

@@ -13,48 +13,41 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/codec/shamaton"
 	"github.com/paularlott/logger"
 	"github.com/stretchr/testify/require"
 )
 
 const ctxQueryMsg MessageType = UserMsg + 40
 
-// twoNodes starts two connected clusters; the first answers ctxQueryMsg ("slow" after delay). wrap, if set, wraps the
-// client's transport.
-func twoNodes(t *testing.T, delay time.Duration, wrap ...func(Transport) Transport) (server, client *Cluster, node *Node) {
+// twoNodes starts two connected clusters; the first answers ctxQueryMsg, "slow" only once the test is over. wrap, if
+// set, wraps the client's transport.
+func twoNodes(t *testing.T, wrap ...func(Transport) Transport) (server, client *Cluster, node *Node) {
 	t.Helper()
-	a1, a2 := getFreeTCPAddress(t), getFreeTCPAddress(t)
-	server = mkShamatonCluster(t, a1, nil)
-	if len(wrap) > 0 {
-		cfg := DefaultConfig()
-		cfg.BindAddr, cfg.AdvertiseAddr = a2, a2
-		cfg.MsgCodec, cfg.Logger = shamaton.New(), logger.NewNullLogger()
-		cfg.Transport = wrap[0](NewSocketTransport(cfg))
-		var err error
-		client, err = NewCluster(cfg)
-		require.NoError(t, err)
-		client.Start()
-	} else {
-		client = mkShamatonCluster(t, a2, nil)
-	}
-	t.Cleanup(func() { client.Stop(); server.Stop() })
+	server = startLiveCluster(t)
+	client = startLiveCluster(t, func(c *Config) {
+		if len(wrap) > 0 {
+			c.Transport = wrap[0](NewSocketTransport(c))
+		}
+	})
+	// Closed before the clusters stop (cleanups run last in, first out): a handler still waiting holds a worker that
+	// Stop waits for.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
 	require.NoError(t, server.HandleFuncWithResponse(ctxQueryMsg, func(_ *Node, p *Packet) (interface{}, error) {
 		var q string
 		if err := p.Unmarshal(&q); err == nil && q == "slow" {
-			time.Sleep(delay)
+			<-release
 		}
 		return "pong", nil
 	}))
-	require.NoError(t, client.Join([]string{a1}))
-	require.Eventually(t, func() bool { return client.GetNode(server.LocalNode().ID) != nil }, 5*time.Second, 50*time.Millisecond)
+	joinAndWait(t, server, client)
 	return server, client, client.GetNode(server.LocalNode().ID)
 }
 
 // A caller's deadline ends the exchange with the deadline's error, long before the transport's TCPDeadline; without
 // one the exchange is bounded by the transport as before.
 func TestSendToWithResponseContext_Deadline(t *testing.T) {
-	_, client, node := twoNodes(t, 2*time.Second)
+	_, client, node := twoNodes(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -73,7 +66,7 @@ func TestSendToWithResponseContext_Deadline(t *testing.T) {
 
 // A context already ended sends nothing.
 func TestSendToWithResponseContext_Cancelled(t *testing.T) {
-	_, client, node := twoNodes(t, 0)
+	_, client, node := twoNodes(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var reply string
@@ -87,7 +80,7 @@ type replyOnly struct{ Transport }
 
 // The deadline holds with a transport that cannot take a context: the cluster stops waiting.
 func TestSendToWithResponseContext_PlainTransport(t *testing.T) {
-	_, client, node := twoNodes(t, 2*time.Second, func(tr Transport) Transport { return replyOnly{tr} })
+	_, client, node := twoNodes(t, func(tr Transport) Transport { return replyOnly{tr} })
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()

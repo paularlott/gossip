@@ -29,7 +29,7 @@ const (
 	// Every subpackage protocol (leader, lock, kv, …) allocates its message
 	// types from this range in the single registry below — one list, one
 	// place, so allocations never collide. To add a new protocol: take the
-	// next free block (leave a gap between blocks; next free is +30), add
+	// next free block (leave a gap between blocks; next free is +40), add
 	// the constants here, and extend the ledger test in
 	// reserved_msgs_test.go. Values are wire-stable: never renumber an
 	// allocated type.
@@ -53,6 +53,18 @@ const (
 	KVWritePushMsg MessageType = ReservedMsgsStart + 20
 	KVGossipMsg    MessageType = ReservedMsgsStart + 21
 	KVFullSyncMsg  MessageType = ReservedMsgsStart + 22
+
+	// partition — single-owner, majority-committed partitioned replication.
+	PartHeartbeatMsg  MessageType = ReservedMsgsStart + 30
+	PartPromiseMsg    MessageType = ReservedMsgsStart + 31
+	PartWriteMsg      MessageType = ReservedMsgsStart + 32
+	PartChangeMsg     MessageType = ReservedMsgsStart + 33
+	PartStateMsg      MessageType = ReservedMsgsStart + 34
+	PartCatchUpMsg    MessageType = ReservedMsgsStart + 35
+	PartRelinquishMsg MessageType = ReservedMsgsStart + 36
+	PartCommitMsg     MessageType = ReservedMsgsStart + 37
+	PartClaimMsg      MessageType = ReservedMsgsStart + 38
+	PartReadMsg       MessageType = ReservedMsgsStart + 39
 
 	_                         // skip to 128
 	UserMsg MessageType = 128 // User messages start here
@@ -89,6 +101,10 @@ type Packet struct {
 	// keyed reports that the packet arrived in the keyed encryption format, so a reply goes back in it
 	keyed bool
 
+	// reliable reports that the packet arrived over a reliable transport (a TCP connection) without owning it, so
+	// it is forwarded over the reliable transport too
+	reliable bool
+
 	refCount atomic.Int32
 }
 
@@ -117,6 +133,7 @@ func (p *Packet) Release() {
 		p.TargetNodeID = nil
 		p.Tag = nil
 		p.keyed = false
+		p.reliable = false
 
 		packetPool.Put(p)
 	}
@@ -130,16 +147,22 @@ func (p *Packet) Codec() codec.Serializer {
 	return p.codec
 }
 
-// CanReply returns true if the packet can send a reply
+// CanReply returns true if the packet can send a reply. It is also true for a fire-and-forget packet that arrived
+// over TCP (as it always was), which has no reply path: see awaitingReply.
 func (p *Packet) CanReply() bool {
-	return p.conn != nil || p.replyChan != nil || p.reply != nil
+	return p.arrivedReliably() || p.replyChan != nil || p.reply != nil
+}
+
+// arrivedReliably reports that the packet came over a reliable transport: a fire-and-forget packet received on a TCP
+// connection (reliable), or one a transport has given its connection (SetConn).
+func (p *Packet) arrivedReliably() bool {
+	return p.reliable || p.conn != nil
 }
 
 // awaitingReply reports whether a requester is waiting for a reply to this
 // packet. Only a reply channel can carry one: a connection on its own (a
-// fire-and-forget packet delivered over TCP, which owns the connection only
-// so it is closed on release) has no reply path, even though CanReply
-// reports true for it.
+// fire-and-forget packet delivered over TCP) has no reply path, even though
+// CanReply reports true for it.
 func (p *Packet) awaitingReply() bool {
 	return p.replyChan != nil || p.reply != nil
 }

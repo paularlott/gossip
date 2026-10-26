@@ -263,7 +263,7 @@ func TestSendWithReplyRecoversFromDroppedPooledConnection(t *testing.T) {
 // close the connection; the client must report an error, not send the processed request again.
 func TestSendWithReplyNoReplyNotResent(t *testing.T) {
 	cfg := reuseConfig()
-	cfg.TCPDeadline = 300 * time.Millisecond
+	cfg.TCPDeadline = 100 * time.Millisecond
 	var requests atomic.Int64
 	var ln *countingListener
 	cfg.ListenFunc = func(network, addr string) (net.Listener, error) {
@@ -305,7 +305,7 @@ func TestSendWithReplyNoReplyNotResent(t *testing.T) {
 	if _, err := request(t, client, node, "second"); err == nil {
 		t.Fatal("expected an error when no reply is sent")
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond) // three times the server's deadline
 	if n := requests.Load(); n != 2 {
 		t.Fatalf("processed request was sent again: server saw %d requests", n)
 	}
@@ -316,12 +316,12 @@ func TestSendWithReplyNoReplyNotResent(t *testing.T) {
 func TestSendWithReplyTimeoutNotRetried(t *testing.T) {
 	_, _, node, requests := startEchoServer(t, reuseConfig(), func(n int64) time.Duration {
 		if n == 2 {
-			return 700 * time.Millisecond
+			return 250 * time.Millisecond
 		}
 		return 0
 	})
 	cfg := reuseConfig()
-	cfg.TCPDeadline = 300 * time.Millisecond
+	cfg.TCPDeadline = 100 * time.Millisecond
 	client := startClient(t, cfg)
 	if _, err := request(t, client, node, "fast"); err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestSendWithReplyTimeoutNotRetried(t *testing.T) {
 	if _, err := request(t, client, node, "slow"); err == nil {
 		t.Fatal("expected a timeout")
 	}
-	time.Sleep(time.Second)
+	time.Sleep(450 * time.Millisecond) // past the slow handler: a retry would have arrived
 	if n := requests.Load(); n != 2 {
 		t.Fatalf("slow request was retried: server saw %d requests", n)
 	}
@@ -353,13 +353,13 @@ func TestServerKeepsConnectionForSeveralRequests(t *testing.T) {
 
 func TestServerIdleTimeoutClosesConnection(t *testing.T) {
 	cfg := reuseConfig()
-	cfg.TCPIdleTimeout = 200 * time.Millisecond
+	cfg.TCPIdleTimeout = 100 * time.Millisecond
 	_, ln, node, _ := startEchoServer(t, cfg, nil)
 	client := startClient(t, reuseConfig()) // client keeps connections far longer than the server
 	if _, err := request(t, client, node, "a"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(500 * time.Millisecond) // server closes the idle connection
+	time.Sleep(300 * time.Millisecond) // server closes the idle connection
 	if got, err := request(t, client, node, "b"); err != nil || got != "echo:b" {
 		t.Fatalf("after server idle close: %q %v", got, err)
 	}
@@ -373,12 +373,12 @@ func TestServerIdleTimeoutClosesConnection(t *testing.T) {
 func TestPooledConnectionReusedAfterDeadlinePassed(t *testing.T) {
 	_, ln, node, _ := startEchoServer(t, reuseConfig(), nil)
 	cfg := reuseConfig()
-	cfg.TCPDeadline = 200 * time.Millisecond
+	cfg.TCPDeadline = 100 * time.Millisecond
 	client := startClient(t, cfg)
 	if _, err := request(t, client, node, "a"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	if got, err := request(t, client, node, "b"); err != nil || got != "echo:b" {
 		t.Fatalf("%q %v", got, err)
 	}

@@ -51,7 +51,7 @@ type Node struct {
 	ProtocolVersion    uint16
 	ApplicationVersion string
 	keyWindow          atomic.Uint32 // the encryption key window the node advertises (0: it reads only the original format)
-	caps               atomic.Uint32 // the capabilities the node advertises (capKeepsConnections)
+	caps               atomic.Uint32 // the capabilities the node advertises (capKeepsConnections, capOneWayOnPooled)
 	mu                 sync.RWMutex  // Protects observedState, lastMessageTime, and address
 }
 

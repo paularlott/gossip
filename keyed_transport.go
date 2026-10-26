@@ -11,6 +11,11 @@ const (
 	// capKeepsConnections: after answering a request the node keeps the connection open for the next one, so a peer
 	// may pool it. Peers that predate connection reuse close it, and reusing it would fail a request.
 	capKeepsConnections uint32 = 1 << 0
+
+	// capOneWayOnPooled: after a one-way packet the node keeps reading the connection (as after a request), so a peer
+	// may send one-way reliable packets on its pooled connections instead of dialling one per packet. Peers that
+	// predate it take such a connection for the packet and stop reading it.
+	capOneWayOnPooled uint32 = 1 << 1
 )
 
 // socketTransport is the cluster's socket transport, also when Transport wraps it (see Config.socket); nil for

@@ -6,6 +6,7 @@ import (
 
 	"github.com/paularlott/gossip"
 	"github.com/paularlott/gossip/codec"
+	"github.com/paularlott/gossip/internal/clustertest"
 	"github.com/paularlott/gossip/kv"
 	"github.com/paularlott/logger"
 )
@@ -16,9 +17,10 @@ import (
 // on a one-node group).
 func benchStore(b *testing.B) *kv.Store {
 	b.Helper()
+	addr := clustertest.FreeAddr(b)
 	cfg := gossip.DefaultConfig()
-	cfg.BindAddr = "127.0.0.1:25190"
-	cfg.AdvertiseAddr = "127.0.0.1:25190"
+	cfg.BindAddr = addr
+	cfg.AdvertiseAddr = addr
 	cfg.MsgCodec = codec.NewJSONCodec()
 	cfg.Logger = logger.NewNullLogger()
 	cfg.Transport = gossip.NewSocketTransport(cfg)

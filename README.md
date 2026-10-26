@@ -93,6 +93,36 @@ func main() {
 }
 ```
 
+## Message Handlers
+
+Three kinds of handler receive the messages of a type, registered on the cluster:
+
+- `HandleFunc(msgType, func(*Node, *Packet) error)` for a message sent to the cluster or to a node without waiting for an answer.
+- `HandleFuncWithReply` (also `HandleFuncWithResponse`) for a request: the handler returns the reply, and the sender receives it from `SendToWithResponse` or `SendToWithResponseContext`.
+- `HandleFuncWithDeferredReply` for a request that is answered later, from any goroutine.
+
+The packet is pooled: decode it (`packet.Unmarshal`) inside the handler and do not keep it or its payload afterwards.
+
+A `HandleFuncWithReply` handler runs on one of the cluster's incoming workers (`Config.NumIncomingWorkers`, 8 by default) until it returns, so a handler that waits for other nodes or for a disk occupies a worker for that time, and enough of them stop the node reading any other message. A deferred handler does not: it decodes the request, starts the work wherever it likes and returns, and answers through the `Replier` it was given when the work is done.
+
+```go
+const QueryMsg gossip.MessageType = gossip.UserMsg + 2
+
+cluster.HandleFuncWithDeferredReply(QueryMsg, func(sender *gossip.Node, packet *gossip.Packet, r gossip.Replier) {
+	var req Query
+	if err := packet.Unmarshal(&req); err != nil { // decode first, before returning
+		r.Reply(nil, err)
+		return
+	}
+	go func() {
+		result, err := lookup(req) // may take as long as it needs
+		r.Reply(result, err)
+	}()
+})
+```
+
+`Reply(payload, nil)` sends the payload as the reply, exactly as the return value of a `HandleFuncWithReply` handler would be. `Reply(_, err)` with an error, or a nil payload, sends nothing (the requester gives up at its own deadline, as it does when a `HandleFuncWithReply` handler fails), and a reply to a requester that has already given up is dropped. `Reply` may be called from any goroutine and any time; the second call does nothing. The `Replier` holds the request packet until `Reply` is called, so call it on every path, with a nil payload when there is nothing to send. It works on the socket and HTTP transports, and for requests sent with `SendToWithResponseContext`. A message that is not a request (sent with `SendTo`, `Broadcast`) can also arrive at a deferred handler; `Reply` then only releases it.
+
 ## Address Formats
 
 The gossip library supports multiple address formats for binding and connecting to the cluster:
@@ -146,6 +176,12 @@ config.TCPIdleTimeout = 60 * time.Second     // Server closes idle connections a
 ephemeral ports under load. A pooled connection is checked before use and discarded if the peer has closed it;
 nothing is retried once a request has been sent, so a request is never delivered twice. Peers running an older
 version close after one reply and are detected automatically (pooling to them is paused for a few minutes).
+
+One-way reliable messages (`SendToReliable`, `SendReliable`, and any message too large for UDP) use the same pooled
+connections, so a node under steady reliable traffic does not dial and close a connection per message. This applies to
+peers that advertise it (current versions do, learnt from their join, ping and metadata messages); a peer that does not
+gets a connection of its own per message, as before. A message that fails on a pooled connection that was closed
+meanwhile is sent once more on a new connection, and a repeat the peer had in fact received is ignored by it.
 
 ### TCP-only operation
 
