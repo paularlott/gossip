@@ -202,9 +202,9 @@ func TestClusterForgetNodeRejectsInvalid(t *testing.T) {
 	}
 
 	// The broadcast variant is equally inert: no peer's baseline may move.
-	// (ForgetNode with the caller's own ID is deliberately not asserted: it
-	// returns false locally but is still broadcast, and the peers apply it.)
+	// That includes the caller's own ID, which must not be broadcast either.
 	require.False(t, nodes[0].election.ForgetNode(stranger))
+	require.False(t, nodes[0].election.ForgetNode(nodes[0].ID()))
 	require.Never(t, func() bool {
 		return nodes[0].election.BaselineSize() != 2 || nodes[1].election.BaselineSize() != 2
 	}, time.Second, 100*time.Millisecond, "baseline moved on an invalid forget; it must hold at 2")

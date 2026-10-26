@@ -146,10 +146,12 @@ func (ng *NodeGroup) handleNodeMetadataChange(node *Node) {
 func (ng *NodeGroup) addNode(node *Node) {
 	shard := ng.getShard(node.ID)
 	shard.mutex.Lock()
-	shard.nodes[node.ID] = node
+	_, exists := shard.nodes[node.ID]
+	shard.nodes[node.ID] = node // refresh the pointer even for an existing member
 	shard.mutex.Unlock()
 
-	if ng.onNodeAdded != nil {
+	// Only a node that was not already a member has joined the group
+	if !exists && ng.onNodeAdded != nil {
 		ng.onNodeAdded(node)
 	}
 }
@@ -158,10 +160,12 @@ func (ng *NodeGroup) addNode(node *Node) {
 func (ng *NodeGroup) removeNode(node *Node) {
 	shard := ng.getShard(node.ID)
 	shard.mutex.Lock()
+	_, exists := shard.nodes[node.ID]
 	delete(shard.nodes, node.ID)
 	shard.mutex.Unlock()
 
-	if ng.onNodeRemoved != nil {
+	// Only a node that was a member has left the group
+	if exists && ng.onNodeRemoved != nil {
 		ng.onNodeRemoved(node)
 	}
 }

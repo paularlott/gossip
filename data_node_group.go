@@ -58,6 +58,10 @@ func NewDataNodeGroup[T any](
 ) *DataNodeGroup[T] {
 	validateNodeGroupParams(cluster, criteria)
 
+	if options == nil {
+		options = &DataNodeGroupOptions[T]{}
+	}
+
 	// Use same shard count as cluster's nodeList for consistency
 	shardCount := cluster.config.NodeShardCount
 
@@ -164,15 +168,15 @@ func (dng *DataNodeGroup[T]) handleNodeMetadataChange(node *Node) {
 func (dng *DataNodeGroup[T]) addNode(node *Node) {
 	shard := dng.getShard(node.ID)
 
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
-
-	// Check if node already exists
-	if _, exists := shard.nodes[node.ID]; exists {
+	// Skip the initializer for a node that is already a member
+	shard.mutex.RLock()
+	_, exists := shard.nodes[node.ID]
+	shard.mutex.RUnlock()
+	if exists {
 		return
 	}
 
-	// Create custom data for this node
+	// Create custom data outside the lock so the initializer may call back into the group
 	var data *T
 	if dng.dataInitializer != nil {
 		data = dng.dataInitializer(node)
@@ -182,13 +186,19 @@ func (dng *DataNodeGroup[T]) addNode(node *Node) {
 		data = &zeroValue
 	}
 
-	// Add node with its data
+	shard.mutex.Lock()
+	// Re-check: another goroutine may have added it while the initializer ran
+	if _, exists := shard.nodes[node.ID]; exists {
+		shard.mutex.Unlock()
+		return
+	}
 	shard.nodes[node.ID] = &NodeWithData[T]{
 		Node: node,
 		Data: data,
 	}
+	shard.mutex.Unlock()
 
-	// Trigger callback
+	// Trigger callback after releasing the lock so it may call back into the group
 	if dng.onNodeAdded != nil {
 		dng.onNodeAdded(node, data)
 	}

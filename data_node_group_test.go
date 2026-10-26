@@ -3,6 +3,7 @@ package gossip
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,4 +98,53 @@ func TestNodeGroupNilOptions(t *testing.T) {
 	defer ng.Close()
 	n := clusterNode(c, NodeAlive, "zone", "us-west")
 	assert.True(t, ng.Contains(n.ID))
+}
+
+// A nil options struct is allowed, as it is for NewNodeGroup.
+func TestDataNodeGroupNilOptions(t *testing.T) {
+	c := newUnitCluster(t)
+	g := NewDataNodeGroup[int](c, map[string]string{"zone": "us-west"}, nil)
+	defer g.Close()
+
+	n := clusterNode(c, NodeAlive, "zone", "us-west")
+	assert.True(t, g.Contains(n.ID))
+}
+
+// OnNodeAdded may call back into the group without deadlocking on the shard lock.
+func TestDataNodeGroupAddedCallbackMayReenter(t *testing.T) {
+	c := newUnitCluster(t)
+	var g *DataNodeGroup[int]
+	counts := make(chan int, 4)
+	g = NewDataNodeGroup[int](c, map[string]string{"zone": "us-west"}, &DataNodeGroupOptions[int]{
+		OnNodeAdded: func(n *Node, _ *int) { counts <- g.Count(); g.Contains(n.ID) },
+	})
+	defer g.Close()
+
+	done := make(chan struct{})
+	go func() { clusterNode(c, NodeAlive, "zone", "us-west"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock: OnNodeAdded re-entering the group")
+	}
+	assert.Equal(t, 1, <-counts)
+}
+
+// The data initializer may call back into the group without deadlocking.
+func TestDataNodeGroupInitializerMayReenter(t *testing.T) {
+	c := newUnitCluster(t)
+	var g *DataNodeGroup[int]
+	g = NewDataNodeGroup[int](c, map[string]string{"zone": "us-west"}, &DataNodeGroupOptions[int]{
+		DataInitializer: func(n *Node) *int { v := g.Count(); g.Contains(n.ID); return &v },
+	})
+	defer g.Close()
+
+	done := make(chan struct{})
+	go func() { clusterNode(c, NodeAlive, "zone", "us-west"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock: data initializer re-entering the group")
+	}
+	assert.Equal(t, 1, g.Count())
 }

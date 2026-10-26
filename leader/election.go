@@ -857,6 +857,10 @@ func (le *LeaderElection) WriteQuorum() int {
 // change only here. In either form, only nodes this cluster knows about can be
 // forgotten: unknown IDs are rejected rather than decremented.
 func (le *LeaderElection) ForgetNode(id gossip.NodeID) bool {
+	if id == le.cluster.LocalNode().ID {
+		return false // a node cannot forget itself, and peers must not be told to
+	}
+
 	applied := le.ForgetNodeLocal(id)
 
 	// Tell everyone else. Best-effort: quorum only ever errs strict if this is
