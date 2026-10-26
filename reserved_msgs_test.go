@@ -28,6 +28,18 @@ func TestReservedMessageTypesLedger(t *testing.T) {
 		{"KVWritePushMsg", KVWritePushMsg},
 		{"KVGossipMsg", KVGossipMsg},
 		{"KVFullSyncMsg", KVFullSyncMsg},
+
+		// partition
+		{"PartHeartbeatMsg", PartHeartbeatMsg},
+		{"PartPromiseMsg", PartPromiseMsg},
+		{"PartWriteMsg", PartWriteMsg},
+		{"PartChangeMsg", PartChangeMsg},
+		{"PartStateMsg", PartStateMsg},
+		{"PartCatchUpMsg", PartCatchUpMsg},
+		{"PartRelinquishMsg", PartRelinquishMsg},
+		{"PartCommitMsg", PartCommitMsg},
+		{"PartClaimMsg", PartClaimMsg},
+		{"PartReadMsg", PartReadMsg},
 	}
 
 	seen := make(map[MessageType]string, len(ledger))
@@ -50,6 +62,27 @@ func TestReservedMessageTypesLedger(t *testing.T) {
 	} {
 		if mt >= ReservedMsgsStart {
 			t.Errorf("core type %s = %d intrudes into the reserved range", name, mt)
+		}
+	}
+}
+
+// The core protocol's values are on the wire: renumbering any of them breaks compatibility with every node already
+// running, so they are pinned here.
+func TestWireConstants(t *testing.T) {
+	for name, c := range map[string][2]int{
+		"replyMsg":            {int(replyMsg), 0},
+		"nodeJoinMsg":         {int(nodeJoinMsg), 1},
+		"nodeLeaveMsg":        {int(nodeLeaveMsg), 2},
+		"pushPullStateMsg":    {int(pushPullStateMsg), 3},
+		"metadataUpdateMsg":   {int(metadataUpdateMsg), 4},
+		"pingMsg":             {int(pingMsg), 5},
+		"ReservedMsgsStart":   {int(ReservedMsgsStart), 64},
+		"UserMsg":             {int(UserMsg), 128},
+		"TransportBestEffort": {TransportBestEffort, 0},
+		"TransportReliable":   {TransportReliable, 1},
+	} {
+		if c[0] != c[1] {
+			t.Errorf("%s = %d, want %d", name, c[0], c[1])
 		}
 	}
 }

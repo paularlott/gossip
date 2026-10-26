@@ -7,25 +7,22 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/hlc"
-	"github.com/paularlott/logger"
 	"github.com/stretchr/testify/require"
 )
 
 const ageTestMsg MessageType = UserMsg + 61
 
+// ageHistoryMaxAge is how long the ordinary message history keeps a message in these tests.
+const ageHistoryMaxAge = 50 * time.Millisecond
+
 // ageCluster is a cluster on a mock transport counting the test messages it accepts.
 func ageCluster(t *testing.T, maxAge time.Duration) (*Cluster, *atomic.Int64) {
 	t.Helper()
-	cfg := DefaultConfig()
-	cfg.Transport = &mockTransport{}
-	cfg.MsgCodec = &mockCodec{}
-	cfg.Logger = logger.NewNullLogger()
-	cfg.MaxPacketAge = maxAge
-	cfg.MsgHistoryMaxAge = 100 * time.Millisecond
-	cfg.MsgHistoryGCInterval = 20 * time.Millisecond
-	c, err := NewCluster(cfg)
-	require.NoError(t, err)
-	t.Cleanup(c.msgHistory.stop)
+	c := newUnitCluster(t, func(cfg *Config) {
+		cfg.MaxPacketAge = maxAge
+		cfg.MsgHistoryMaxAge = ageHistoryMaxAge
+		cfg.MsgHistoryGCInterval = ageHistoryMaxAge / 5
+	})
 	var n atomic.Int64
 	require.NoError(t, c.HandleFunc(ageTestMsg, func(*Node, *Packet) error { n.Add(1); return nil }))
 	return c, &n
@@ -51,27 +48,26 @@ func agePacket(c *Cluster, sender NodeID, id MessageID) *Packet {
 // With MaxPacketAge, packets from too far in the past or future are refused; a packet replayed after it left the
 // ordinary history is still caught, because the history keeps it until it would be refused by age.
 func TestMaxPacketAge(t *testing.T) {
-	c, accepted := ageCluster(t, 2*time.Second)
+	const maxAge = 500 * time.Millisecond
+	c, accepted := ageCluster(t, maxAge)
 	sender := ageSender(c)
 	now := time.Now()
-	c.handleIncomingPacket(agePacket(c, sender, MessageID(hlc.FromTime(now.Add(-10*time.Second)))))
-	c.handleIncomingPacket(agePacket(c, sender, MessageID(hlc.FromTime(now.Add(10*time.Second)))))
-	require.Never(t, func() bool { return accepted.Load() > 0 }, 200*time.Millisecond, 10*time.Millisecond,
-		"a packet outside MaxPacketAge was accepted")
+	c.handleIncomingPacket(agePacket(c, sender, MessageID(hlc.FromTime(now.Add(-10*maxAge)))))
+	c.handleIncomingPacket(agePacket(c, sender, MessageID(hlc.FromTime(now.Add(10*maxAge)))))
+	require.Zero(t, accepted.Load(), "a packet outside MaxPacketAge was accepted")
 
 	id := MessageID(hlc.Now())
 	c.handleIncomingPacket(agePacket(c, sender, id))
-	require.Eventually(t, func() bool { return accepted.Load() == 1 }, time.Second, 5*time.Millisecond)
-	time.Sleep(300 * time.Millisecond) // past MsgHistoryMaxAge: the ordinary history would have let it go
+	require.EqualValues(t, 1, accepted.Load())
+	time.Sleep(3 * ageHistoryMaxAge) // past MsgHistoryMaxAge: the ordinary history would have let it go
 	c.handleIncomingPacket(agePacket(c, sender, id))
-	require.Never(t, func() bool { return accepted.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
-		"a replay inside MaxPacketAge was accepted")
+	require.EqualValues(t, 1, accepted.Load(), "a replay inside MaxPacketAge was accepted")
 	require.True(t, c.msgHistory.contains(sender, id))
 
 	// once the message is older than MaxPacketAge it leaves the history, and a replay is refused by age instead
-	require.Eventually(t, func() bool { return !c.msgHistory.contains(sender, id) }, 5*time.Second, 50*time.Millisecond)
+	require.Eventually(t, func() bool { return !c.msgHistory.contains(sender, id) }, 5*time.Second, 10*time.Millisecond)
 	c.handleIncomingPacket(agePacket(c, sender, id))
-	require.Never(t, func() bool { return accepted.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond)
+	require.EqualValues(t, 1, accepted.Load(), "a replay older than MaxPacketAge was accepted")
 }
 
 // Without MaxPacketAge nothing changes: old packets are accepted and the history keeps MsgHistoryMaxAge only.

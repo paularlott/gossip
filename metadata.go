@@ -3,6 +3,7 @@ package gossip
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,6 +49,7 @@ type LocalMetadata interface {
 
 // Metadata holds node metadata with type-safe accessors
 type Metadata struct {
+	mu            sync.Mutex // serialises writers: each copies the map, so two at once would lose one's change
 	data          atomic.Pointer[map[string]interface{}]
 	lastModified  atomic.Uint64                               // Last modification timestamp in nanoseconds
 	onLocalChange func(hlc.Timestamp, map[string]interface{}) // Callback on local changes: (ts, snapshot)
@@ -79,6 +81,7 @@ func (md *Metadata) get(key string) (interface{}, bool) {
 
 // Internal setter with timestamp update
 func (md *Metadata) set(key string, value interface{}) *Metadata {
+	md.mu.Lock()
 	currentData := md.data.Load()
 	if currentData == nil {
 		currentData = &map[string]interface{}{}
@@ -94,7 +97,8 @@ func (md *Metadata) set(key string, value interface{}) *Metadata {
 	ts := hlc.Now()
 	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
-	md.onLocalChange(ts, newData)
+	md.mu.Unlock()
+	md.onLocalChange(ts, newData) // (outside the lock: peers keep the newest snapshot whatever order they arrive in)
 
 	return md
 }
@@ -454,12 +458,15 @@ func (md *Metadata) SetTime(key string, value time.Time) LocalMetadata {
 
 // Delete removes a key from the metadata
 func (md *Metadata) Delete(key string) {
+	md.mu.Lock()
 	currentData := md.data.Load()
 	if currentData == nil {
+		md.mu.Unlock()
 		return
 	}
 
 	if _, exists := (*currentData)[key]; !exists {
+		md.mu.Unlock()
 		return // Key doesn't exist, nothing to do
 	}
 
@@ -474,6 +481,7 @@ func (md *Metadata) Delete(key string) {
 	ts := hlc.Now()
 	md.data.Store(&newData)
 	md.lastModified.Store(uint64(ts))
+	md.mu.Unlock()
 	md.onLocalChange(ts, newData)
 }
 
@@ -538,10 +546,12 @@ func (md *Metadata) GetAllAsString() map[string]string {
 
 // update replaces all metadata if the timestamp is newer, if force is true then the timestamp check is ignored
 func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp, force bool) bool {
+	md.mu.Lock()
 	currentTime := md.lastModified.Load()
 	currentTimestamp := hlc.Timestamp(currentTime)
 
 	if !force && !timestamp.After(currentTimestamp) {
+		md.mu.Unlock()
 		return false // Reject older data
 	}
 
@@ -553,6 +563,7 @@ func (md *Metadata) update(data map[string]interface{}, timestamp hlc.Timestamp,
 
 	md.data.Store(&dataCopy)
 	md.lastModified.Store(uint64(timestamp))
+	md.mu.Unlock()
 	md.onLocalChange(timestamp, dataCopy)
 	return true
 }

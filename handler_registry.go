@@ -20,10 +20,84 @@ type Handler func(*Node, *Packet) error
 // The same packet lifetime rule as Handler applies.
 type ReplyHandler func(*Node, *Packet) (interface{}, error)
 
+// Replier answers one request of a DeferredReplyHandler. Reply may be called once, from any goroutine, at any time;
+// later calls do nothing. Every request must be answered: call Reply on every path, with a nil payload (or an error)
+// when there is nothing to send, because the Replier holds the request packet until Reply is called. A Replier that is
+// never used keeps the packet until the garbage collector reclaims it.
+//
+// Reply(payload, nil) with a non-nil payload sends payload to the requester, marshalled with the request's codec, as
+// the return value of a ReplyHandler would be. Reply(_, err) with an error, or with a nil payload, sends nothing: the
+// requester waits until its own timeout, as it does when a ReplyHandler returns an error or a nil reply. A reply to a
+// requester that has gone (it timed out, its connection closed) is dropped. A request that is not waiting for a reply
+// (a message sent without SendToWithResponse) is never answered; Reply only releases it.
+type Replier interface {
+	Reply(payload interface{}, err error)
+}
+
+// DeferredReplyHandler handles a request and answers it through r, now or later from any goroutine. It runs on one of
+// the cluster's incoming workers like any handler and should return quickly: the worker is free again when it returns,
+// however long the reply takes.
+//
+// Decode the request (packet.Unmarshal) before returning. The Replier holds a reference to the packet so it stays
+// valid until Reply is called, but Reply turns the packet into the reply, so a read of the packet by the handler's
+// goroutine must not run concurrently with it. The same applies to the packet's Payload() slice.
+type DeferredReplyHandler func(node *Node, packet *Packet, r Replier)
+
 type msgHandler struct {
-	handler       Handler
-	replyHandler  ReplyHandler
-	streamHandler StreamHandler
+	handler         Handler
+	replyHandler    ReplyHandler
+	deferredHandler DeferredReplyHandler
+	streamHandler   StreamHandler
+}
+
+// deferredReplier is the Replier dispatch hands to a DeferredReplyHandler. It owns one reference to the packet and
+// gives it up exactly once: to the reply box when the reply is sent (the transport releases it after writing it), by
+// Release on every other path.
+type deferredReplier struct {
+	cluster *Cluster
+	packet  *Packet
+	msgType MessageType // for the log, taken before the packet becomes the reply
+	used    atomic.Bool
+}
+
+func (r *deferredReplier) Reply(payload interface{}, err error) {
+	if !r.used.CompareAndSwap(false, true) {
+		return
+	}
+	c, packet := r.cluster, r.packet
+	r.packet = nil
+
+	if err != nil {
+		if c != nil {
+			c.logger.Warn("error dispatching packet", "error", err, "message_type", r.msgType)
+		}
+		packet.Release()
+		return
+	}
+
+	// Only a packet with a waiting requester is turned into the reply (see dispatch).
+	if payload == nil || c == nil || !packet.awaitingReply() {
+		packet.Release()
+		return
+	}
+
+	data, err := packet.codec.Marshal(payload)
+	if err != nil {
+		c.logger.Warn("error dispatching packet", "error", err, "message_type", r.msgType)
+		packet.Release()
+		return
+	}
+	packet.MessageType = replyMsg
+	packet.SenderID = c.localNode.ID
+	packet.MessageID = MessageID(hlc.Now())
+	packet.TTL = 1
+	packet.payload = data
+
+	// On success the reply box owns the reference; it was refused when the requester stopped waiting.
+	if err := packet.SendReply(); err != nil {
+		c.logger.Debug("reply not delivered", "error", err, "message_type", r.msgType)
+		packet.Release()
+	}
 }
 
 // Dispatch invokes the appropriate handler based on the packet's message type.
@@ -68,6 +142,10 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 			}
 			return nil
 		}
+		return nil
+	} else if mh.deferredHandler != nil {
+		// The replier takes its own reference; dispatch releases its own as for every handler.
+		mh.deferredHandler(node, packet, &deferredReplier{cluster: c, packet: packet.AddRef(), msgType: packet.MessageType})
 		return nil
 	} else if mh.handler != nil {
 		return mh.handler(node, packet)
@@ -146,6 +224,12 @@ func (hr *handlerRegistry) registerHandler(msgType MessageType, handler Handler)
 func (hr *handlerRegistry) registerHandlerWithReply(msgType MessageType, handler ReplyHandler) {
 	hr.register(msgType, msgHandler{
 		replyHandler: handler,
+	})
+}
+
+func (hr *handlerRegistry) registerHandlerWithDeferredReply(msgType MessageType, handler DeferredReplyHandler) {
+	hr.register(msgType, msgHandler{
+		deferredHandler: handler,
 	})
 }
 

@@ -21,7 +21,9 @@ election.HandleEventFunc(leader.LeaderLostEvent, func(leader.EventType, gossip.N
 The leader is the eligible node with the lowest node ID; every election
 increments a term, and heartbeats carry it so a higher term always wins. When
 `MetadataCriteria` is set, only nodes matching all criteria participate and
-follow — useful for electing a leader within a role-scoped group.
+follow — useful for electing a leader within a role-scoped group. Only alive
+nodes count, scoped or not: a matching node that has gone suspect is neither a
+candidate nor part of the quorum count.
 
 ## How quorum is computed
 

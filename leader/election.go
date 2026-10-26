@@ -295,11 +295,20 @@ func (le *LeaderElection) Stop() {
 	le.cluster.UnregisterMessageType(le.config.ForgetMessageType)
 }
 
-// getEligibleNodes returns nodes that are eligible for leader election
-// If metadata filtering is enabled, only nodes with matching metadata are considered
+// getEligibleNodes returns nodes that are eligible for leader election: the alive nodes, and with metadata filtering
+// only those with matching metadata. A node group also tracks suspect nodes; they are left out here so that a scoped
+// election counts exactly what an unscoped one does (a suspect node counted as eligible would, for one, hold a
+// baseline re-derived by SetClusterSize above the cluster's new size until the node is declared dead).
 func (le *LeaderElection) getEligibleNodes() []*gossip.Node {
 	if le.nodeGroup != nil {
-		return le.nodeGroup.GetNodes(nil)
+		nodes := le.nodeGroup.GetNodes(nil)
+		alive := make([]*gossip.Node, 0, len(nodes))
+		for _, n := range nodes {
+			if n.Alive() {
+				alive = append(alive, n)
+			}
+		}
+		return alive
 	}
 
 	return le.cluster.AliveNodes()

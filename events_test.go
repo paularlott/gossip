@@ -1,142 +1,57 @@
 package gossip
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewEventHandlers(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
+// Handlers run in the order they were added, each once per ForEach; removing one leaves the others in place, whichever
+// it was.
+func TestEventHandlersAddRemove(t *testing.T) {
+	for _, removed := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("remove %d of 3", removed), func(t *testing.T) {
+			handlers := NewEventHandlers[func(*[]int)]()
+			ids := make([]HandlerID, 3)
+			for i := range ids {
+				ids[i] = handlers.Add(func(calls *[]int) { *calls = append(*calls, i) })
+			}
+			assert.NotEqual(t, ids[0], ids[1])
+			assert.NotEqual(t, ids[1], ids[2])
 
-	if handlers == nil {
-		t.Fatal("NewEventHandlers returned nil")
+			var calls []int
+			handlers.ForEach(func(h func(*[]int)) { h(&calls) })
+			assert.Equal(t, []int{0, 1, 2}, calls)
+
+			require.True(t, handlers.Remove(ids[removed]))
+			assert.False(t, handlers.Remove(ids[removed]), "already removed")
+			calls = nil
+			handlers.ForEach(func(h func(*[]int)) { h(&calls) })
+			var want []int
+			for i := range ids {
+				if i != removed {
+					want = append(want, i)
+				}
+			}
+			assert.Equal(t, want, calls)
+
+			for i, id := range ids {
+				if i != removed {
+					assert.True(t, handlers.Remove(id), "handler %d is still removable", i)
+				}
+			}
+			calls = nil
+			handlers.ForEach(func(h func(*[]int)) { h(&calls) })
+			assert.Empty(t, calls)
+		})
 	}
 
-	if handlers.idMap == nil {
-		t.Fatal("idMap not initialized")
-	}
-
-	if handlers.handlers.Load() == nil {
-		t.Fatal("handlers slice not initialized")
-	}
-
-	if len(*handlers.handlers.Load()) != 0 {
-		t.Fatal("handlers slice should be empty initially")
-	}
-}
-
-func TestEventHandlersAdd(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
-
-	handler := func(*Node, NodeState) {}
-	id := handlers.Add(handler)
-
-	if id == HandlerID(uuid.Nil) {
-		t.Fatal("Add should return non-nil ID")
-	}
-
-	slice := handlers.handlers.Load()
-	if len(*slice) != 1 {
-		t.Fatalf("Expected 1 handler, got %d", len(*slice))
-	}
-
-	if _, exists := handlers.idMap[id]; !exists {
-		t.Fatal("Handler ID not found in idMap")
-	}
-}
-
-func TestEventHandlersAddMultiple(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
-
-	handler1 := func(*Node, NodeState) {}
-	handler2 := func(*Node, NodeState) {}
-
-	id1 := handlers.Add(handler1)
-	id2 := handlers.Add(handler2)
-
-	if id1 == id2 {
-		t.Fatal("Handler IDs should be unique")
-	}
-
-	slice := handlers.handlers.Load()
-	if len(*slice) != 2 {
-		t.Fatalf("Expected 2 handlers, got %d", len(*slice))
-	}
-
-	if handlers.idMap[id1] != 0 {
-		t.Fatalf("Expected handler1 at index 0, got %d", handlers.idMap[id1])
-	}
-
-	if handlers.idMap[id2] != 1 {
-		t.Fatalf("Expected handler2 at index 1, got %d", handlers.idMap[id2])
-	}
-}
-
-func TestEventHandlersRemove(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
-
-	handler := func(*Node, NodeState) {}
-	id := handlers.Add(handler)
-
-	if !handlers.Remove(id) {
-		t.Fatal("Remove should return true for existing handler")
-	}
-
-	slice := handlers.handlers.Load()
-	if len(*slice) != 0 {
-		t.Fatalf("Expected 0 handlers after removal, got %d", len(*slice))
-	}
-
-	if _, exists := handlers.idMap[id]; exists {
-		t.Fatal("Handler ID should be removed from idMap")
-	}
-}
-
-func TestEventHandlersRemoveNonExistent(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
-
-	fakeID := HandlerID(uuid.New())
-	if handlers.Remove(fakeID) {
-		t.Fatal("Remove should return false for non-existent handler")
-	}
-}
-
-func TestEventHandlersRemoveMiddle(t *testing.T) {
-	handlers := NewEventHandlers[NodeStateChangeHandler]()
-
-	handler1 := func(*Node, NodeState) {}
-	handler2 := func(*Node, NodeState) {}
-	handler3 := func(*Node, NodeState) {}
-
-	id1 := handlers.Add(handler1)
-	id2 := handlers.Add(handler2)
-	id3 := handlers.Add(handler3)
-
-	// Remove middle handler
-	if !handlers.Remove(id2) {
-		t.Fatal("Remove should succeed")
-	}
-
-	slice := handlers.handlers.Load()
-	if len(*slice) != 2 {
-		t.Fatalf("Expected 2 handlers after removal, got %d", len(*slice))
-	}
-
-	// Check that indices are updated correctly
-	if handlers.idMap[id1] != 0 {
-		t.Fatalf("Expected handler1 at index 0, got %d", handlers.idMap[id1])
-	}
-
-	if handlers.idMap[id3] != 1 {
-		t.Fatalf("Expected handler3 at index 1, got %d", handlers.idMap[id3])
-	}
-
-	if _, exists := handlers.idMap[id2]; exists {
-		t.Fatal("Removed handler should not exist in idMap")
-	}
+	assert.False(t, NewEventHandlers[func()]().Remove(HandlerID(uuid.New())), "an id that was never issued")
 }
 
 func TestEventHandlersForEach(t *testing.T) {
@@ -321,119 +236,5 @@ func TestEventHandlersTypeSpecific(t *testing.T) {
 	}
 	if !gossipHandlers.Remove(gossipID) {
 		t.Fatal("Failed to remove gossip handler")
-	}
-}
-
-// Benchmarks
-
-func BenchmarkEventHandlersAdd(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-	handler := func() {}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		handlers.Add(handler)
-	}
-}
-
-func BenchmarkEventHandlersForEach(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-
-	// Pre-populate with handlers
-	for i := 0; i < 100; i++ {
-		handlers.Add(func() {})
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		handlers.ForEach(func(h func()) {
-			// Just iterate, don't call
-		})
-	}
-}
-
-func BenchmarkEventHandlersForEachWithCall(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-
-	// Pre-populate with handlers
-	for i := 0; i < 100; i++ {
-		handlers.Add(func() {})
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		handlers.ForEach(func(h func()) {
-			h()
-		})
-	}
-}
-
-func BenchmarkEventHandlersRemove(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-
-	// Pre-populate and collect IDs
-	ids := make([]HandlerID, b.N)
-	for i := 0; i < b.N; i++ {
-		ids[i] = handlers.Add(func() {})
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		handlers.Remove(ids[i])
-	}
-}
-
-func BenchmarkEventHandlersConcurrentForEach(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-
-	// Pre-populate with handlers
-	for i := 0; i < 1000; i++ {
-		handlers.Add(func() {})
-	}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			handlers.ForEach(func(h func()) {
-				// Just iterate
-			})
-		}
-	})
-}
-
-func BenchmarkEventHandlersConcurrentAdd(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-	handler := func() {}
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			handlers.Add(handler)
-		}
-	})
-}
-
-func BenchmarkEventHandlersMixed(b *testing.B) {
-	handlers := NewEventHandlers[func()]()
-	handler := func() {}
-
-	// Pre-populate
-	var ids []HandlerID
-	for i := 0; i < 100; i++ {
-		ids = append(ids, handlers.Add(handler))
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		switch i % 3 {
-		case 0:
-			handlers.Add(handler)
-		case 1:
-			handlers.ForEach(func(h func()) {})
-		case 2:
-			if len(ids) > 0 {
-				handlers.Remove(ids[i%len(ids)])
-			}
-		}
 	}
 }

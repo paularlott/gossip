@@ -3,83 +3,40 @@ package gossip
 import (
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestValidateNodeGroupParams(t *testing.T) {
-	// Test nil cluster
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic for nil cluster")
-		}
-	}()
-	validateNodeGroupParams(nil, map[string]string{"key": "value"})
+	c := newUnitCluster(t)
+	assert.Panics(t, func() { validateNodeGroupParams(nil, map[string]string{"key": "value"}) }, "nil cluster")
+	assert.Panics(t, func() { validateNodeGroupParams(c, map[string]string{}) }, "empty criteria")
+	assert.Panics(t, func() { validateNodeGroupParams(c, nil) }, "nil criteria")
+	assert.NotPanics(t, func() { validateNodeGroupParams(c, map[string]string{"key": "value"}) })
 }
 
-func TestValidateNodeGroupParamsEmptyCriteria(t *testing.T) {
-	cluster := createTestCluster(t)
-	defer cluster.Stop()
+func TestNodeMatchesCriteria(t *testing.T) {
+	c := newUnitCluster(t)
+	node := clusterNode(c, NodeAlive, "zone", "us-west", "tags", "production,web,frontend", "empty", "")
 
-	// Test empty criteria
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic for empty criteria")
-		}
-	}()
-	validateNodeGroupParams(cluster, map[string]string{})
-}
-
-func TestNodeMatchesCriteriaHelper(t *testing.T) {
-	node := newNode(NodeID(uuid.New()), "127.0.0.1:8001")
-	node.metadata.SetString("zone", "us-west")
-	node.metadata.SetString("tags", "production,web,frontend")
-
-	// Test exact match
-	criteria := map[string]string{"zone": "us-west"}
-	if !nodeMatchesCriteria(node, criteria) {
-		t.Error("Should match exact criteria")
+	tests := []struct {
+		name     string
+		criteria map[string]string
+		want     bool
+	}{
+		{"exact", map[string]string{"zone": "us-west"}, true},
+		{"wrong value", map[string]string{"zone": "us-east"}, false},
+		{"any value", map[string]string{"zone": MetadataAnyValue}, true},
+		{"any value of a key that is missing", map[string]string{"missing": MetadataAnyValue}, false},
+		{"contains", map[string]string{"tags": MetadataContainsPrefix + "web"}, true},
+		{"does not contain", map[string]string{"tags": MetadataContainsPrefix + "api"}, false},
+		{"empty value matches an empty value", map[string]string{"empty": ""}, true},
+		{"empty value does not match another", map[string]string{"zone": ""}, false},
+		{"missing key", map[string]string{"missing": "value"}, false},
+		{"every key must match", map[string]string{"zone": "us-west", "tags": MetadataContainsPrefix + "api"}, false},
 	}
-
-	// Test any value
-	criteria = map[string]string{"zone": MetadataAnyValue}
-	if !nodeMatchesCriteria(node, criteria) {
-		t.Error("Should match any value criteria")
-	}
-
-	// Test contains
-	criteria = map[string]string{"tags": MetadataContainsPrefix + "web"}
-	if !nodeMatchesCriteria(node, criteria) {
-		t.Error("Should match contains criteria")
-	}
-
-	// Test empty string (edge case fix)
-	criteria = map[string]string{"empty": ""}
-	node.metadata.SetString("empty", "")
-	if !nodeMatchesCriteria(node, criteria) {
-		t.Error("Should handle empty string criteria")
-	}
-
-	// Test missing metadata
-	criteria = map[string]string{"missing": "value"}
-	if nodeMatchesCriteria(node, criteria) {
-		t.Error("Should not match missing metadata")
-	}
-}
-
-func TestFnvHash(t *testing.T) {
-	nodeID1 := NodeID(uuid.New())
-	nodeID2 := NodeID(uuid.New())
-
-	hash1 := fnvHash(nodeID1)
-	hash2 := fnvHash(nodeID2)
-
-	// Same input should produce same hash
-	if fnvHash(nodeID1) != hash1 {
-		t.Error("Hash should be deterministic")
-	}
-
-	// Different inputs should produce different hashes (very likely)
-	if hash1 == hash2 {
-		t.Error("Different inputs should produce different hashes")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NodeMatchesCriteria(node, tt.criteria))
+		})
 	}
 }

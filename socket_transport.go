@@ -26,13 +26,17 @@ type SocketTransport struct {
 	resolver      Resolver
 	udpBufferPool sync.Pool // Pool for UDP packet buffers
 	streamHandler func(packet *Packet, w io.Writer) error
-	pool          *connPool       // idle request/response connections per peer
+	pool          *connPool       // idle request/response and one-way connections per peer
 	ctx           context.Context // the transport's lifetime (Start): ending it aborts dials and exchanges in flight
 
 	// keys is the encryption keyring (nil without encryption), replaced whole by setEncryptionKeys. It is built from
 	// the config on first use when the cluster has not set it.
 	keys     atomic.Pointer[keyring]
 	keysOnce sync.Once
+
+	// withoutCaps are capabilities this transport does not advertise: tests set it (before Start) to stand in for an
+	// older build, which peers then treat as one.
+	withoutCaps uint32
 }
 
 // keyring returns the transport's keys, nil when the cluster is not encrypted.
@@ -68,8 +72,11 @@ func (st *SocketTransport) setEncryptionKeys(current []byte, previous [][]byte) 
 // encryptionWindow is the key window (seconds) this node reads the keyed format with: 0 for none.
 func (st *SocketTransport) encryptionWindow() uint32 { return st.keyring().windowSeconds() }
 
-// capabilities: a socket transport keeps a connection open after answering a request (packetToQueue).
-func (st *SocketTransport) capabilities() uint32 { return capKeepsConnections }
+// capabilities: a socket transport keeps a connection open after answering a request or reading a one-way packet
+// (packetToQueue).
+func (st *SocketTransport) capabilities() uint32 {
+	return (capKeepsConnections | capOneWayOnPooled) &^ st.withoutCaps
+}
 
 // keyedFor reports whether packets to node use the keyed format: it reads it, with the same key window.
 func (st *SocketTransport) keyedFor(node *Node) bool {
@@ -488,9 +495,10 @@ func (st *SocketTransport) udpListen(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// packetToQueue reads packets from an accepted connection. A fire-and-forget packet owns the connection (it is
-// closed when the packet is released). After answering a request the connection stays open for the client's next
-// request until it is closed or idle for TCPIdleTimeout, so clients can reuse it; older clients simply close it.
+// packetToQueue reads packets from an accepted connection. After queueing a fire-and-forget packet, or answering a
+// request, the connection stays open for the client's next packet until it is closed or idle for TCPIdleTimeout, so
+// clients can reuse it; older clients simply close it. A one-way packet does not own the connection (it is marked
+// reliable instead, see Packet.reliable); a stream does, and ends the connection.
 func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 	timeout := st.config.TCPDeadline
 	for first := true; ; first = false {
@@ -510,16 +518,15 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 		}
 
 		if flags&replyExpectedFlag == 0 {
-			packet.SetConn(conn)
+			packet.reliable = true
 			select {
 			case <-ctx.Done():
 				packet.Release()
+				conn.Close()
+				return
 			case st.packetChannel <- packet:
 			}
-			return
-		}
-
-		if !st.serveRequest(ctx, conn, packet) {
+		} else if !st.serveRequest(ctx, conn, packet) {
 			conn.Close()
 			return
 		}
@@ -565,15 +572,46 @@ func (st *SocketTransport) serveRequest(ctx context.Context, conn net.Conn, pack
 	}
 }
 
+// sendTCP delivers a one-way packet over TCP. A peer that keeps reading after a one-way packet
+// (capOneWayOnPooled) gets it on a pooled connection, which goes back to the pool after a complete write; any other
+// peer gets a connection of its own, closed after the packet (it would take a pooled one for the packet and stop
+// reading it). Nothing waits for an answer.
 func (st *SocketTransport) sendTCP(node *Node, rawPacket []byte) error {
-	conn, err := st.dialPeer(st.ctx, node)
+	if node.caps.Load()&capOneWayOnPooled == 0 {
+		conn, err := st.dialPeer(st.ctx, node)
+		if err != nil {
+			node.ClearAddress()
+			return err
+		}
+		defer conn.Close()
+
+		return st.writeRawPacket(conn, rawPacket)
+	}
+
+	// The connection is ours alone until it is put back, so no other sender writes to it meanwhile, and it is put
+	// back only after the whole packet is written. A pooled connection was checked alive but can still fail (the
+	// peer closed it an instant ago): the packet is then sent once more on a connection dialled for it. The peer
+	// drops a repeat of a packet it did receive (the cluster ignores a repeated sender and message ID).
+	conn, key, uses, err := st.replyConn(st.ctx, node)
 	if err != nil {
 		node.ClearAddress()
 		return err
 	}
-	defer conn.Close()
-
-	return st.writeRawPacket(conn, rawPacket)
+	if err := st.writeRawPacket(conn, rawPacket); err != nil {
+		conn.Close()
+		if conn, err = st.dialPeer(st.ctx, node); err != nil {
+			node.ClearAddress()
+			return err
+		}
+		addr := node.GetAddress()
+		key, uses = addr.String(), 0
+		if err := st.writeRawPacket(conn, rawPacket); err != nil {
+			conn.Close()
+			return err
+		}
+	}
+	st.pool.put(key, conn, uses) // uses counts replies: a one-way packet does not change it
+	return nil
 }
 
 func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
@@ -614,7 +652,7 @@ func (st *SocketTransport) sendUDP(node *Node, rawPacket []byte) error {
 // and the transport's lifetime).
 func (st *SocketTransport) dialPeer(ctx context.Context, node *Node) (net.Conn, error) {
 	if err := st.ensureNodeAddressResolved(node); err != nil {
-		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("resolve address for node %s: %w", node.ID, err)} // nothing sent
 	}
 
 	tryDial := func(addr Address) (net.Conn, error) {
@@ -640,7 +678,7 @@ func (st *SocketTransport) dialPeer(ctx context.Context, node *Node) (net.Conn, 
 
 	addrs, err := st.resolveAddress(node.AdvertisedAddr())
 	if err != nil || len(addrs) == 0 {
-		return nil, fmt.Errorf("failed to resolve address for node %s: %v", node.ID, err)
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("resolve address for node %s: %w", node.ID, err)} // nothing sent
 	}
 
 	var firstErr error

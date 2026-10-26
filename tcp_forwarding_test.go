@@ -5,15 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/logger"
+	"github.com/stretchr/testify/require"
 )
 
-// Broadcasts received over TCP must be re-gossiped just like those received
-// over UDP. Previously a fire-and-forget packet delivered over TCP carried its
-// connection, CanReply() reported true, and the forwarding step skipped it —
-// so in a TCP-only cluster larger than the fan-out a broadcast reached only
-// the sender's direct peers.
+// Broadcasts received over TCP must be re-gossiped just like those received over UDP. Previously a fire-and-forget
+// packet delivered over TCP carried its connection, CanReply() reported true, and the forwarding step skipped it, so
+// in a TCP-only cluster larger than the fan-out a broadcast reached only the sender's direct peers.
 func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 	const n = 8
 	const msgs = 5
@@ -21,25 +18,9 @@ func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 	var mu sync.Mutex
 	perMsg := make(map[int]int)
 	clusters := make([]*Cluster, 0, n)
-	defer func() {
-		for _, c := range clusters {
-			c.Stop()
-		}
-	}()
-
 	for i := 0; i < n; i++ {
-		cfg := DefaultConfig()
-		addr := getFreeTCPAddress(t)
-		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
-		cfg.MsgCodec = codec.NewJSONCodec()
-		cfg.Logger = logger.NewNullLogger()
-		cfg.ForceReliableTransport = true
-		cfg.Transport = NewSocketTransport(cfg)
-		c, err := NewCluster(cfg)
-		if err != nil {
-			t.Fatalf("node %d: %v", i, err)
-		}
-		if err := c.HandleFunc(UserMsg+1, func(_ *Node, p *Packet) error {
+		c := startLiveCluster(t, func(cfg *Config) { cfg.ForceReliableTransport = true })
+		require.NoError(t, c.HandleFunc(UserMsg+1, func(_ *Node, p *Packet) error {
 			var m map[string]int
 			if err := p.Unmarshal(&m); err != nil {
 				return err
@@ -48,42 +29,30 @@ func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 			perMsg[m["i"]]++
 			mu.Unlock()
 			return nil
-		}); err != nil {
-			t.Fatalf("register: %v", err)
-		}
-		c.Start()
+		}))
 		clusters = append(clusters, c)
 		if i > 0 {
-			if err := c.Join([]string{clusters[0].LocalNode().AdvertisedAddr()}); err != nil {
-				t.Fatalf("node %d join: %v", i, err)
+			require.NoError(t, c.Join([]string{clusters[0].LocalNode().AdvertisedAddr()}))
+		}
+	}
+
+	require.Eventually(t, func() bool {
+		for _, c := range clusters {
+			if c.NumAliveNodes() < n {
+				return false
 			}
 		}
-	}
-
-	deadline := time.Now().Add(15 * time.Second)
-	for _, c := range clusters {
-		for time.Now().Before(deadline) && c.NumAliveNodes() < n {
-			time.Sleep(50 * time.Millisecond)
-		}
-		if c.NumAliveNodes() < n {
-			t.Fatalf("cluster did not converge: %d of %d alive", c.NumAliveNodes(), n)
-		}
-	}
+		return true
+	}, 15*time.Second, 20*time.Millisecond, "the cluster did not converge")
 	fan := clusters[0].CalcFanOut()
-	if fan >= n-1 {
-		t.Fatalf("fan-out %d covers every peer directly; the test needs forwarding to matter", fan)
-	}
+	require.Less(t, fan, n-1, "the fan-out covers every peer directly; the test needs forwarding to matter")
 
 	for i := 0; i < msgs; i++ {
-		if err := clusters[0].Send(UserMsg+1, map[string]int{"i": i}); err != nil {
-			t.Fatalf("send: %v", err)
-		}
+		require.NoError(t, clusters[0].Send(UserMsg+1, map[string]int{"i": i}))
 	}
 
-	// Gossip is probabilistic, so full delivery is not guaranteed on every
-	// run. What forwarding does guarantee is that a message reaches more
-	// nodes than the sender's own fan-out — impossible if receivers never
-	// re-gossip. Wait for that for every message.
+	// Gossip is probabilistic, so full delivery is not guaranteed on every run. What forwarding does guarantee is that
+	// every message reaches more nodes than the sender's own fan-out, which is impossible if receivers never re-gossip.
 	reached := func() (minReach, total int) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -91,22 +60,12 @@ func TestTCPOnlyBroadcastIsForwarded(t *testing.T) {
 		for i := 0; i < msgs; i++ {
 			c := perMsg[i]
 			total += c
-			if c < minReach {
-				minReach = c
-			}
+			minReach = min(minReach, c)
 		}
 		return minReach, total
 	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if m, total := reached(); m > fan && total == msgs*(n-1) {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	m, total := reached()
-	t.Logf("fan-out %d: delivered %d of %d, every message reached at least %d nodes", fan, total, msgs*(n-1), m)
-	if m <= fan {
-		t.Fatalf("a TCP-only broadcast reached only %d nodes (fan-out %d): received packets are not being forwarded", m, fan)
-	}
+	require.Eventually(t, func() bool {
+		m, _ := reached()
+		return m > fan
+	}, 10*time.Second, 20*time.Millisecond, "a TCP-only broadcast did not get past the sender's fan-out (%d): received packets are not being forwarded", fan)
 }

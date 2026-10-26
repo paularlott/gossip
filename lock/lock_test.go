@@ -14,6 +14,7 @@ import (
 	"github.com/paularlott/gossip/codec"
 	"github.com/paularlott/gossip/leader"
 	"github.com/paularlott/logger"
+	"github.com/stretchr/testify/require"
 )
 
 // Compile-time proof that the real election satisfies the Pool's dependency.
@@ -171,14 +172,7 @@ func takeOffice(t *testing.T, p *Pool, f *fakeLeadership, c *gossip.Cluster, ter
 
 func waitFor(t *testing.T, limit time.Duration, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("condition not met within %v", limit)
+	require.Eventually(t, cond, limit, 5*time.Millisecond, "condition not met within %v", limit)
 }
 
 // serve makes a bare table act as a serving leader for the given term.
@@ -509,8 +503,9 @@ func TestTableExpiryFreesKey(t *testing.T) {
 	a := gossip.NodeID(uuid.New())
 	b := gossip.NodeID(uuid.New())
 
+	now := time.Now()
 	tbl.tryAcquire("k", a, 20*time.Millisecond)
-	time.Sleep(60 * time.Millisecond)
+	setNow(tbl, func() time.Time { return now.Add(60 * time.Millisecond) })
 
 	ent, granted, _ := tbl.tryAcquire("k", b, 5*time.Second)
 	if !granted {
@@ -527,8 +522,9 @@ func TestTableExtendAfterExpiryFails(t *testing.T) {
 	serve(tbl, 1)
 
 	owner := gossip.NodeID(uuid.New())
+	now := time.Now()
 	ent, _, _ := tbl.tryAcquire("k", owner, 20*time.Millisecond)
-	time.Sleep(60 * time.Millisecond)
+	setNow(tbl, func() time.Time { return now.Add(60 * time.Millisecond) })
 
 	if _, ok, reason := tbl.extend("k", ent.Token, 5*time.Second); ok {
 		t.Errorf("extending an expired lock must fail (reason %q)", reason)
@@ -562,8 +558,9 @@ func TestTableReap(t *testing.T) {
 	serve(tbl, 1)
 
 	owner := gossip.NodeID(uuid.New())
+	now := time.Now()
 	tbl.tryAcquire("k", owner, 10*time.Millisecond)
-	time.Sleep(40 * time.Millisecond)
+	setNow(tbl, func() time.Time { return now.Add(40 * time.Millisecond) })
 	tbl.reap()
 
 	if tbl.count() != 0 {
@@ -914,7 +911,7 @@ func TestPoolAcquireWaitsForLeader(t *testing.T) {
 	defer p.Close()
 
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		f.become(c.LocalNode().ID, 1)
 	}()
 
@@ -1062,10 +1059,20 @@ func TestPoolClosed(t *testing.T) {
 	p, _, c := newLeaderPool(t, &Config{Name: "p", MinTTL: time.Second, MaxTTL: time.Minute})
 	defer c.Stop()
 
+	held, err := p.TryAcquire("held", 5*time.Second)
+	if err != nil {
+		t.Fatalf("acquire before close: %v", err)
+	}
 	p.Close()
 
 	if _, err := p.TryAcquire("k", 5*time.Second); !errors.Is(err, ErrPoolClosed) {
 		t.Errorf("expected ErrPoolClosed, got %v", err)
+	}
+	if err := held.Extend(5 * time.Second); !errors.Is(err, ErrPoolClosed) {
+		t.Errorf("Extend on a closed pool should fail, got %v", err)
+	}
+	if err := held.Release(); !errors.Is(err, ErrPoolClosed) {
+		t.Errorf("Release on a closed pool should fail, got %v", err)
 	}
 	if _, _, _, _, err := p.Query("k"); !errors.Is(err, ErrPoolClosed) {
 		t.Errorf("Query on a closed pool should fail, got %v", err)

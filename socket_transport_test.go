@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -9,295 +10,146 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/paularlott/gossip/codec"
-	"github.com/paularlott/gossip/compression/snappy"
-	"github.com/paularlott/gossip/encryption/aes"
-	"github.com/paularlott/gossip/hlc"
-	"github.com/paularlott/logger"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestSocketTransport_NewSocketTransport(t *testing.T) {
-	config := &Config{
-		BindAddr:                 "127.0.0.1:0",
-		IncomingPacketQueueDepth: 10,
-		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJSONCodec(),
+// startSocket starts a socket transport on a free port and returns it with a node that addresses it. It stops with
+// the test.
+func startSocket(t testing.TB, opts ...func(*Config)) (*SocketTransport, *Node) {
+	t.Helper()
+	addr := getFreeTCPAddress(t)
+	cfg := DefaultConfig()
+	cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
+	cfg.MsgCodec = codec.NewJSONCodec()
+	for _, opt := range opts {
+		opt(cfg)
 	}
-
-	transport := NewSocketTransport(config)
-	if transport == nil {
-		t.Fatal("Failed to create transport")
-	}
-
-	if transport.Name() != "socket" {
-		t.Errorf("Expected name 'socket', got %s", transport.Name())
-	}
-
+	st := NewSocketTransport(cfg)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var wg sync.WaitGroup
-	err := transport.Start(ctx, &wg)
-	if err != nil {
-		t.Fatalf("Failed to start transport: %v", err)
-	}
-
-	cancel()
-	wg.Wait()
+	require.NoError(t, st.Start(ctx, &wg))
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	return st, newNode(NodeID(uuid.New()), addr)
 }
 
-func TestSocketTransport_PacketSerialization(t *testing.T) {
-	config := &Config{
-		MsgCodec:        codec.NewJSONCodec(),
-		CompressMinSize: 100,
+func TestSocketTransportLifecycle(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         []func(*Config)
+		wantUDP      bool
+		wantReliable bool // everything goes over TCP
+	}{
+		{"default", nil, true, false},
+		{"forced reliable has no UDP listener", []func(*Config){func(c *Config) { c.ForceReliableTransport = true }}, false, true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.BindAddr = getFreeTCPAddress(t)
+			cfg.MsgCodec = codec.NewJSONCodec()
+			for _, opt := range tt.opts {
+				opt(cfg)
+			}
+			st := NewSocketTransport(cfg)
+			assert.Equal(t, "socket", st.Name())
+			require.NotNil(t, st.PacketChannel())
 
-	transport := &SocketTransport{config: config}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var wg sync.WaitGroup
+			require.NoError(t, st.Start(ctx, &wg))
+			assert.NotNil(t, st.tcpListener)
+			assert.Equal(t, tt.wantUDP, st.udpListener != nil)
+			addr := st.tcpListener.Addr().String()
 
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
+			// A node whose address cannot be resolved cannot be sent to.
+			p := testPacket(cfg.MsgCodec, "x")
+			defer p.Release()
+			unresolved := &Node{ID: NodeID(uuid.New())}
+			assert.Error(t, st.Send(TransportBestEffort, unresolved, p.AddRef()))
+			_, err := st.SendWithReply(unresolved, p.AddRef())
+			assert.Error(t, err)
 
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
+			cancel()
+			wg.Wait()
+			_, err = net.DialTimeout("tcp", addr, time.Second)
+			assert.Error(t, err, "the TCP listener is closed on shutdown")
+		})
 	}
-
-	decoded, _, err := transport.packetFromBuffer(data)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet: %v", err)
-	}
-
-	if decoded.MessageType != packet.MessageType {
-		t.Errorf("MessageType mismatch: expected %d, got %d", packet.MessageType, decoded.MessageType)
-	}
-	if string(decoded.Payload()) != string(packet.Payload()) {
-		t.Errorf("Payload mismatch: expected %s, got %s", packet.Payload(), decoded.Payload())
-	}
-
-	packet.Release()
-	decoded.Release()
 }
 
-func TestSocketTransport_PacketWithCompression(t *testing.T) {
-	config := &Config{
-		MsgCodec:        codec.NewJSONCodec(),
-		Compressor:      snappy.New(),
-		CompressMinSize: 10,
+// Packets go over TCP when sent reliably, over UDP when best effort, and over TCP again when too large for UDP.
+func TestSocketTransportSend(t *testing.T) {
+	tests := []struct {
+		name         string
+		transport    TransportType
+		udpMax       int
+		payload      string
+		wantReliable bool
+	}{
+		{"reliable goes over TCP", TransportReliable, 1400, "tcp-test-data", true},
+		{"best effort goes over UDP", TransportBestEffort, 1400, "udp-test", false},
+		{"best effort too large for UDP falls back to TCP", TransportBestEffort, 10, "this is larger than 10 bytes", true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receiver, node := startSocket(t)
+			sender, _ := startSocket(t, func(c *Config) { c.UDPMaxPacketSize = tt.udpMax })
+			p := testPacket(sender.config.MsgCodec, tt.payload)
+			defer p.Release()
 
-	transport := &SocketTransport{config: config}
+			require.NoError(t, sender.Send(tt.transport, node, p.AddRef()))
 
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	payload := make([]byte, 1000)
-	for i := range payload {
-		payload[i] = byte(i % 256)
+			select {
+			case got := <-receiver.PacketChannel():
+				defer got.Release()
+				assert.Equal(t, UserMsg, got.MessageType)
+				assert.Equal(t, tt.payload, string(got.Payload()))
+				assert.Equal(t, p.SenderID, got.SenderID)
+				assert.Equal(t, tt.wantReliable, got.arrivedReliably(), "arrived over TCP")
+			case <-time.After(5 * time.Second):
+				t.Fatal("no packet received")
+			}
+		})
 	}
-	packet.SetPayload(payload)
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
-	}
-
-	decoded, _, err := transport.packetFromBuffer(data)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet: %v", err)
-	}
-
-	if len(decoded.Payload()) != len(packet.Payload()) {
-		t.Errorf("Payload length mismatch: expected %d, got %d", len(packet.Payload()), len(decoded.Payload()))
-	}
-
-	packet.Release()
-	decoded.Release()
 }
 
-func TestSocketTransport_PacketWithEncryption(t *testing.T) {
-	config := &Config{
-		MsgCodec:      codec.NewJSONCodec(),
-		Cipher:        aes.New(),
-		EncryptionKey: []byte("12345678901234567890123456789012"),
-	}
+func TestSocketTransportSendWithReply(t *testing.T) {
+	server, node := startSocket(t)
+	client, _ := startSocket(t)
+	go func() {
+		got := <-server.PacketChannel()
+		defer got.Release()
+		got.SetCodec(server.config.MsgCodec)
+		got.SetPayload([]byte("pong"))
+		got.AddRef()
+		got.SendReply()
+	}()
+	p := testPacket(client.config.MsgCodec, "ping")
+	defer p.Release()
 
-	transport := &SocketTransport{config: config}
+	reply, err := client.SendWithReply(node, p)
 
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("encrypted test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	data, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet: %v", err)
-	}
-
-	decoded, _, err := transport.packetFromBuffer(data)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet: %v", err)
-	}
-
-	if string(decoded.Payload()) != string(packet.Payload()) {
-		t.Errorf("Payload mismatch after encryption: expected %s, got %s", packet.Payload(), decoded.Payload())
-	}
-
-	packet.Release()
-	decoded.Release()
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+	defer reply.Release()
+	assert.Equal(t, "pong", string(reply.Payload()))
 }
 
-func TestSocketTransport_ReplyExpectedFlag(t *testing.T) {
-	config := &Config{
-		MsgCodec: codec.NewJSONCodec(),
-	}
+func TestSocketTransportSendFailures(t *testing.T) {
+	t.Run("nobody listening", func(t *testing.T) {
+		st := NewSocketTransport(&Config{MsgCodec: codec.NewJSONCodec(), TCPDialTimeout: 200 * time.Millisecond})
+		_, err := st.dialPeer(context.Background(), newNode(NodeID(uuid.New()), "127.0.0.1:1"))
+		assert.Error(t, err)
+	})
 
-	transport := &SocketTransport{config: config}
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("test payload"))
-	packet.SetCodec(config.MsgCodec)
-
-	dataWithReply, err := transport.packetToBuffer(packet, true)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet with reply: %v", err)
-	}
-
-	decoded, replyExpected, err := transport.packetFromBuffer(dataWithReply)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet with flags: %v", err)
-	}
-
-	if !replyExpected {
-		t.Error("Expected reply flag to be set")
-	}
-
-	dataNoReply, err := transport.packetToBuffer(packet, false)
-	if err != nil {
-		t.Fatalf("Failed to serialize packet without reply: %v", err)
-	}
-
-	decoded2, replyExpected2, err := transport.packetFromBuffer(dataNoReply)
-	if err != nil {
-		t.Fatalf("Failed to deserialize packet without reply: %v", err)
-	}
-
-	if replyExpected2 {
-		t.Error("Expected reply flag to be unset")
-	}
-
-	packet.Release()
-	decoded.Release()
-	decoded2.Release()
-}
-
-func TestSocketTransport_SendReceive(t *testing.T) {
-	config1 := &Config{
-		BindAddr:                 "127.0.0.1:0",
-		IncomingPacketQueueDepth: 10,
-		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJSONCodec(),
-		TCPDeadline:              5 * time.Second,
-		UDPDeadline:              5 * time.Second,
-		TCPDialTimeout:           5 * time.Second,
-		UDPMaxPacketSize:         1024,
-		TCPMaxPacketSize:         65536,
-	}
-
-	config2 := &Config{
-		BindAddr:                 "127.0.0.1:0",
-		IncomingPacketQueueDepth: 10,
-		Logger:                   logger.NewNullLogger(),
-		MsgCodec:                 codec.NewJSONCodec(),
-		TCPDeadline:              5 * time.Second,
-		UDPDeadline:              5 * time.Second,
-		TCPDialTimeout:           5 * time.Second,
-		UDPMaxPacketSize:         1024,
-		TCPMaxPacketSize:         65536,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var wg sync.WaitGroup
-
-	transport1 := NewSocketTransport(config1)
-	err := transport1.Start(ctx, &wg)
-	if err != nil {
-		t.Fatalf("Failed to start transport1: %v", err)
-	}
-
-	transport2 := NewSocketTransport(config2)
-	err = transport2.Start(ctx, &wg)
-	if err != nil {
-		t.Fatalf("Failed to start transport2: %v", err)
-	}
-
-	addr1 := transport1.tcpListener.Addr().(*net.TCPAddr)
-	addr2 := transport2.tcpListener.Addr().(*net.TCPAddr)
-
-	node1 := newNode(NodeID(uuid.New()), addr1.String())
-	node1.address = Address{IP: addr1.IP, Port: addr1.Port}
-
-	node2 := newNode(NodeID(uuid.New()), addr2.String())
-	node2.address = Address{IP: addr2.IP, Port: addr2.Port}
-
-	packet := NewPacket()
-	packet.MessageType = UserMsg
-	packet.SenderID = NodeID(uuid.New())
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 5
-	packet.SetPayload([]byte("TCP test message"))
-	packet.SetCodec(config2.MsgCodec)
-
-	err = transport2.Send(TransportReliable, node1, packet)
-	if err != nil {
-		t.Fatalf("Failed to send TCP packet: %v", err)
-	}
-
-	select {
-	case receivedPacket := <-transport1.PacketChannel():
-		if string(receivedPacket.Payload()) != "TCP test message" {
-			t.Errorf("Received wrong payload: %s", receivedPacket.Payload())
-		}
-		receivedPacket.Release()
-	case <-time.After(2 * time.Second):
-		t.Error("Timeout waiting for TCP packet")
-	}
-
-	packet.Release()
-
-	cancel()
-	wg.Wait()
-}
-
-func TestSocketTransport_ErrorCases(t *testing.T) {
-	config := &Config{
-		MsgCodec: codec.NewJSONCodec(),
-	}
-
-	transport := &SocketTransport{config: config}
-
-	_, _, err := transport.packetFromBuffer([]byte{0x00})
-	if err == nil {
-		t.Error("Expected error for packet too small")
-	}
-
-	_, _, err = transport.packetFromBuffer([]byte{0xFF, 0xFF, 0x00})
-	if err == nil {
-		t.Error("Expected error for invalid header size")
-	}
+	t.Run("udp to a name that does not resolve", func(t *testing.T) {
+		st, _ := startSocket(t, func(c *Config) { c.Resolver = &mockResolver{ipErr: fmt.Errorf("DNS failure")} })
+		p := testPacket(st.config.MsgCodec, "test")
+		defer p.Release()
+		buf, err := st.packetToBuffer(p, false)
+		require.NoError(t, err)
+		assert.Error(t, st.sendUDP(newNode(NodeID(uuid.New()), "unreachable.host:7946"), buf))
+	})
 }

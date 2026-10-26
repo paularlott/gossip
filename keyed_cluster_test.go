@@ -39,17 +39,12 @@ func (n *keyedNode) received(from *Cluster) []bool {
 // startKeyedNode starts a node encrypted with cipher and keys; cipher legacyCipher stands in for an older version.
 func startKeyedNode(t *testing.T, cipher encryption.Cipher, current []byte, previous ...[]byte) *keyedNode {
 	t.Helper()
-	addr := getFreeTCPAddress(t)
-	cfg := DefaultConfig()
-	cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
-	cfg.Transport = NewSocketTransport(cfg)
-	cfg.MsgCodec = shamaton.New()
-	cfg.Logger = logger.NewNullLogger()
-	cfg.Cipher = cipher
-	cfg.EncryptionKey = current
-	cfg.PreviousEncryptionKeys = previous
-	c, err := NewCluster(cfg)
-	require.NoError(t, err)
+	c := startLiveCluster(t, func(cfg *Config) {
+		cfg.MsgCodec = shamaton.New()
+		cfg.Cipher = cipher
+		cfg.EncryptionKey = current
+		cfg.PreviousEncryptionKeys = previous
+	})
 	n := &keyedNode{Cluster: c, got: map[NodeID][]bool{}}
 	require.NoError(t, c.HandleFunc(keyedTestMsg, func(sender *Node, p *Packet) error {
 		n.mu.Lock()
@@ -62,8 +57,6 @@ func startKeyedNode(t *testing.T, cipher encryption.Cipher, current []byte, prev
 		_, err := w.Write([]byte("stream reply"))
 		return err
 	}))
-	c.Start()
-	t.Cleanup(c.Stop)
 	return n
 }
 
@@ -86,7 +79,7 @@ func meshed(t *testing.T, nodes ...*keyedNode) {
 			}
 		}
 		return true
-	}, 10*time.Second, 50*time.Millisecond, "nodes did not discover each other and their key windows")
+	}, 10*time.Second, 10*time.Millisecond, "nodes did not discover each other and their key windows")
 }
 
 // deliver sends a direct message from a to b, best effort and reliably, and waits for both to arrive.
@@ -170,7 +163,7 @@ func TestMixedVersionCluster(t *testing.T) {
 				}
 			}
 			return true
-		}, 10*time.Second, 50*time.Millisecond, "broadcast not delivered everywhere")
+		}, 10*time.Second, 10*time.Millisecond, "broadcast not delivered everywhere")
 	}
 }
 
@@ -253,7 +246,7 @@ func TestLiveKeyRotation(t *testing.T) {
 	stale.Join([]string{nodes[0].LocalNode().AdvertisedAddr()})
 	require.Never(t, func() bool {
 		return stale.GetNode(nodes[0].LocalNode().ID) != nil || nodes[0].GetNode(stale.LocalNode().ID) != nil
-	}, 3*time.Second, 100*time.Millisecond, "a node with only the old key joined")
+	}, time.Second, 20*time.Millisecond, "a node with only the old key joined")
 }
 
 func TestSetEncryptionKeysValidation(t *testing.T) {
@@ -261,12 +254,7 @@ func TestSetEncryptionKeysValidation(t *testing.T) {
 	require.Error(t, n.SetEncryptionKeys(testKey(1, 5)))
 	require.Error(t, n.SetEncryptionKeys(testKey(1, 32), testKey(2, 3)))
 
-	cfg := DefaultConfig()
-	cfg.BindAddr = getFreeTCPAddress(t)
-	cfg.Transport = NewSocketTransport(cfg)
-	cfg.Logger = logger.NewNullLogger()
-	plain, err := NewCluster(cfg)
-	require.NoError(t, err)
+	plain := startLiveCluster(t)
 	require.Error(t, plain.SetEncryptionKeys(testKey(1, 32)), "turning encryption on in a running, unencrypted cluster")
 
 	cfg2 := DefaultConfig()
@@ -274,7 +262,7 @@ func TestSetEncryptionKeysValidation(t *testing.T) {
 	cfg2.Transport = NewSocketTransport(cfg2)
 	cfg2.Logger = logger.NewNullLogger()
 	cfg2.Cipher, cfg2.EncryptionKey, cfg2.PreviousEncryptionKeys = aes.New(), testKey(1, 32), [][]byte{testKey(2, 9)}
-	_, err = NewCluster(cfg2)
+	_, err := NewCluster(cfg2)
 	require.Error(t, err, "invalid previous key accepted at start")
 }
 
