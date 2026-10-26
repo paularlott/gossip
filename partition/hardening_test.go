@@ -447,7 +447,7 @@ func TestClaimOnlyWhenCaughtUp(t *testing.T) {
 // One partition's forwarded changes cannot take more than MaxChangesPerPartition: the next is answered busy, while
 // another partition's change runs.
 func TestPerPartitionChangeLimit(t *testing.T) {
-	fc := leaderOf(t, 0, func(i int, c *Config) { c.MaxChangesPerPartition = 1 })
+	fc := leaderOf(t, 0, func(i int, c *Config) { c.Tuning.MaxChangesPerPartition = 1 })
 	owner := fc.nodes[0]
 	if err := owner.m.takeover(t.Context(), 2); err != nil {
 		t.Fatal(err)
@@ -476,7 +476,7 @@ func TestPerPartitionChangeLimit(t *testing.T) {
 
 // A landing node backs off exponentially, with jitter, while the owner is busy: tens of retries in 300ms, not a hundred.
 func TestBusyBackoffGrows(t *testing.T) {
-	fc := leaderOf(t, 0, func(i int, c *Config) { c.OwnerTimeout = 2 * time.Second; c.MaxConcurrentChanges = 1 })
+	fc := leaderOf(t, 0, func(i int, c *Config) { c.OwnerTimeout = 2 * time.Second; c.Tuning.MaxConcurrentChanges = 1 })
 	owner, other := fc.nodes[0], fc.nodes[1]
 	owner.m.changeSem <- struct{}{} // the owner is at its limit
 	e, _ := owner.m.leadingEpoch(1)
@@ -493,7 +493,7 @@ func TestBusyBackoffGrows(t *testing.T) {
 
 // Background catch-ups share the node's MaxConcurrentCatchUps slots.
 func TestCatchUpsShareANodeWideLimit(t *testing.T) {
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.MaxConcurrentCatchUps = 1 })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.MaxConcurrentCatchUps = 1 })
 	fc.attach()
 	f, src := fc.nodes[0], fc.nodes[1]
 	src.store.seedCommitted(1, 5, ep(1, 2))

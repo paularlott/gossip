@@ -35,11 +35,12 @@ import (
 // not change anything outside this file. The whole store is also kept in memory, so State, Prepare, Export and reads
 // never touch the disk.
 //
-// Commit and Import need not be durable before they return (the Store contract of the partition package: a write is safe
-// once it is stored as pending on a majority, and a commit lost in a crash is redone from that), so they only update
+// Commit and Import are not durable before they return: this store uses the partition package's optional deferred
+// durability (a write is safe once it is stored as pending on a majority, and a commit lost in a crash is redone from
+// that, provided the ordering rule below holds), so they only update
 // memory and leave the rewrite of data.json to a background flush, which still replaces the file atomically (temporary
 // file, fsync, rename), so a crash leaves the state from before or after a flush, never a torn one, and a burst of commits
-// costs one rewrite. What the contract adds is an ordering: SetPromised and SetPending flush the committed data before
+// costs one rewrite. What that optimisation requires is an ordering: SetPromised and SetPending flush the committed data before
 // they write state.json, so that a crash never keeps a pending write (or a promise) while forgetting the commit before
 // it. Sync does it on a graceful stop.
 //

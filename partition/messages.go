@@ -90,7 +90,7 @@ const (
 	// statusExhausted: a counter would have reached MaxUint64 (ErrExhausted); nothing written. It is a status of its
 	// own so that the landing node fails at once instead of retrying until its timeout.
 	statusExhausted
-	// statusBusy: the owner is running as many forwarded changes as Config.MaxConcurrentChanges allows; nothing was
+	// statusBusy: the owner is running as many forwarded changes as Config.Tuning.MaxConcurrentChanges allows; nothing was
 	// run, and the landing node retries after a short pause.
 	statusBusy
 )
@@ -144,9 +144,9 @@ type stateResp struct {
 	// may lack promises it made and writes it acknowledged, so a node synchronising at startup counts only intact
 	// answers toward its quorum and takes nothing from the others.
 	Intact bool `msgpack:"in,omitempty" json:"in,omitempty"`
-	// Forming is true for an intact node that is not established (Config.Established). It is informational: other
-	// nodes may have committed without it, so it never lowers the recovery quorum.
-	Forming   bool    `msgpack:"fo,omitempty" json:"fo,omitempty"`
+	// Unformed is true while the replier has not formed (Config.Formed). Absence means formed, the safe default for a
+	// peer that does not say.
+	Unformed  bool    `msgpack:"uf,omitempty" json:"uf,omitempty"`
 	Committed []Pos   `msgpack:"c" json:"c"`
 	Promised  []Epoch `msgpack:"pr" json:"pr"`
 	// Pending is the replier's pending write per partition (nil entries: none); omitted when it has none at all. A node

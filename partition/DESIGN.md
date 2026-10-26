@@ -65,7 +65,7 @@ OK" reply, never with an acknowledgement.
 | Write | request | `(Write, OwnerCommitted)` → `OK`, `Promised`, `Committed`, `NeedCatchUp` | §5, §6 |
 | Change | request | `(P, Change, Deadline)` → `Status`, refusal code and message, `Pos`, `Reply`, owner hint | §5 |
 | Read | request | `(P, Req, Deadline)` → as Change; `Reply` is the answer | §8 |
-| State | request | `()` → `Intact`, `Forming`, `Committed[]`, `Promised[]`, `Pending[]` for every partition | §7 |
+| State | request | `()` → `Intact`, `Unformed`, `Committed[]`, `Promised[]`, `Pending[]` for every partition | §7 |
 | Claim | request | `(P)` → `OK` | §3 |
 | CatchUp | stream | `(P, After, Full)` → header `(UpTo, Err)`, then the `Store.Export` bytes | §6 |
 | Relinquish | one way | `(P, Epoch)` | §3 |
@@ -89,7 +89,9 @@ A partition is **ownerless** at a node when the node does not lead it and has no
 heartbeat or commit notice is older than `OwnerTimeout`, or the owner relinquished. `ownerlessSince` is when that began:
 the expiry of the last owner's heartbeat, or when the node first noticed there was none; it is reset when an owner is seen.
 
-Every `HeartbeatInterval` the ownership loop looks at each partition [takeover.go]:
+Every `HeartbeatInterval` the ownership loop looks at each partition [takeover.go]. (The knobs named below and in the
+later sections, `RankDelay`, `BackoffMax`, `TakeoverBackoffMax`, `ReadyHoldDown` and the `MaxConcurrent*` limits, are
+fields of `Config.Tuning`.)
 
 - **Takeover.** A ready, eligible node of rank `r` takes over a partition that has been ownerless for `r × RankDelay`,
   after a random backoff in `[0, BackoffMax)` (the trigger is checked again after it), unless the partition is in backoff
@@ -282,18 +284,26 @@ whether its node is resyncing (`Intact` false), and such a node may have forgott
 nodes that lost their data never resync from each other. `ForceResync` (an operator's, for one start) lowers the quorum
 to one intact answer, never to none: with only resyncing nodes answering the node waits, and says so at warn level.
 
-**Forming and established.** An intact node is *established* once it has given a promise (`setPromised`, made durable
-through `Config.SetEstablished` before the promise is stored; a resyncing node raising its promise to what others report
-does not count) or completed a startup sync with intact answers from a majority including itself; until then it is
-*forming*, and its State answer says so. This is informational and never lowers the recovery quorum: a majority can
-commit while a forming node is absent, so the forming node's intact data may still be stale. For example, two of three
-nodes can commit a write before the third ever participates. If one of those two loses its disk while the other is
-unreachable, recovering from the forming third node alone would lose that acknowledged write. Retaining or losing the
-recovering node's established marker does not change that argument.
+**Formation.** A node is *formed* once it has given a promise (`setPromised`, made durable through `Config.SetFormed`
+before the promise is stored; a resyncing node raising its promise to what others report does not count) or completed a
+startup sync with intact answers from a majority including itself; until then it is *unformed*, and its State answer says
+so (`Unformed`; absence means formed, the safe default). The marker matters only to a node in resync mode, which counts
+only intact answers from *formed* nodes toward the quorum: an unformed node has taken part in no majority, so it may lack
+what a majority committed without it. For example, two of three nodes can commit a write before the third ever
+participates; if one of those two loses its disk while the other is unreachable, recovering from the unformed third alone
+would lose that acknowledged write.
 
-To bootstrap empty nodes around one seeded or restored node when the seed alone does not meet the resync quorum, the
-operator must explicitly set `ForceResync` on the empty nodes for that start and ensure that the seed holds the intended
-data set. After bootstrap, normal recovery uses the quorum again. With the hooks left nil every node counts as established.
+The one exception is the formation of a new data set around its founder (the one node that holds it, seeded or
+restored, intact and unformed, the others empty). A resyncing node that is itself unformed, when every answer it received
+(intact or not) reports unformed and at least one is intact, needs one intact answer instead of `resyncQuorum`, and
+syncs from the intact answers. This is safe because no write can have been committed without an unformed node: every
+commit needs a takeover and every takeover a majority of promises, and giving a promise forms its giver. One formed
+answer, even from a node that is itself resyncing, rules the exception out. With the hooks left nil every node counts as
+formed, and a new data set then forms only with `ForceResync` set on the empty nodes for that start (the operator
+ensures that the seed holds the intended data set).
+
+Known limit: losing the disks of a majority of the nodes loses the writes only they held; recovery is from backup. (If the
+only node left is one that never formed, it may form the data set again from its own copy without `ForceResync`.)
 
 When every partition is caught up it leaves resync mode (calling the
 `HandleResyncedFunc` handlers), waits `ReadyHoldDown` and publishes `ready = true`; only then is the node a candidate. Any
@@ -354,14 +364,18 @@ and that node promised after it answered, so the later owner's takeover complete
 
 ## 9. The durability contract and the safety argument
 
-**Durability** (the `Store` documentation has the full text). `SetPromised` and `SetPending` are durable before they
-return. `Commit` and `Import` are only atomic: a crash leaves the state from before or after the call. A write's safety
-comes from its being stored as pending on a majority; a commit lost by a crash is redone from the pending write, which
-every rule above handles (a follower commits it when the owner's position says so; a new owner settles it). So a write's
-latency is one durable `SetPending`, and no `Commit`. One ordering is required: a durable `SetPending` or `SetPromised`
-must also make everything committed or imported before it durable. With a single pending slot, a crash that kept a later
-`SetPending` (at *n+1*) and lost the `Commit` of *n* would leave the node with `Committed` *n-1* and `Pending` *n+1*, and
-write *n* on this node nowhere.
+**Durability** (the `Store` documentation has the full text). The simple contract: `Commit`, `Import`, `SetPromised`
+and `SetPending` are all durable before they return, and `Commit` and `Import` are atomic: a crash leaves the state from
+before or after the call. A store that follows it needs nothing more.
+
+*Optional optimisation: deferred durability of `Commit` and `Import`.* A write's safety comes from its being stored as
+pending on a majority; a commit lost by a crash is redone from the pending write, which every rule above handles (a
+follower commits it when the owner's position says so; a new owner settles it). So a store may let `Commit` and `Import`
+return before they are durable, and a write's latency is then one durable `SetPending`, and no durable `Commit`. This is
+allowed only for a store that guarantees one ordering: a durable `SetPending` or `SetPromised` must also make
+everything committed or imported before it durable. With a single pending slot, a crash that kept a later `SetPending`
+(at *n+1*) and lost the `Commit` of *n* would leave the node with `Committed` *n-1* and `Pending` *n+1*, and write *n*
+on this node nowhere.
 
 **One value per Seq.** A write at Seq *s* in epoch *e* is made only by the owner of *e*, which became owner through a
 majority of durable promises, and is stored by a node only if the node's promise is not above *e*. Take the first write

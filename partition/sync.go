@@ -2,6 +2,7 @@ package partition
 
 import (
 	"context"
+	"slices"
 )
 
 // syncLoop is the startup synchronisation: it repeats syncOnce until it succeeds, waits ReadyHoldDown and publishes
@@ -9,7 +10,7 @@ import (
 func (m *Manager) syncLoop() {
 	for !m.ready.Load() {
 		if m.syncOnce() {
-			if !m.sleep(m.ctx, m.cfg.ReadyHoldDown) {
+			if !m.sleep(m.ctx, m.cfg.Tuning.ReadyHoldDown) {
 				return
 			}
 			m.ready.Store(true)
@@ -28,7 +29,10 @@ func (m *Manager) syncLoop() {
 // nothing, and two nodes that both lost their data must never resync from each other alone. Once intact answers from a
 // majority of nodes including this one (in resync mode resyncQuorum of the other nodes; with ForceResync, at least one)
 // are in, it catches every partition up to what the highest reporter has committed; in resync mode it also raises each
-// partition's promise to the highest reported, adopts pending writes and leaves resync mode. It reports whether every
+// partition's promise to the highest reported, adopts pending writes and leaves resync mode. In resync mode an intact
+// answer from a node that has not formed (stateResp.Unformed) does not count, unless every answer is unformed and this
+// node has not formed either: that is the formation of a new data set, which one intact answer (the founder's)
+// suffices for. It reports whether every
 // partition is caught up to what the answers reported.
 func (m *Manager) syncOnce() bool {
 	resync := m.resync.Load()
@@ -38,12 +42,16 @@ func (m *Manager) syncOnce() bool {
 
 	var answers []reply[stateResp]
 	notIntact := 0
+	anyFormed := false // some answer, intact or not, reports a node that has formed
 	for range peers {
 		select {
 		case rep := <-replies:
 			r := rep.resp
 			if r == nil || r.SizeMismatch || len(r.Committed) != len(m.parts) || len(r.Promised) != len(m.parts) {
 				continue
+			}
+			if !r.Unformed {
+				anyFormed = true
 			}
 			if !r.Intact {
 				notIntact++
@@ -53,20 +61,32 @@ func (m *Manager) syncOnce() bool {
 		case <-ctx.Done():
 		}
 	}
-	have, need := len(answers), majority(m.cfg.ClusterSize)
+	intact := len(answers) // every intact answer, whether or not it counts below
+	have, need := intact, majority(m.cfg.ClusterSize)
+	formation := false
 	switch {
 	case !resync:
 		have++ // this node's own state is one of the majority
 	case m.cfg.ForceResync:
 		need = 1 // an operator accepted resyncing from whichever intact nodes answer
+	case !m.formed.Load() && !anyFormed && intact > 0:
+		// Formation: this node and every node that answered are unformed, so no write can have been committed without
+		// them (every commit needs a takeover, and a takeover a promise, which forms its giver), and the intact ones,
+		// the founder, hold the data set. Nothing else lowers the quorum.
+		formation, need = true, 1
 	default:
-		// Even a forming peer can be stale: another majority may have committed
-		// without it. Only an explicit ForceResync may lower the recovery quorum.
-		need = resyncQuorum(m.cfg.ClusterSize)
+		// Any formed peer can be stale: another majority may have committed without it. Only an explicit ForceResync
+		// may lower the recovery quorum. A node that has not formed has taken part in no majority, so its intact
+		// answer proves nothing about what a majority committed and does not count.
+		answers = slices.DeleteFunc(slices.Clone(answers), func(a reply[stateResp]) bool { return a.resp.Unformed })
+		have, need = len(answers), resyncQuorum(m.cfg.ClusterSize)
 	}
 	if have < need {
 		m.syncWaiting(resync, len(answers), notIntact, need)
 		return false
+	}
+	if formation {
+		m.log.Info("forming the data set from the founder", "intact_answers", intact)
 	}
 	if resync && m.cfg.ForceResync && have < resyncQuorum(m.cfg.ClusterSize) {
 		m.log.Warn("forced resync from fewer of the other nodes than every majority needs: writes only the others held may be lost",
@@ -82,10 +102,10 @@ func (m *Manager) syncOnce() bool {
 	if ok && resync {
 		m.leaveResync()
 	}
-	if ok && len(answers)+1 >= majority(m.cfg.ClusterSize) {
-		// A majority of intact nodes, this one included: the cluster's data set is formed and this node is part of it.
-		if err := m.markEstablished(); err != nil {
-			m.log.Error("recording that this node is established failed", "error", err)
+	if ok && intact+1 >= majority(m.cfg.ClusterSize) {
+		// A majority of intact nodes, this one included: the cluster's data set has formed and this node is part of it.
+		if err := m.markFormed(); err != nil {
+			m.log.Error("recording that this node has formed failed", "error", err)
 			return false
 		}
 	}

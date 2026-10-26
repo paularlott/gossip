@@ -56,7 +56,7 @@ type partState struct {
 	catchingUp atomic.Bool  // an asynchronous catch-up is in flight
 	claiming   atomic.Bool  // a claim request is in flight
 	applying   atomic.Bool  // applyEntries is draining next (see queueEntry)
-	changes    atomic.Int32 // forwarded changes of the partition held as owner (Config.MaxChangesPerPartition)
+	changes    atomic.Int32 // forwarded changes of the partition held as owner (Config.Tuning.MaxChangesPerPartition)
 
 	// roundMu guards the read-confirmation rounds (see read.go): roundRunning says one is in flight, roundNext is the one
 	// that starts when it ends, which the reads that arrived meanwhile wait for.
@@ -167,12 +167,13 @@ type Manager struct {
 
 	parts []*partState
 
+	// formed: the node has taken part in the protocol or synchronised with an intact majority (Config.Formed); until
+	// then it is unformed, and says so in its State answers.
+	formed atomic.Bool
+
 	ready    atomic.Bool // the startup synchronisation has completed (partition.ready, unless the node is ineligible)
 	resync   atomic.Bool // resync mode: the node's data is not intact; it promises and stores nothing
 	eligible atomic.Bool // SetEligible: the node may own partitions
-	// established: the node has taken part in the protocol or synchronised with an intact majority (Config.Established);
-	// a node that is not is forming. This status does not change the recovery quorum.
-	established atomic.Bool
 
 	ctx    context.Context // ends on Stop
 	cancel context.CancelFunc
@@ -224,14 +225,14 @@ func newManager(cfg Config, nw network) (*Manager, error) {
 		self:       nw.self(),
 		now:        time.Now,
 		parts:      make([]*partState, cfg.Partitions),
-		changeSem:  make(chan struct{}, cfg.MaxConcurrentChanges),
-		readSem:    make(chan struct{}, cfg.MaxConcurrentReads),
-		reqSem:     make(chan struct{}, cfg.MaxConcurrentRequests),
-		catchUpSem: make(chan struct{}, cfg.MaxConcurrentCatchUps),
+		changeSem:  make(chan struct{}, cfg.Tuning.MaxConcurrentChanges),
+		readSem:    make(chan struct{}, cfg.Tuning.MaxConcurrentReads),
+		reqSem:     make(chan struct{}, cfg.Tuning.MaxConcurrentRequests),
+		catchUpSem: make(chan struct{}, cfg.Tuning.MaxConcurrentCatchUps),
 		evWake:     make(chan struct{}, 1),
 	}
 	m.eligible.Store(true)
-	m.established.Store(cfg.Established == nil || cfg.SetEstablished == nil || cfg.Established())
+	m.formed.Store(cfg.Formed == nil || cfg.SetFormed == nil || cfg.Formed())
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	for i := range m.parts {
 		m.parts[i] = &partState{mu: newPartMutex()}

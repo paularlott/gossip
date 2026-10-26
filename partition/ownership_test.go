@@ -75,7 +75,7 @@ func TestRendezvousRankOrdersCandidates(t *testing.T) {
 }
 
 func TestTakeoverWaitsRankTimesRankDelay(t *testing.T) {
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.TakeoverBackoffMax = 450 * time.Millisecond })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.TakeoverBackoffMax = 450 * time.Millisecond })
 	var ids []gossip.NodeID
 	for _, fn := range fc.nodes {
 		ids = append(ids, fn.id)
@@ -84,7 +84,7 @@ func TestTakeoverWaitsRankTimesRankDelay(t *testing.T) {
 		m := fn.m
 		m.ready.Store(true)
 		advance := setClock(m)
-		delay := time.Duration(r) * m.cfg.RankDelay
+		delay := time.Duration(r) * m.cfg.Tuning.RankDelay
 		// Ownerless from the first look; rank r acts after r x RankDelay.
 		if due := m.takeoverDue(1, ids); due != (r == 0) {
 			t.Fatalf("rank %d: due %v at once", r, due)
@@ -304,7 +304,7 @@ func TestRankOneTakesOverFromACutOffOwner(t *testing.T) {
 		return false
 	})
 	took := time.Since(start)
-	if bound := cfg.OwnerTimeout + cfg.RankDelay + cfg.BackoffMax + 500*time.Millisecond; took > bound {
+	if bound := cfg.OwnerTimeout + cfg.Tuning.RankDelay + cfg.Tuning.BackoffMax + 500*time.Millisecond; took > bound {
 		t.Errorf("took %v to take over, want within %v (OwnerTimeout + RankDelay + BackoffMax + slack)", took, bound)
 	}
 	t.Logf("took over after %v", took)
@@ -357,7 +357,7 @@ func TestRankZeroThatCannotCompleteATakeoverBacksOff(t *testing.T) {
 	// attempts frequent enough to count in a short run (the doubling itself is unit-tested), while still far apart
 	// compared with the 20ms heartbeat: without backoff rank 0 would retry on every claim round.
 	const backoffMax = 400 * time.Millisecond
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.TakeoverBackoffMax = backoffMax })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.TakeoverBackoffMax = backoffMax })
 	fc.startAll()
 	fc.waitOwners(10 * time.Second)
 	waitRankZeroOwners(t, fc, 10*time.Second)

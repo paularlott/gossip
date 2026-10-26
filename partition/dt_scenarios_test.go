@@ -589,7 +589,7 @@ func TestDTLostDiskOwnerWithAckedWriteOnlyPendingElsewhere(t *testing.T) {
 	oIdx.Store(-1)
 	c.opts.Tweak = func(i int, cfg *Config) {
 		if slow.Load() && int32(i) != oIdx.Load() {
-			cfg.ReadyHoldDown = 4 * time.Second // the owner is the first to be ready again
+			cfg.Tuning.ReadyHoldDown = 4 * time.Second // the owner is the first to be ready again
 		}
 	}
 	c.startAll()

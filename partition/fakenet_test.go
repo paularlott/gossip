@@ -59,8 +59,7 @@ func testConfig(store Store, size int) Config {
 		ClusterSize:       size,
 		HeartbeatInterval: 20 * time.Millisecond,
 		OwnerTimeout:      100 * time.Millisecond,
-		BackoffMax:        40 * time.Millisecond,
-		ReadyHoldDown:     10 * time.Millisecond,
+		Tuning:            Tuning{BackoffMax: 40 * time.Millisecond, ReadyHoldDown: 10 * time.Millisecond},
 		WriteTimeout:      2 * time.Second,
 		Store:             store,
 	}

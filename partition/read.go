@@ -23,7 +23,7 @@ var (
 // cluster, shared by the reads that arrive while it runs, plus the hop to the owner when this node is not it.
 //
 // It routes like Write: this node answers if it leads p, otherwise the request goes to the owner it believes in, a node
-// that is not the owner names the one it believes in, and an owner that is at its limit (Config.MaxConcurrentReads) asks
+// that is not the owner names the one it believes in, and an owner that is at its limit (Config.Tuning.MaxConcurrentReads) asks
 // for a retry. Nothing is changed, so a read is simply sent again whenever it may not have arrived. The error is a
 // *RefusedError (errors.Is(err, ErrRefused): Store.Read refused the request), ErrSizeMismatch, or ErrUnavailable (no owner
 // reachable, or no majority confirmed its leadership, within WriteTimeout; Store.Read failed). The answer is the bytes

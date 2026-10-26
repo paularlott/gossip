@@ -97,10 +97,10 @@ func (m *Manager) takeoverFailed(p int) time.Duration {
 	defer ps.vmu.Unlock()
 	ps.failures++
 	d := m.cfg.OwnerTimeout
-	for i := 1; i < ps.failures && d < m.cfg.TakeoverBackoffMax; i++ {
+	for i := 1; i < ps.failures && d < m.cfg.Tuning.TakeoverBackoffMax; i++ {
 		d *= 2
 	}
-	d = min(d, m.cfg.TakeoverBackoffMax)
+	d = min(d, m.cfg.Tuning.TakeoverBackoffMax)
 	ps.backoffUntil = m.now().Add(d)
 	return d
 }
@@ -125,7 +125,7 @@ func (m *Manager) takeoverDue(p int, cands []gossip.NodeID) bool {
 		return false
 	}
 	since, ownerless := m.trackOwnerless(p)
-	return ownerless && m.now().Sub(since) >= time.Duration(rank)*m.cfg.RankDelay && !m.inBackoff(p)
+	return ownerless && m.now().Sub(since) >= time.Duration(rank)*m.cfg.Tuning.RankDelay && !m.inBackoff(p)
 }
 
 // claimDue reports whether this node should ask p's owner to hand it over, and who the owner is: it is ready, eligible
@@ -184,7 +184,7 @@ func (m *Manager) claim(p int, owner gossip.NodeID) {
 
 // takeoverAfterBackoff waits a random time in [0, BackoffMax) and takes over (takeoverAfter).
 func (m *Manager) takeoverAfterBackoff(p int) {
-	m.takeoverAfter(p, time.Duration(rand.Int63n(int64(m.cfg.BackoffMax))))
+	m.takeoverAfter(p, time.Duration(rand.Int63n(int64(m.cfg.Tuning.BackoffMax))))
 }
 
 // takeoverAfter waits d, re-checks the trigger and takes over. A takeover that does not complete puts the partition into

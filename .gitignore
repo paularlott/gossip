@@ -1,2 +1,12 @@
-# built example binary
+# built example binaries (each named after its directory)
+/examples/basic/basic
+/examples/common/common
+/examples/events/events
+/examples/health/health
+/examples/kv/kv
+/examples/kvpersist/kvpersist
+/examples/leader/leader
+/examples/lock/lock
 /examples/partition/partition
+/examples/tagged/tagged
+/examples/usermessages/usermessages

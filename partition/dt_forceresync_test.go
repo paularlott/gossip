@@ -111,37 +111,34 @@ func TestDTDifferentClusterIDsNeverMerge(t *testing.T) {
 	c.verify()
 }
 
-// Bootstrapping empty nodes from one seeded node requires an explicit ForceResync
-// for that start. Being forming does not exempt the seed from the recovery quorum.
+// A new data set forms around one seeded node without ForceResync: the nodes are all unformed, so the empty ones copy
+// from the founder alone. Once formed, the recovery quorum applies again.
 func TestDTFormationAroundOneNode(t *testing.T) {
 	var mu sync.Mutex
-	est := map[int]bool{}
-	bootstrap := false
+	formed := map[int]bool{}
 	c := dtNewCluster(t, dtOpts{Nodes: 3, Tweak: func(i int, cfg *Config) {
-		cfg.Established = func() bool { mu.Lock(); defer mu.Unlock(); return est[i] }
-		cfg.SetEstablished = func() error { mu.Lock(); defer mu.Unlock(); est[i] = true; return nil }
-		cfg.ForceResync = bootstrap && i != 0
+		cfg.Formed = func() bool { mu.Lock(); defer mu.Unlock(); return formed[i] }
+		cfg.SetFormed = func() error { mu.Lock(); defer mu.Unlock(); formed[i] = true; return nil }
 	}})
 	c.startAll()
 	c.awaitReady(30 * time.Second)
 	c.awaitOwners(30 * time.Second)
 	mu.Lock()
-	dtRequire(t, est[0] && est[1] && est[2], "a new cluster's nodes are not established once it is ready: %v", est)
+	dtRequire(t, formed[0] && formed[1] && formed[2], "a new cluster's nodes have not formed once it is ready: %v", formed)
 	mu.Unlock()
 	w := c.startWorkload(dtWLOpts{})
 	time.Sleep(2 * time.Second)
 	w.finish()
 	c.settle()
 
-	// Node 0 now plays the one node holding a data set it was given (a restore or a seed): not established. The others
-	// start with nothing.
+	// Node 0 now plays the founder, the one node holding a data set it was given (a restore or a seed), unformed. The
+	// others start with nothing, unformed.
 	c.crash(1)
 	c.crash(2)
 	c.crash(0)
 	mu.Lock()
-	est[0], est[1], est[2] = false, false, false
+	formed[0], formed[1], formed[2] = false, false, false
 	mu.Unlock()
-	bootstrap = true // operator selected node 0's data set for this bootstrap
 	c.restart(0, true)
 	c.restart(1, false)
 	c.restart(2, false)
@@ -149,21 +146,20 @@ func TestDTFormationAroundOneNode(t *testing.T) {
 	c.awaitOwners(30 * time.Second)
 	c.settle()
 	c.verify()
-	bootstrap = false // subsequent lost-disk recovery must use the quorum again
-
-	// Established now: two nodes that lose their data again need the quorum, which node 0 alone is not.
 	mu.Lock()
-	dtRequire(t, est[0] && est[1] && est[2], "not established after forming: %v", est)
+	dtRequire(t, formed[0] && formed[1] && formed[2], "not formed after forming: %v", formed)
 	mu.Unlock()
+
+	// Two nodes that lose their data again need the quorum, which node 0 alone is not.
 	c.crash(1)
 	c.crash(2)
 	mu.Lock()
-	est[1], est[2] = false, false
+	formed[1], formed[2] = false, false // (the application resets the marker with the data)
 	mu.Unlock()
 	c.restart(1, false)
 	c.restart(2, false)
 	time.Sleep(3 * time.Second)
 	m1, _ := c.node(1)
 	m2, _ := c.node(2)
-	dtRequire(t, m1.resync.Load() && m2.resync.Load(), "two nodes that lost their data resynced from one established node")
+	dtRequire(t, m1.resync.Load() && m2.resync.Load(), "two nodes that lost their data resynced from one intact node")
 }

@@ -74,7 +74,7 @@ func TestServeRunsWorkInAManagerGoroutineAndRepliesOnce(t *testing.T) {
 }
 
 func TestServeRefusesBeyondTheLimitAndWhenStopping(t *testing.T) {
-	m := newFakeCluster(t, 1, 1, func(i int, c *Config) { c.MaxConcurrentRequests = 2 }).nodes[0].m
+	m := newFakeCluster(t, 1, 1, func(i int, c *Config) { c.Tuning.MaxConcurrentRequests = 2 }).nodes[0].m
 	if cap(m.reqSem) != 2 {
 		t.Fatalf("MaxConcurrentRequests = %d", cap(m.reqSem))
 	}
@@ -129,8 +129,8 @@ func TestRegisteredHandlersRefuseBeyondMaxConcurrentRequests(t *testing.T) {
 	waitFor(t, 10*time.Second, "the two nodes to know each other", func() bool {
 		return ca.GetNode(cb.LocalNode().ID) != nil && cb.GetNode(ca.LocalNode().ID) != nil
 	})
-	m, err := New(ca, Config{Partitions: 4, ClusterSize: 3, Store: newMemStore(), MaxConcurrentRequests: 2,
-		HeartbeatInterval: time.Second, Logger: testLogger(t)})
+	m, err := New(ca, Config{Partitions: 4, ClusterSize: 3, Store: newMemStore(),
+		Tuning: Tuning{MaxConcurrentRequests: 2}, HeartbeatInterval: time.Second, Logger: testLogger(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

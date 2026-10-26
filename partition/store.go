@@ -8,19 +8,23 @@ import "io"
 // partitions run concurrently, and State and Export may be called while a change to the same partition is in progress,
 // so a Store must be safe for concurrent use.
 //
-// Durability. SetPromised and SetPending must be durable (fsync) before they return: a promise or a stored write that a
-// crash can forget lets a node accept what it should refuse, or count toward a majority for a write it no longer holds.
-// Commit and Import need not be durable before they return, only atomic: a crash leaves the state from before the call or
-// from after it, never something between. A write's safety comes from its being stored as pending on a majority; if a
-// crash loses a Commit the node restarts with Committed at the write before and the write still pending, which every rule
-// of the protocol already handles (a follower commits it when the owner's committed position says so, a new owner
-// settles it). So a write waits for the slower of the owner's durable SetPending and the followers' (all of them run at
-// the same time), and for no Commit at all.
-// The one thing a Store must add: a crash must never keep a later SetPending or SetPromised while forgetting an earlier
-// Commit or Import (the pending slot would then not follow Committed, and the write that was committed would be gone from
-// this node), so a durable SetPending or SetPromised must also make everything committed or imported before it durable.
-// A store that keeps committed data in one file and the protocol state in another has to flush the first before it writes
-// the second.
+// Durability. The contract is simple: Commit, Import, SetPromised and SetPending are all durable (fsync, or a database
+// transaction commit) before they return, and Commit and Import are also atomic: a crash leaves the state from before
+// the call or from after it, never something between. A promise or a stored write that a crash can forget lets a node
+// accept what it should refuse, or count toward a majority for a write it no longer holds; a lost commit or import is
+// the same loss of a write this node acknowledged.
+//
+// Optional optimisation: deferred durability of Commit and Import. A write's safety comes from its being stored as
+// pending on a majority; if a crash loses a Commit the node restarts with Committed at the write before and the write
+// still pending, which every rule of the protocol already handles (a follower commits it when the owner's committed
+// position says so, a new owner settles it). So a Store may let Commit and Import return before they are durable, and
+// then a write waits for the slower of the owner's durable SetPending and the followers' (all of them run at the same
+// time), and for no durable Commit at all. A Store may do this only if it guarantees the ordering rule: a crash must
+// never keep a later SetPending or SetPromised while forgetting an earlier Commit or Import (the pending slot would then
+// not follow Committed, and the write that was committed would be gone from this node), so a durable SetPending or
+// SetPromised must also make everything committed or imported before it durable. A store that keeps committed data in
+// one file and the protocol state in another has to flush the first before it writes the second. A Store that cannot
+// guarantee this must make Commit and Import durable.
 //
 // Positions. A sequence number may carry different epoch labels on different nodes for the same write (an owner commits
 // write s, loses ownership before the others hear of it, and the next owner re-proposes the same data as s under its own
@@ -37,17 +41,17 @@ type Store interface {
 	// application must not change a Write it has handed out either, nor one the package has passed to it.
 	State(p int) (State, error)
 
-	// SetPromised durably records Promised for p (fsync before returning), and makes durable everything committed or
-	// imported before it.
+	// SetPromised durably records Promised for p (fsync before returning). With deferred durability of Commit and Import
+	// it also makes durable everything committed or imported before it.
 	SetPromised(p int, e Epoch) error
 
-	// SetPending durably records (fsync before returning) or, with nil, clears the pending write of p, and makes durable
-	// everything committed or imported before it. It is the acknowledgement of a write: once it returns, this node counts
-	// toward the write's majority.
+	// SetPending durably records (fsync before returning) or, with nil, clears the pending write of p. With deferred
+	// durability of Commit and Import it also makes durable everything committed or imported before it. It is the
+	// acknowledgement of a write: once it returns, this node counts toward the write's majority.
 	SetPending(p int, w *Write) error
 
-	// Commit applies w's Data to p's visible data and sets Committed = w.Pos, atomically (it need not be durable before it
-	// returns; see Durability above). If Pending equals w it is cleared in the same step. Commit is only ever called with
+	// Commit applies w's Data to p's visible data and sets Committed = w.Pos, atomically and durably (deferred durability
+	// is allowed only under the ordering rule; see Durability above). If Pending equals w it is cleared in the same step. Commit is only ever called with
 	// w.Prev equal to this node's own Committed (not necessarily the position the owner labelled it with).
 	Commit(w *Write) error
 
@@ -74,7 +78,7 @@ type Store interface {
 	// it needs). The format must be self-delimiting, so that Import can tell a stream cut short from a complete one.
 	Export(p int, after uint64) (Pos, io.ReadCloser, error)
 
-	// Import applies what Export returned and sets Committed = upTo (it need not be durable before it returns). With
+	// Import applies what Export returned and sets Committed = upTo, durably (as for Commit, deferred durability is allowed only under the ordering rule). With
 	// full, p's data is replaced (records absent from the stream are removed). A Pending with Seq <= upTo.Seq is
 	// cleared. It is only called with upTo.Seq > Committed.Seq. Committed moves only once the whole stream has been
 	// applied: a stream that ends before its end marker must make Import fail without moving Committed. A large import

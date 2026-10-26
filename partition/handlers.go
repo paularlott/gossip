@@ -94,7 +94,7 @@ func (m *Manager) runIfOwner(ctx context.Context, size int, cluster string, p in
 		return m.notOwner(p)
 	}
 	if perPartition {
-		if ps.changes.Add(1) > int32(m.cfg.MaxChangesPerPartition) {
+		if ps.changes.Add(1) > int32(m.cfg.Tuning.MaxChangesPerPartition) {
 			ps.changes.Add(-1)
 			return &changeResp{Status: statusBusy}
 		}
@@ -181,7 +181,7 @@ func (m *Manager) handleState(req *stateReq) *stateResp {
 	}
 	resp := &stateResp{
 		Intact:    !m.resync.Load(),
-		Forming:   !m.resync.Load() && !m.established.Load(),
+		Unformed:  !m.formed.Load(),
 		Committed: make([]Pos, len(m.parts)),
 		Promised:  make([]Epoch, len(m.parts)),
 	}

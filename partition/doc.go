@@ -4,7 +4,7 @@
 // The data is split into a fixed number of partitions (Config.Partitions). Each
 // partition has at most one owner at a time. The nodes that are ready are ranked
 // per partition by rendezvous hashing: rank 0 owns the partition when it can,
-// and each next rank takes over after a further Config.RankDelay if the
+// and each next rank takes over after a further Config.Tuning.RankDelay if the
 // partition has no owner; an owner is never asked to step down by rank, but a
 // rank 0 node that returns claims its partitions from the lower ranks that
 // hold them. A change is sent to the owner, which checks it against the

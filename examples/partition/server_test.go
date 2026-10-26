@@ -546,7 +546,7 @@ func TestFileStore(t *testing.T) {
 	}
 }
 
-// TestFileStoreFlushesCommitsBeforeStateAndOnSync covers the contract that Commit need not be durable: a reopen (a crash)
+// TestFileStoreFlushesCommitsBeforeStateAndOnSync covers the deferred durability of Commit (allowed under the ordering rule): a reopen (a crash)
 // right after a Commit may lose it, but never after a SetPending or SetPromised, and never after Sync.
 func TestFileStoreFlushesCommitsBeforeStateAndOnSync(t *testing.T) {
 	dir := t.TempDir()

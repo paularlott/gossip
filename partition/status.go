@@ -134,36 +134,33 @@ func (m *Manager) refresh(p int, st State) {
 	ps.vmu.Unlock()
 }
 
-// setPromised records p's promise durably (Store.SetPromised) and then raises the cache, before the caller answers
-// anyone: a node's cached promise is never below a promise it has given.
-// markEstablished records, durably and once, that this node is established (Config.Established).
-func (m *Manager) markEstablished() error {
-	if m.established.Load() {
+// markFormed records, durably and once, that this node has formed (Config.SetFormed).
+func (m *Manager) markFormed() error {
+	if m.formed.Load() {
 		return nil
 	}
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
-	if m.established.Load() {
+	if m.formed.Load() {
 		return nil
 	}
-	if m.cfg.SetEstablished != nil {
-		if err := m.cfg.SetEstablished(); err != nil {
+	if m.cfg.SetFormed != nil {
+		if err := m.cfg.SetFormed(); err != nil {
 			return err
 		}
 	}
-	m.established.Store(true)
-	m.log.Info("established: this node takes part in the cluster's data set")
+	m.formed.Store(true)
+	m.log.Info("formed: this node takes part in the cluster's data set")
 	return nil
 }
 
-// Established reports whether this node is established (see Config.Established).
-func (m *Manager) Established() bool { return m.established.Load() }
-
+// setPromised records p's promise durably (Store.SetPromised) and then raises the cache, before the caller answers
+// anyone: a node's cached promise is never below a promise it has given.
 func (m *Manager) setPromised(p int, e Epoch) error {
-	// A node gives its first promise only once it is durably established (a resyncing node raising its promise to what
-	// the others report is not taking part, and stays as it is).
+	// A node gives its first promise only once it is durably formed (a resyncing node raising its promise to what the
+	// others report is not taking part, and stays as it is).
 	if !m.resync.Load() {
-		if err := m.markEstablished(); err != nil {
+		if err := m.markFormed(); err != nil {
 			return err
 		}
 	}

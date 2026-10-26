@@ -11,7 +11,7 @@ losing an acknowledged write.
 - **A durable `partition.Store`** on the standard library only (`store.go`): per partition a directory with the committed
   data and the protocol's state, every file replaced atomically (write a temporary file, fsync, rename, fsync the
   directory), so a crash never leaves a torn file. `SetPending` and `SetPromised` are durable before they return;
-  `Commit` is not (the package's durability contract), and a background flush writes the committed data.
+  `Commit` is not: the store uses the package's optional deferred durability, and a background flush writes the committed data.
 - **Single-owner writes**: `PUT`, `DELETE` and a compare-and-swap (`If-Match`) go to the partition's owner wherever
   they land, and are acknowledged once a majority has stored them. The owner's `Prepare` decides the key's new version
   and the package carries it back to the node that took the request, which returns it as the `ETag`.
@@ -201,14 +201,14 @@ why `-cluster-size` is configured rather than inferred.
 ```
 
 - **Commit** applies the write's records and the new committed position to the partition's data in memory in one
-  atomic step and returns: it need not be durable (the package's contract: a write is safe once a majority holds it as
-  *pending*, and a commit a crash loses is redone from that). A background flush rewrites `data.json` (temporary file,
+  atomic step and returns without making it durable (the package's optional deferred durability: a write is safe once a
+  majority holds it as *pending*, and a commit a crash loses is redone from that). A background flush rewrites `data.json` (temporary file,
   fsync, rename: still atomic), once for a burst of commits. It costs time proportional to the partition's size per
   flush, which is fine here (and the number of partitions bounds it); an append-only log plus a periodic snapshot is
   the upgrade, and would change nothing outside `store.go`.
 - **Order**: `SetPending` and `SetPromised` flush the committed data before they write `state.json`, so a crash never
   keeps a pending write (or a promise) and forgets the commit before it; the server also flushes when it stops. This
-  ordering is part of the contract, not an optimisation: with a single pending slot, a lost commit followed by a
+  ordering is what makes the deferred durability allowed: with a single pending slot, a lost commit followed by a
   durable pending write at the next sequence would leave the write on this node nowhere.
 - **Pending** is cleared lazily: `Commit` does not touch `state.json`, and `State` hides a stored pending write whose
   sequence is not above the committed one. That saves a second fsync per commit and cannot be torn between two files.

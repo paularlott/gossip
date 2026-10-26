@@ -38,17 +38,17 @@ const (
 	DefaultHeartbeatInterval = 500 * time.Millisecond
 	// DefaultWriteTimeout is the default Config.WriteTimeout.
 	DefaultWriteTimeout = 5 * time.Second
-	// DefaultMaxConcurrentChanges is the default Config.MaxConcurrentChanges.
+	// DefaultMaxConcurrentChanges is the default Config.Tuning.MaxConcurrentChanges.
 	DefaultMaxConcurrentChanges = 256
-	// DefaultMaxConcurrentReads is the default Config.MaxConcurrentReads.
+	// DefaultMaxConcurrentReads is the default Config.Tuning.MaxConcurrentReads.
 	DefaultMaxConcurrentReads = 1024
-	// DefaultMaxConcurrentRequests is the default Config.MaxConcurrentRequests.
+	// DefaultMaxConcurrentRequests is the default Config.Tuning.MaxConcurrentRequests.
 	DefaultMaxConcurrentRequests = 1024
-	// DefaultTakeoverBackoffMax is the default Config.TakeoverBackoffMax.
+	// DefaultTakeoverBackoffMax is the default Config.Tuning.TakeoverBackoffMax.
 	DefaultTakeoverBackoffMax = 60 * time.Second
-	// DefaultMaxChangesPerPartition is the default Config.MaxChangesPerPartition.
+	// DefaultMaxChangesPerPartition is the default Config.Tuning.MaxChangesPerPartition.
 	DefaultMaxChangesPerPartition = 32
-	// DefaultMaxConcurrentCatchUps is the default Config.MaxConcurrentCatchUps.
+	// DefaultMaxConcurrentCatchUps is the default Config.Tuning.MaxConcurrentCatchUps.
 	DefaultMaxConcurrentCatchUps = 4
 )
 
@@ -74,6 +74,54 @@ type Config struct {
 	// OwnerTimeout is how long an owner may be silent before it is considered gone. Default: 3 x HeartbeatInterval.
 	OwnerTimeout time.Duration
 
+	// WriteTimeout bounds one Write, including waiting for a takeover. Default: 5s. It bounds one Read as well, and
+	// separately one replication on the owner: a write that was begun runs on its own WriteTimeout from its start, so
+	// that it is finished, or its owner steps down, whatever became of the caller.
+	//
+	// The cluster's transport must let a request wait for its reply longer than this (gossip Config.TCPDeadline at
+	// least Manager.MinTransportDeadline()): a change sent to the owner whose reply the transport gives up on is reported
+	// ErrUnknown while the owner may still commit it.
+	WriteTimeout time.Duration
+
+	// StaleAfter is CanRead's bound: how old the last sign of a live owner may be, and how long a follower may trail the
+	// committed position its owner reported. Default: OwnerTimeout.
+	StaleAfter time.Duration
+
+	// ForceResync lets a node whose data is not intact (Store.Intact false) resync from the intact nodes that answer, at
+	// least one, instead of from resyncQuorum(ClusterSize) of them; nodes that are resyncing themselves never count, so
+	// it never completes from those alone. It is an operator's decision for when too few intact nodes are left to make
+	// that quorum (in a cluster of three: one node down and another that lost its data): a write that only the
+	// unreachable nodes held is then lost. Use it for one start, never as a setting.
+	// It is also required to bootstrap empty nodes from a single seeded or restored node when Formed and SetFormed are
+	// not set (they let a new data set form without it); the operator must ensure that it holds the intended data set.
+	ForceResync bool
+
+	// Tuning holds the advanced knobs. Every zero value means the default; most deployments leave it all zero.
+	Tuning Tuning
+
+	// Formed and SetFormed persist whether this node has formed: whether it has taken part in the protocol (given a
+	// promise, which every takeover and every accepted write needs) or completed its startup synchronisation with intact
+	// answers from a majority of the nodes, itself included. A new data set forms around its founder, the one node that
+	// holds it (seeded or restored): an unformed node resyncing alongside other unformed nodes may copy it from intact
+	// unformed nodes alone, which no node that has formed may (see syncOnce and DESIGN.md). Everywhere else the resync
+	// quorum applies, and an intact answer from an unformed node does not count toward it.
+	// SetFormed must be durable before it returns, and Formed must report it after a restart; SetFormed is called
+	// before the first promise is stored. With either left nil every node counts as formed, and a new data set then
+	// forms only with ForceResync on the empty nodes. A node that is not formed is reported "unformed" in its State
+	// answers.
+	Formed    func() bool
+	SetFormed func() error
+
+	// Store is the application's durable storage (required).
+	Store Store
+
+	// Logger receives the package's log lines. Default: the cluster's logger.
+	Logger logger.Logger
+}
+
+// Tuning holds the advanced knobs of Config.Tuning: limits on concurrency and the details of how a node takes over
+// ownership. Every zero (or negative) value means the default.
+type Tuning struct {
 	// BackoffMax bounds the random backoff in [0, BackoffMax) before a node proposes itself as owner. Default:
 	// OwnerTimeout.
 	BackoffMax time.Duration
@@ -123,44 +171,6 @@ type Config struct {
 	// ReadyHoldDown is how long a node that has caught up waits before it declares itself ready and so becomes a
 	// candidate for ownership. Default: 2 x OwnerTimeout.
 	ReadyHoldDown time.Duration
-
-	// WriteTimeout bounds one Write, including waiting for a takeover. Default: 5s. It bounds one Read as well, and
-	// separately one replication on the owner: a write that was begun runs on its own WriteTimeout from its start, so
-	// that it is finished, or its owner steps down, whatever became of the caller.
-	//
-	// The cluster's transport must let a request wait for its reply longer than this (gossip Config.TCPDeadline at
-	// least Manager.MinTransportDeadline()): a change sent to the owner whose reply the transport gives up on is reported
-	// ErrUnknown while the owner may still commit it.
-	WriteTimeout time.Duration
-
-	// StaleAfter is CanRead's bound: how old the last sign of a live owner may be, and how long a follower may trail the
-	// committed position its owner reported. Default: OwnerTimeout.
-	StaleAfter time.Duration
-
-	// ForceResync lets a node whose data is not intact (Store.Intact false) resync from the intact nodes that answer, at
-	// least one, instead of from resyncQuorum(ClusterSize) of them; nodes that are resyncing themselves never count, so
-	// it never completes from those alone. It is an operator's decision for when too few intact nodes are left to make
-	// that quorum (in a cluster of three: one node down and another that lost its data): a write that only the
-	// unreachable nodes held is then lost. Use it for one start, never as a setting.
-	// It is also required to bootstrap empty nodes from a single seeded or restored node when that node alone does
-	// not meet the resync quorum; the operator must ensure that it holds the intended data set.
-	ForceResync bool
-
-	// Established and SetEstablished persist whether this node is established: whether it has taken part in the
-	// protocol (given a promise, which every takeover and every accepted write needs) or completed its startup
-	// synchronisation with a majority of intact nodes, itself included. A node that is not established is forming, but
-	// may still be missing writes committed by a majority that excluded it. This status never lowers the resync quorum;
-	// bootstrapping from a single seeded or restored node requires an explicit ForceResync when the quorum is absent.
-	// SetEstablished must be durable before it returns, and Established must report it after a restart; it is called
-	// before the first promise is stored. With either left nil every node counts as established.
-	Established    func() bool
-	SetEstablished func() error
-
-	// Store is the application's durable storage (required).
-	Store Store
-
-	// Logger receives the package's log lines. Default: the cluster's logger.
-	Logger logger.Logger
 }
 
 // setDefault sets *v to d unless the caller set it (a zero or negative value counts as unset).
@@ -184,15 +194,15 @@ func (c Config) withDefaults() (Config, error) {
 	setDefault(&c.Partitions, DefaultPartitions)
 	setDefault(&c.HeartbeatInterval, DefaultHeartbeatInterval)
 	setDefault(&c.OwnerTimeout, 3*c.HeartbeatInterval)
-	setDefault(&c.BackoffMax, c.OwnerTimeout)
-	setDefault(&c.RankDelay, 2*c.HeartbeatInterval)
-	setDefault(&c.TakeoverBackoffMax, DefaultTakeoverBackoffMax)
-	setDefault(&c.MaxConcurrentChanges, DefaultMaxConcurrentChanges)
-	setDefault(&c.MaxConcurrentReads, DefaultMaxConcurrentReads)
-	setDefault(&c.MaxConcurrentRequests, DefaultMaxConcurrentRequests)
-	setDefault(&c.MaxChangesPerPartition, DefaultMaxChangesPerPartition)
-	setDefault(&c.MaxConcurrentCatchUps, DefaultMaxConcurrentCatchUps)
-	setDefault(&c.ReadyHoldDown, 2*c.OwnerTimeout)
+	setDefault(&c.Tuning.BackoffMax, c.OwnerTimeout)
+	setDefault(&c.Tuning.RankDelay, 2*c.HeartbeatInterval)
+	setDefault(&c.Tuning.TakeoverBackoffMax, DefaultTakeoverBackoffMax)
+	setDefault(&c.Tuning.MaxConcurrentChanges, DefaultMaxConcurrentChanges)
+	setDefault(&c.Tuning.MaxConcurrentReads, DefaultMaxConcurrentReads)
+	setDefault(&c.Tuning.MaxConcurrentRequests, DefaultMaxConcurrentRequests)
+	setDefault(&c.Tuning.MaxChangesPerPartition, DefaultMaxChangesPerPartition)
+	setDefault(&c.Tuning.MaxConcurrentCatchUps, DefaultMaxConcurrentCatchUps)
+	setDefault(&c.Tuning.ReadyHoldDown, 2*c.OwnerTimeout)
 	setDefault(&c.WriteTimeout, DefaultWriteTimeout)
 	setDefault(&c.StaleAfter, c.OwnerTimeout)
 	if c.Logger == nil {

@@ -81,7 +81,7 @@ func TestDTFollowerRefusesWriteBelowPromise(t *testing.T) {
 	c := dtNewCluster(t, dtOpts{Nodes: 3, Parts: 1, Tweak: func(i int, cfg *Config) {
 		cfg.WriteTimeout = 5 * time.Second
 		if i == b {
-			cfg.RankDelay = time.Hour
+			cfg.Tuning.RankDelay = time.Hour
 		}
 	}})
 	order := c.rankOrder(p)
@@ -171,7 +171,7 @@ func TestDTSettleClearsPendingOfOtherEpoch(t *testing.T) {
 	c := dtNewCluster(t, dtOpts{Nodes: 5, Parts: 1, Tweak: func(i int, cfg *Config) {
 		cfg.WriteTimeout = 5 * time.Second
 		if i != taker && i != oldOwner {
-			cfg.RankDelay = time.Hour
+			cfg.Tuning.RankDelay = time.Hour
 		}
 	}})
 	order := c.rankOrder(p)

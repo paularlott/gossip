@@ -145,7 +145,7 @@ func TestReadFollowsTheOwnerHint(t *testing.T) {
 
 // Many forwarded reads against an owner that serves one at a time are all answered: busy is retried, never an error.
 func TestReadsBusyAreRetried(t *testing.T) {
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.MaxConcurrentReads = 1 })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.MaxConcurrentReads = 1 })
 	fc.startAll()
 	fc.waitOwners(10 * time.Second)
 	owner := fc.owners(1)[0]

@@ -37,7 +37,7 @@ func TestMessagesRoundTripEveryCodec(t *testing.T) {
 		&stateResp{Committed: []Pos{pos, {}}, Promised: []Epoch{ep(1, 1), {}}},
 		&stateResp{Committed: []Pos{pos, {}}, Promised: []Epoch{ep(1, 1), {}}, Pending: []*Write{nil, &w}},
 		&stateResp{Committed: []Pos{pos, {}}, Promised: []Epoch{ep(1, 1), {}}, Intact: true},
-		&stateResp{Committed: []Pos{pos, {}}, Promised: []Epoch{ep(1, 1), {}}, Intact: true, Forming: true},
+		&stateResp{Committed: []Pos{pos, {}}, Promised: []Epoch{ep(1, 1), {}}, Intact: true, Unformed: true},
 		&catchUpReq{Size: 3, Cluster: "prod-a", P: 1, After: 77, Full: true},
 		&relinquishMsg{Size: 3, Cluster: "prod-a", P: 4, Epoch: ep(3, 3)},
 		&commitMsg{Size: 3, Cluster: "prod-a", P: 4, Epoch: ep(3, 3), Committed: pos},

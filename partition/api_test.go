@@ -86,8 +86,8 @@ func TestWaitAppliedOnAFollowerReturnsPromptlyAfterAWrite(t *testing.T) {
 	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) {
 		c.HeartbeatInterval = 400 * time.Millisecond
 		c.OwnerTimeout = 3 * time.Second
-		c.RankDelay = time.Second
-		c.BackoffMax = 40 * time.Millisecond
+		c.Tuning.RankDelay = time.Second
+		c.Tuning.BackoffMax = 40 * time.Millisecond
 	})
 	fc.startAll()
 	fc.waitOwners(20 * time.Second)
@@ -243,7 +243,7 @@ func TestCommitNoticeIsAHeartbeatEntry(t *testing.T) {
 }
 
 func TestBusyOwnerIsRetriedAndEveryWriteLands(t *testing.T) {
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.MaxConcurrentChanges = 1 })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.MaxConcurrentChanges = 1 })
 	fc.startAll()
 	fc.waitOwners(10 * time.Second)
 	owner := fc.owners(1)[0]

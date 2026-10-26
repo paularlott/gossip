@@ -188,7 +188,7 @@ func TestClusterGracefulStopHandsOverQuickly(t *testing.T) {
 	// A long OwnerTimeout: only the relinquish message lets the successor take over within the test.
 	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) {
 		c.OwnerTimeout = 5 * time.Second
-		c.BackoffMax = 50 * time.Millisecond
+		c.Tuning.BackoffMax = 50 * time.Millisecond
 	})
 	fc.startAll()
 	fc.waitOwners(20 * time.Second)
@@ -388,7 +388,7 @@ func TestClusterSizeMismatchIsNotACandidate(t *testing.T) {
 }
 
 func TestClusterNotReadyUntilMajorityAndHoldDown(t *testing.T) {
-	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.ReadyHoldDown = 150 * time.Millisecond })
+	fc := newFakeCluster(t, 3, 3, func(i int, c *Config) { c.Tuning.ReadyHoldDown = 150 * time.Millisecond })
 	if err := fc.nodes[0].m.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -81,9 +81,12 @@ The protocol rules and safety arguments are in [DESIGN.md](DESIGN.md).
 - **Insufficient recovery peers require an operator decision.** For one start,
   `ForceResync` allows recovery from at least one intact peer, accepting loss of
   writes held only by unavailable peers. It never recovers from resyncing peers
-  alone. Bootstrapping empty nodes from one seeded or restored node also needs
-  this explicit setting when the seed cannot meet the quorum; ensure that seed
-  holds the intended data set. A peer's “forming” status never lowers the quorum.
+  alone. A new data set needs no such setting when the application provides
+  `Config.Formed` and `Config.SetFormed`: the empty nodes then copy it from its
+  one seeded or restored node (see [Formation](DESIGN.md#7-startup-readiness-and-resync)).
+  Losing the disks of a majority of the nodes loses the writes only they held;
+  recovery is from backup. (If the only node left is one that never formed, it
+  may form the data set again from its own copy without `ForceResync`.)
 - **Majority disk loss needs a backup.** The protocol cannot reconstruct data
   held only on lost disks; writes after the backup may be lost.
 - **Divergence requires resync.** A node consistently ahead of its owner for
@@ -258,11 +261,16 @@ never expose pending writes through reads or exports.
 | `Import(p, r, upTo, full)` | Apply the export, replace data when `full`, advance `Committed` only after complete input, and clear pending writes through `upTo.Seq`. Truncated input must fail. See `Store.Import` for the rules for batched imports. |
 | `Intact()` | Report whether this node's stored state is trustworthy. Read once at `Start`; `HandleResyncedFunc` signals successful recovery. |
 
-**Durability ordering is essential.** `SetPromised` and `SetPending` must be
-crash-durable before returning, including all earlier `Commit` and `Import`
-results. `Commit` and `Import` need not themselves flush before returning, but
-must meet their atomicity requirements. A store that separates committed data
-from protocol state must flush the data first. The reason for this ordering is
+**Durability.** The simple contract: `Commit`, `Import`, `SetPromised` and
+`SetPending` are all crash-durable before they return, and `Commit` and `Import`
+are atomic (a crash leaves the state from before the call or after it).
+
+*Optional optimisation.* A store may let `Commit` and `Import` return before they
+are durable, which takes the commit off a write's critical path, but only if it
+guarantees the **ordering rule**: a durable `SetPromised` or `SetPending` also
+makes everything committed or imported before it durable (a store that separates
+committed data from protocol state flushes the data first). A store that cannot
+guarantee this must make `Commit` and `Import` durable. The reason for the rule is
 explained in the [durability safety argument](DESIGN.md#9-the-durability-contract-and-the-safety-argument).
 
 Implementation rules:
@@ -280,9 +288,8 @@ Implementation rules:
   `Start`, so a later restart does not unnecessarily resync.
 
 For a database-backed store, keep protocol state and application data in the
-same database. Apply a commit and its position in one transaction; use durable
-transactions for promises and pending writes, ensuring they also flush earlier
-commits. Cache state for frequent `State` calls, and index records and tombstones
+same database. Apply a commit and its position in one transaction; commit transactions are durable, which meets the simple contract for every
+method. Cache state for frequent `State` calls, and index records and tombstones
 by the sequence that last changed them for incremental exports.
 
 [`store_test.go`](store_test.go) provides an in-memory store with fault hooks;
@@ -297,23 +304,30 @@ by the sequence that last changed them for incremental exports.
 | `ClusterID` | empty string | Data-set identity, chosen once and shared by every node. Empty is a valid identity. |
 | `HeartbeatInterval` | 500ms | How often owners announce their partitions and the ownership loop runs. Also: a change that finds no owner yet is retried after a quarter of it. |
 | `OwnerTimeout` | 3 × `HeartbeatInterval` | How long an owner may be silent before it is considered gone; also how long a node refuses to promise to a challenger of an owner it has heard from. |
-| `BackoffMax` | `OwnerTimeout` | A node that finds it should own a partition waits a random time in `[0, BackoffMax)` before proposing. |
-| `RankDelay` | 2 × `HeartbeatInterval` | The node of rank *r* takes over a partition that has had no owner for *r* × `RankDelay` (after the random backoff). Rank 0 acts at once. |
-| `TakeoverBackoffMax` | 60s | After a takeover that did not complete a node leaves the partition alone for `OwnerTimeout`, doubling with each consecutive failure up to this. |
-| `MaxConcurrentChanges` | 256 | Forwarded changes served at once. Excess requests receive "busy" and are retried with backoff. |
-| `MaxChangesPerPartition` | 32 | Forwarded changes of one partition that its owner holds at once (running, or waiting for the partition, which runs one at a time), so that one hot partition cannot take all of `MaxConcurrentChanges`; more are answered "busy" as above. |
-| `MaxConcurrentCatchUps` | 4 | Catch-ups a node runs at once in the background (followers that fell behind, the startup synchronisation); the others wait for a slot. A takeover's own catch-up does not wait. |
-| `MaxConcurrentRequests` | 1024 | The other requests a node serves at once (promise, write, claim, state and heartbeat), which share this limit. Beyond it a request is refused at once with its "not OK" reply: a promise or write is not acknowledged, a heartbeat does not count as delivered, a state request is not answered. |
-| `MaxConcurrentReads` | 1024 | Reads forwarded from other nodes that a node serves at once as owner, each in a goroutine of the `Manager` while the owner confirms its leadership; more are answered "busy" and retried as changes are. |
-| `ReadyHoldDown` | 2 × `OwnerTimeout` | How long a caught-up node waits before it declares itself ready and becomes a candidate for ownership. |
 | `WriteTimeout` | 5s | Bounds one `Write`, including waiting for a takeover, and one `Read`; and, separately, one replication on the owner, from its start. The transport's `TCPDeadline` must be at least `MinTransportDeadline()`, a little more than this (see "The transport's deadline"). |
 | `StaleAfter` | `OwnerTimeout` | `CanRead`'s bound: how old the last sign of a live owner may be, and how long a follower may trail the committed position the owner reported. |
+| `Formed`, `SetFormed` | nil | Optional durable marker that this node has formed. It lets a new data set form around its one seeded or restored node without `ForceResync`; see [`Config`](config.go) for the callback requirements. With either nil every node counts as formed. |
 | `ForceResync` | false | For one start of a node that lost its data, when too few intact nodes are left to resync from: see [Recovery and operations](#recovery-and-operations). |
-| `Established`, `SetEstablished` | nil | Optional durable participation marker. Informational for recovery; it never lowers the quorum. See [`Config`](config.go) for callback requirements. |
 | `Store` | — (required) | The application's storage. |
 | `Logger` | the cluster's | Log output. |
 
-Takeover after a crash takes about `OwnerTimeout` (the owner has to go quiet) plus `RankDelay`
+### Tuning
+
+`Config.Tuning` holds the advanced knobs. Every zero value means the default below; most deployments set none of them.
+
+| Field | Default | |
+| --- | --- | --- |
+| `Tuning.BackoffMax` | `OwnerTimeout` | A node that finds it should own a partition waits a random time in `[0, BackoffMax)` before proposing. |
+| `Tuning.RankDelay` | 2 × `HeartbeatInterval` | The node of rank *r* takes over a partition that has had no owner for *r* × `RankDelay` (after the random backoff). Rank 0 acts at once. |
+| `Tuning.TakeoverBackoffMax` | 60s | After a takeover that did not complete a node leaves the partition alone for `OwnerTimeout`, doubling with each consecutive failure up to this. |
+| `Tuning.MaxConcurrentChanges` | 256 | Forwarded changes served at once. Excess requests receive "busy" and are retried with backoff. |
+| `Tuning.MaxChangesPerPartition` | 32 | Forwarded changes of one partition that its owner holds at once (running, or waiting for the partition, which runs one at a time), so that one hot partition cannot take all of `Tuning.MaxConcurrentChanges`; more are answered "busy" as above. |
+| `Tuning.MaxConcurrentCatchUps` | 4 | Catch-ups a node runs at once in the background (followers that fell behind, the startup synchronisation); the others wait for a slot. A takeover's own catch-up does not wait. |
+| `Tuning.MaxConcurrentRequests` | 1024 | The other requests a node serves at once (promise, write, claim, state and heartbeat), which share this limit. Beyond it a request is refused at once with its "not OK" reply: a promise or write is not acknowledged, a heartbeat does not count as delivered, a state request is not answered. |
+| `Tuning.MaxConcurrentReads` | 1024 | Reads forwarded from other nodes that a node serves at once as owner, each in a goroutine of the `Manager` while the owner confirms its leadership; more are answered "busy" and retried as changes are. |
+| `Tuning.ReadyHoldDown` | 2 × `OwnerTimeout` | How long a caught-up node waits before it declares itself ready and becomes a candidate for ownership. |
+
+Takeover after a crash takes about `OwnerTimeout` (the owner has to go quiet) plus `Tuning.RankDelay`
 for the next rank, plus the random backoff in `[0, BackoffMax)` and a promise round; it does not
 wait for the cluster's failure detector to drop the lost node from the membership.
 See [ownership](DESIGN.md#3-ownership) for the timing rules and [Cost](#cost) for measurements.
@@ -394,8 +408,8 @@ partition (which the owner runs one write at a time):
 | 500ms (the default) | 22,200/s (p99 0.8ms) | 25,500/s (p99 8.1ms) | 14,500/s |
 
 The request handlers reply later and run in goroutines of the `Manager`, so no handler holds one of the cluster's
-incoming workers while it waits for the followers, and the limits can be high: `MaxConcurrentChanges` is 256 and
-`MaxConcurrentRequests` 1024. The cost is a goroutine hop per request, a few microseconds per write. With
+incoming workers while it waits for the followers, and the limits can be high: `Tuning.MaxConcurrentChanges` is 256 and
+`Tuning.MaxConcurrentRequests` 1024. The cost is a goroutine hop per request, a few microseconds per write. With
 `NumIncomingWorkers` at 2, 64 writers all commit (`TestManyWritersWithTwoIncomingWorkers`).
 
 **3 nodes versus 5** (a majority of 2 of 3, or 3 of 5; 100ms heartbeat, no delay):
@@ -408,8 +422,8 @@ incoming workers while it waits for the followers, and the limits can be high: `
 **Cost of a durable write.** The benchmark's `Store` can sleep for every `SetPromised`
 and `SetPending` (what a real `Store` pays for an fsync) and, separately, for every
 `Commit` and `Import`. A write waits for the slower of the owner's `SetPending` and the
-followers' (all of them run at the same time), not for their sum. Since a `Commit` need
-not be durable, it adds nothing: a follower commits a write when the owner's commit
+followers' (all of them run at the same time), not for their sum. With the optional
+deferred durability of `Commit` (see the `Store` contract), it adds nothing: a follower commits a write when the owner's commit
 notice arrives, not as part of the next write. "durable commit" is what the same
 `Store` costs if its `Commit` fsyncs as well:
 
@@ -437,7 +451,7 @@ anything, "stop" is `Manager.Stop`, which hands the partitions back:
 | 500ms | stop | 0.40s | 1.3s |
 
 After a crash the next-ranked node takes over once the partition has been ownerless for
-`RankDelay` (the owner was silent for `OwnerTimeout` first), after the random backoff in
+`Tuning.RankDelay` (the owner was silent for `OwnerTimeout` first), after the random backoff in
 `[0, BackoffMax)` per partition and a promise round: at most about `OwnerTimeout +
 RankDelay + BackoffMax` plus a heartbeat interval, which is under a second at a 100ms
 heartbeat and up to about 4.5s at the default 500ms. It does not wait for the cluster's

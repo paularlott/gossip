@@ -21,7 +21,7 @@ func TestDTDeposedOwnerNeverReturnsTheOldValue(t *testing.T) {
 		if i == 0 {
 			cfg.OwnerTimeout = 3 * time.Second
 			cfg.StaleAfter = dtStale // CanRead's bound stays the suite's (invariant 5 is checked against it)
-			cfg.BackoffMax = dtBackoff
+			cfg.Tuning.BackoffMax = dtBackoff
 			cfg.WriteTimeout = 6 * time.Second
 		}
 	}})
