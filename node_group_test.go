@@ -316,9 +316,6 @@ func TestNodeGroups(t *testing.T) {
 
 // OnNodeAdded and OnNodeRemoved of a NodeGroup say what the DataNodeGroup's do: a node joined, a node left.
 func TestNodeGroupCallbacksOnMembershipChangesOnly(t *testing.T) {
-	t.Skip("BUG (reported): NodeGroup calls OnNodeAdded again when a member's state changes (alive to suspect) and " +
-		"OnNodeRemoved for every node that matches no criteria and was never a member; DataNodeGroup guards both")
-
 	c := newUnitCluster(t)
 	ev := &groupEvents{}
 	g := groupKinds[0].make(c, map[string]string{"zone": "us-west"}, ev)
