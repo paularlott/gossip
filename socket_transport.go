@@ -506,7 +506,7 @@ func (st *SocketTransport) packetToQueue(conn net.Conn, ctx context.Context) {
 		if err != nil {
 			// EOF or an idle timeout between requests is the normal end of a reused connection.
 			if first || n > 0 {
-				st.logger.WithError(err).Error("failed to read packet")
+				st.logger.WithError(err).Warn("failed to read packet")
 			}
 			conn.Close()
 			return
