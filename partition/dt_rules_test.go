@@ -162,8 +162,9 @@ func TestDTFollowerRefusesWriteBelowPromise(t *testing.T) {
 // settle commits a pending write only when its epoch is the owner's committed epoch. Owner A (epoch e1) sends write X at
 // seq s, which only F stores: A cannot reach G, H, I and F's acknowledgement is lost, so A steps down and is cut off.
 // G takes over at e2 with the promises of G, H and I (F is not asked, so X is never seen) and commits a different write
-// Y at s. When F is reconnected, G's heartbeat tells it that (e2, s) is committed: F must discard X (epoch e1) and catch
-// up to Y. A node that committed any pending write at or below the owner's committed Seq would commit X at s.
+// Y at s. When F is reconnected, G's heartbeat tells it that (e2, s) is committed: F must not commit X (epoch e1); it
+// keeps it until its catch-up to Y replaces it. A node that committed any pending write at or below the owner's committed
+// Seq would commit X at s.
 func TestDTSettleClearsPendingOfOtherEpoch(t *testing.T) {
 	const p = 0
 	taker := -1 // the only node besides the old owner that may take over (set before the nodes start)

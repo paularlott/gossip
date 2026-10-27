@@ -177,6 +177,9 @@ func (s *memStore) SetPending(p int, w *Write) error {
 	if err := s.hook("SetPending", p, true); err != nil {
 		return err
 	}
+	if w != nil && s.part(p).st.Incomplete {
+		return fmt.Errorf("memStore: partition %d is incomplete", p)
+	}
 	s.undo = nil
 	s.part(p).st.Pending = copyWrite(w)
 	return nil
@@ -190,6 +193,9 @@ func (s *memStore) Commit(w *Write) error {
 		return err
 	}
 	mp := s.part(w.Partition)
+	if mp.st.Incomplete {
+		return fmt.Errorf("memStore: partition %d is incomplete", w.Partition)
+	}
 	if w.Prev != mp.st.Committed {
 		return fmt.Errorf("memStore: commit of %s with prev %s, committed is %s", w.Pos, w.Prev, mp.st.Committed)
 	}
@@ -262,6 +268,9 @@ func (s *memStore) Export(p int, after uint64) (Pos, io.ReadCloser, error) {
 		return Pos{}, nil, ErrPurged
 	}
 	mp := s.part(p)
+	if mp.st.Incomplete {
+		return Pos{}, nil, fmt.Errorf("memStore: partition %d is incomplete", p)
+	}
 	var out []memEntry
 	for _, e := range mp.entries {
 		if e.Seq > after {
@@ -291,9 +300,12 @@ func (s *memStore) Import(p int, r io.Reader, upTo Pos, full bool) error {
 	if err := json.Unmarshal(body, &in); err != nil {
 		return err
 	}
+	if mp.st.Incomplete && !full {
+		return fmt.Errorf("memStore: partition %d is incomplete: only a full import completes it", p)
+	}
 	s.undo = s.snapshot(p, full)
 	if full {
-		mp.entries = nil
+		mp.entries, mp.st.Incomplete = nil, false
 	}
 	for _, e := range in {
 		if len(mp.entries) == 0 || e.Seq > mp.entries[len(mp.entries)-1].Seq {
@@ -344,6 +356,15 @@ func (s *memStore) seedCommitted(p, n int, e Epoch) {
 			panic(err)
 		}
 	}
+}
+
+// seedIncomplete makes p as a full import that applies its stream in batches leaves it when it is cut short: its records
+// removed, its Committed and Pending as they were, and Incomplete.
+func (s *memStore) seedIncomplete(p int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mp := s.part(p)
+	mp.entries, mp.st.Incomplete = nil, true
 }
 
 // seedPending sets p's pending write.

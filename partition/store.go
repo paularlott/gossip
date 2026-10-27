@@ -85,7 +85,9 @@ type Store interface {
 	// may apply the stream's records in batches as they arrive; then a failed or interrupted import may leave some of
 	// them applied with Committed where it was. That is safe: they are committed data of the source, never anything
 	// uncommitted, and the next catch-up (which every takeover does before it writes) applies the rest and moves
-	// Committed. A Store that can apply the whole stream in one transaction should.
+	// Committed. A Store that can apply the whole stream in one transaction should. A full import applied in batches
+	// removes records before the stream has all arrived: until one ends, State reports the partition Incomplete (with
+	// Committed and Pending as they were: they never move back), and the next catch-up asks for a full copy.
 	Import(p int, r io.Reader, upTo Pos, full bool) error
 
 	// Intact reports whether this node's state can be trusted: false for a node whose data was lost or restored, which

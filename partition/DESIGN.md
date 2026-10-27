@@ -215,7 +215,16 @@ committed position `oc` carried by the write (and by heartbeats and commit notic
 | --- | --- | --- |
 | no pending, or `pending.Seq > oc.Seq` | nothing | nothing to decide, or not decided yet |
 | `pending.Epoch == oc.Epoch`, `pending.Seq <= oc.Seq` | commit it (if it follows `Committed`) | an epoch's owner wrote one write per Seq and committed through `oc` |
-| `pending.Epoch != oc.Epoch`, `pending.Seq <= oc.Seq` | clear it | that Seq is decided, possibly as a different write; catch-up brings the committed one |
+| `pending.Epoch != oc.Epoch`, `pending.Seq <= oc.Seq` | keep it | that Seq is decided, possibly as this very write under another label; catch-up brings the committed one and clears it |
+
+**Why a decided pending write is kept.** A pending write is cleared only when this node commits or imports past its Seq,
+or replaced by a write of a higher epoch at the same Seq, never because it learns that its Seq is decided. The owner
+commits once a majority has stored the write; the other holders may still hold it only as pending (relabelled, perhaps,
+by a takeover that re-proposed it under a higher epoch and did not commit), and the owner may be cut off or gone before
+any of them catches up. A holder that dropped its copy then would answer the next promise round with neither the write
+nor its Seq committed, and a round of such holders would commit a different write at that Seq: an acknowledged write
+lost, and two writes committed at one Seq (§9, "No acknowledged write is lost"). Kept, the pending write is re-proposed by
+such a round, or ignored by one that meets a node that has committed its Seq.
 
 Then it compares what it has committed with the write **by Seq, not by Pos**:
 
@@ -272,6 +281,18 @@ is still ahead; otherwise the body is discarded. At most one asynchronous catch-
 is in flight is dropped, since a later entry asks again. **Committed data is identical on every node that has it**, so any
 node is a safe source up to its own commit point: catch-up needs no fencing, takes no mutex on the source and never exports
 pending writes.
+
+**An incomplete copy** (`State.Incomplete`). A Store whose full `Import` applies the stream in batches removes the
+partition's records before the stream has all arrived; one that is cut short leaves the partition holding part of the
+source's records and none of the rest. Its `Committed` and `Pending` do not move back: they are what this node stored, and
+a promise it gives must still report them (reported as nothing, a takeover that hears only from it would miss the writes
+it acknowledged, and could write something else at their Seq; an import from a source behind them would take this node
+back as well). So the Store reports them as they were, with `Incomplete`, until an import ends it, and the node, which
+holds none of the partition as data: asks for a full copy when it catches up; acknowledges no write (it answers
+`NeedCatchUp`); settles nothing; and does not take the partition over (`errIncomplete`, after which it backs off and
+another node takes over). It still promises, reporting its position and pending write. A takeover whose `H` only this
+node reports cannot catch up from it (its exports are refused while the copy is unfinished) and fails, which waits for a
+node that holds those writes rather than losing them.
 
 ## 7. Startup, readiness and resync
 
@@ -392,8 +413,8 @@ as a competing value.
 
 **No acknowledged write is lost.** `Write` returns only after a majority durably stored the write as pending and the owner
 committed it. A node loses its copy only by: committing it (durable, or restored as pending by the ordering rule above);
-having it replaced by a pending write of a higher epoch, which carries the same data; having it cleared by `settle`, which
-happens only when that Seq is already decided and catch-up restores the committed write; or losing its disk, in which case
+having it replaced by a pending write of a higher epoch, which carries the same data; having it cleared by a commit or
+an import past its Seq, which holds the committed write; or losing its disk, in which case
 it resyncs without promising or storing anything and adopts the pending write (§7). A takeover therefore always meets a
 holder, and the argument above applies. `ErrUnknown` leaves the same resolution to the next owner: the write is settled,
 committed once or dropped, and the package never retries it.

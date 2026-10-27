@@ -83,6 +83,55 @@ func TestTakeoverAdoptsHighestEpochPendingAtHPlusOne(t *testing.T) {
 	}
 }
 
+// A follower that learns that the Seq of its pending write is committed under another epoch keeps the write until it has
+// caught up, and a takeover that hears only from it re-proposes the write rather than writing something else at that Seq.
+// The story (a three-node chaos soak lost an acknowledged write this way): owner A commits X at (e1, 6), stored by A and
+// B; A's notice does not reach B. B takes over, re-proposes X at (e2, 6) and fails to commit it (C did not answer), so B
+// holds X pending at e2. A's report of its committed position (e1, 6) then reaches B, and A goes (cut off, or down) before
+// B can catch up from it. C takes over with B's promise: B is the only holder of X it hears, so B must still report it. A
+// follower that cleared a pending write whose Seq it learnt was decided reported nothing, and C committed its own next
+// write at 6: two writes committed at one Seq, and X, which A had acknowledged, lost.
+func TestTakeoverAfterSettleReproposesTheCommittedWrite(t *testing.T) {
+	taker, other := takeoverSetup(t) // node 3, the old owner A, is down: the taker hears only from node 2 (B)
+	e0, e1, e2 := ep(1, 3), ep(2, 3), ep(3, 2)
+	h := Pos{Epoch: e0, Seq: 5}
+	for _, fn := range []*fakeNode{taker, other} {
+		fn.store.seedCommitted(1, 5, e0)
+	}
+	other.store.seedPending(1, Write{Pos: Pos{Epoch: e2, Seq: 6}, Prev: h, Data: []byte("x")})
+
+	// A's committed position, (e1, 6), reaches B (a heartbeat, a commit notice or a write of A's).
+	if err := other.m.parts[1].mu.lock(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	other.m.settle(1, Pos{Epoch: e1, Seq: 6})
+	other.m.parts[1].mu.unlock()
+	if st := other.store.state(1); st.Pending == nil || string(st.Pending.Data) != "x" || st.Committed != h {
+		t.Fatalf("B after learning that seq 6 is committed: %+v; want X still pending over committed 5", st)
+	}
+
+	if err := taker.m.takeover(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	st := taker.store.state(1)
+	if st.Committed.Seq != 6 {
+		t.Fatalf("the takeover did not settle X at seq 6: %+v", st)
+	}
+	if d := taker.store.data(1); !slices.Equal(d, append(dataOf(5), "x")) {
+		t.Errorf("data = %v, want X committed at seq 6, the write A committed there", d)
+	}
+	taker.m.wg.Wait()
+	other.m.wg.Wait()
+	if d := other.store.data(1); !slices.Equal(d, append(dataOf(5), "x")) {
+		t.Errorf("B's data = %v, want X committed at seq 6", d)
+	}
+	for _, fn := range []*fakeNode{taker, other} {
+		if err := fn.store.checkInvariant(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func TestTakeoverIgnoresPendingAtOrBelowH(t *testing.T) {
 	taker, other := takeoverSetup(t)
 	e0 := ep(1, 3)
@@ -320,4 +369,24 @@ func TestTakeoverRepeatingAWriteTheOldOwnerCommittedLeavesItUsable(t *testing.T)
 	// (The settling runs in node 3's goroutine for the partition, while the owner's commit notices still arrive.)
 	want := []string{"d1", "d2", "d3", "d4", "five", "six"}
 	waitFor(t, 5*time.Second, "node 3 to settle", func() bool { return slices.Equal(c.store.data(1), want) })
+}
+
+// A node whose copy of the partition is Incomplete does not take it over: it would own a partition whose data it does not
+// hold. It asks nobody for a promise, and backs off.
+func TestIncompleteNodeDoesNotTakeOver(t *testing.T) {
+	taker, other := takeoverSetup(t)
+	e0 := ep(1, 3)
+	for _, fn := range []*fakeNode{taker, other} {
+		fn.store.seedCommitted(1, 5, e0)
+	}
+	taker.store.seedIncomplete(1)
+	if err := taker.m.takeover(t.Context(), 1); !errors.Is(err, errIncomplete) {
+		t.Fatalf("takeover by an incomplete node: %v", err)
+	}
+	if _, leading := taker.m.leadingEpoch(1); leading {
+		t.Fatal("an incomplete node leads the partition")
+	}
+	if st := other.store.state(1); st.Promised != (Epoch{}) {
+		t.Errorf("the other node was asked for a promise: %+v", st)
+	}
 }

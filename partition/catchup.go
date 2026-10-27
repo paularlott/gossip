@@ -88,14 +88,15 @@ func (m *Manager) serveCatchUp(req *catchUpReq, w io.Writer) error {
 }
 
 // catchUp brings p up to what node from has committed. It asks for the changes after this node's committed sequence;
-// if from has purged the history that needs, it asks again for everything. held says whether the caller already holds
-// the partition's mutex (a takeover does); otherwise it is taken to apply the import.
+// if from has purged the history that needs, it asks again for everything, and so it does at once if the partition is
+// Incomplete here. held says whether the caller already holds the partition's mutex (a takeover does); otherwise it is
+// taken to apply the import.
 func (m *Manager) catchUp(ctx context.Context, p int, from gossip.NodeID, held bool) (err error) {
 	st, err := m.store.State(p)
 	if err != nil {
 		return err
 	}
-	req := &catchUpReq{Size: m.cfg.ClusterSize, Cluster: m.cfg.ClusterID, P: p, After: st.Committed.Seq}
+	req := &catchUpReq{Size: m.cfg.ClusterSize, Cluster: m.cfg.ClusterID, P: p, After: st.Committed.Seq, Full: st.Incomplete}
 	for {
 		rc, err := m.net.catchUp(ctx, from, req)
 		if err != nil {

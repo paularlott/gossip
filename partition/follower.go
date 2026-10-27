@@ -68,8 +68,9 @@ func (m *Manager) handleWrite(from gossip.NodeID, req *writeReq) *writeResp {
 	//     moved on since): refused, which changes nothing;
 	//   - committed Seq == w.Prev.Seq: the write follows, and its Prev becomes this node's own label of that Seq, which
 	//     is what Store.Commit checks.
+	// A node whose partition is Incomplete holds none of it as data: it acknowledges nothing until a full copy ends that.
 	switch {
-	case st.Committed.Seq < w.Prev.Seq:
+	case st.Incomplete || st.Committed.Seq < w.Prev.Seq:
 		m.catchUpAsync(p, from)
 		return &writeResp{Promised: st.Promised, Committed: st.Committed, NeedCatchUp: true}
 	case st.Committed.Seq == w.Pos.Seq:
@@ -96,9 +97,20 @@ func (m *Manager) handleWrite(from gossip.NodeID, req *writeReq) *writeResp {
 //	no pending                                      nothing
 //	pending.Epoch == oc.Epoch, pending.Seq <= oc.Seq   commit it: that epoch's owner wrote one write per Seq and
 //	                                                   committed through oc
-//	pending.Epoch != oc.Epoch, pending.Seq <= oc.Seq   clear it: that Seq is decided, possibly as a different write;
-//	                                                   catch-up brings the committed one
+//	pending.Epoch != oc.Epoch, pending.Seq <= oc.Seq   keep: that Seq is decided, possibly as this very write under
+//	                                                   another label; catch-up brings the committed one and clears it
 //	pending.Seq > oc.Seq                            keep: not decided yet
+//
+// A pending write of another epoch is never cleared here, although its Seq is decided: this node may be one of the
+// majority that stored the write that was committed there, and the only one of them a takeover hears. An owner commits
+// once a majority has stored the write, and the other holders may hold it only as pending (as this one, or relabelled by
+// a takeover that re-proposed it and did not commit: the same data under a higher epoch), until the owner's notice or a
+// catch-up reaches them. A holder that dropped it before it committed it (catch-up from the owner may be impossible for a
+// while: the owner cut off or gone) would answer the next promise round with neither the write nor its Seq committed, and
+// a round of such holders would write something else at that Seq: a committed write lost, and two writes committed at one
+// Seq. Kept, the write is re-proposed by such a takeover (the pending write of the highest epoch at H+1, which by the
+// argument of DESIGN.md §9 carries the committed data) or ignored by one that meets a node that committed the Seq. The
+// write leaves the slot when this node commits or imports past its Seq, or a write of a higher epoch replaces it.
 func (m *Manager) settle(p int, oc Pos) {
 	st, err := m.store.State(p)
 	if err != nil {
@@ -106,26 +118,20 @@ func (m *Manager) settle(p int, oc Pos) {
 		return
 	}
 	pp := st.Pending
-	if pp == nil || pp.Pos.Seq > oc.Seq {
+	if pp == nil || pp.Pos.Seq > oc.Seq || pp.Pos.Epoch != oc.Epoch || st.Incomplete {
+		return // (Incomplete: nothing is committed on top of a partial copy; the full copy that ends it clears the write)
+	}
+	// Commit only applies to the write that follows the committed one; anything else is left for catch-up.
+	if pp.Pos.Seq != st.Committed.Seq+1 {
+		m.log.Warn("settle: pending write does not follow the committed one, left alone", "partition", p,
+			"pending", pp.Pos.String(), "committed", st.Committed.String())
 		return
 	}
-	if pp.Pos.Epoch == oc.Epoch {
-		// Commit only applies to the write that follows the committed one; anything else is left for catch-up.
-		if pp.Pos.Seq != st.Committed.Seq+1 {
-			m.log.Warn("settle: pending write does not follow the committed one, left alone", "partition", p,
-				"pending", pp.Pos.String(), "committed", st.Committed.String())
-			return
-		}
-		// A copy: what State returned is the Store's, and may be shared with it.
-		w := *pp
-		w.Prev = st.Committed // this node's own label of the Seq before: see handleWrite
-		if err := m.commit(p, &w); err != nil {
-			m.log.Error("settle: commit failed", "partition", p, "error", err)
-		}
-		return
-	}
-	if err := m.store.SetPending(p, nil); err != nil {
-		m.log.Error("settle: clearing the pending write failed", "partition", p, "error", err)
+	// A copy: what State returned is the Store's, and may be shared with it.
+	w := *pp
+	w.Prev = st.Committed // this node's own label of the Seq before: see handleWrite
+	if err := m.commit(p, &w); err != nil {
+		m.log.Error("settle: commit failed", "partition", p, "error", err)
 	}
 }
 

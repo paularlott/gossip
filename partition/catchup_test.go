@@ -186,3 +186,24 @@ func TestCatchUpAsyncRunsOnePerPartition(t *testing.T) {
 		t.Error("the in-flight flag was not cleared")
 	}
 }
+
+// A partition whose full copy was cut short (Incomplete) asks for everything at once: the changes after its committed
+// position would not restore the records the copy removed.
+func TestCatchUpOfAnIncompletePartitionCopiesItWhole(t *testing.T) {
+	e1 := ep(1, 2)
+	fc := newFakeCluster(t, 2, 3, nil)
+	fc.attach()
+	f, src := fc.nodes[0], fc.nodes[1]
+	src.store.seedCommitted(1, 6, e1)
+	f.store.seedCommitted(1, 3, e1)
+	f.store.seedIncomplete(1)
+	if err := f.m.catchUp(t.Context(), 1, src.id, false); err != nil {
+		t.Fatal(err)
+	}
+	if d := f.store.data(1); !slices.Equal(d, src.store.data(1)) {
+		t.Fatalf("data %v, want %v", d, src.store.data(1))
+	}
+	if st := f.store.state(1); st.Incomplete || st.Committed != (Pos{Epoch: e1, Seq: 6}) {
+		t.Fatalf("%+v", st)
+	}
+}

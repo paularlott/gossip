@@ -40,10 +40,12 @@ func TestSettleTable(t *testing.T) {
 			Pos{Epoch: e1, Seq: 4}, "", 4},
 		{"same epoch, seq < OC: commit", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
 			Pos{Epoch: e1, Seq: 7}, "", 4},
-		{"other epoch, seq <= OC: clear", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
-			Pos{Epoch: e2, Seq: 4}, "", 3},
-		{"other epoch, seq < OC: clear", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
-			Pos{Epoch: e2, Seq: 8}, "", 3},
+		// Decided, but kept until a commit or an import passes it: it may be the committed write itself, under another label,
+		// and this node one of the majority that stored it (TestTakeoverAfterSettleReproposesTheCommittedWrite).
+		{"other epoch, seq <= OC: keep", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
+			Pos{Epoch: e2, Seq: 4}, "p", 3},
+		{"other epoch, seq < OC: keep", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
+			Pos{Epoch: e2, Seq: 8}, "p", 3},
 		{"seq > OC (same epoch): keep", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
 			Pos{Epoch: e1, Seq: 3}, "p", 3},
 		{"seq > OC (other epoch): keep", &Write{Pos: Pos{Epoch: e1, Seq: 4}, Prev: Pos{Epoch: e1, Seq: 3}, Data: []byte("p")},
@@ -219,7 +221,7 @@ func TestWriteHandlerPendingAndCommittedTable(t *testing.T) {
 			t.Errorf("data %v", d)
 		}
 	})
-	t.Run("pending of another epoch within OC is cleared, then catch-up is needed", func(t *testing.T) {
+	t.Run("pending of another epoch within OC is kept, and the catch-up that is needed clears it", func(t *testing.T) {
 		s := newFollower(t, 3, e1)
 		// The follower holds a never-committed write (e1,4); the committed write at 4 is the new owner's.
 		s.f.store.seedPending(1, s.write(e1, 4, c3, "stale"))
@@ -234,13 +236,13 @@ func TestWriteHandlerPendingAndCommittedTable(t *testing.T) {
 		if resp.OK || !resp.NeedCatchUp {
 			t.Fatalf("want NeedCatchUp: %+v", resp)
 		}
-		if st := s.f.store.state(1); st.Pending != nil {
-			t.Fatalf("the undecided stale pending write was kept: %+v", st.Pending)
-		}
 		s.f.m.wg.Wait() // the asynchronous catch-up
 		st := s.f.store.state(1)
 		if st.Committed != real4 {
 			t.Fatalf("catch-up did not bring the committed write: %+v", st)
+		}
+		if st.Pending != nil {
+			t.Fatalf("the pending write the catch-up passed was kept: %+v", st.Pending)
 		}
 		if d := s.f.store.data(1); len(d) != 4 || d[3] != "real4" {
 			t.Errorf("data %v", d)
@@ -322,4 +324,33 @@ func TestWriteHandlerPendingAndCommittedTable(t *testing.T) {
 			t.Fatalf("%+v", resp)
 		}
 	})
+}
+
+// A node whose copy of the partition is Incomplete acknowledges no write, not even one it committed before the copy
+// began (its data is gone), and commits nothing; it asks to catch up instead, and keeps its pending write.
+func TestIncompletePartitionAcknowledgesNoWrite(t *testing.T) {
+	e1 := ep(1, 2)
+	c3, c4 := Pos{Epoch: e1, Seq: 3}, Pos{Epoch: e1, Seq: 4}
+	for _, tc := range []struct {
+		name string
+		seq  uint64
+		prev Pos
+	}{
+		{"the next write", 5, c4},
+		{"the write it holds pending", 4, c3},
+		{"a write it had committed", 3, Pos{Epoch: e1, Seq: 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFollower(t, 3, e1)
+			s.f.store.seedPending(1, s.write(e1, 4, c3, "w4"))
+			s.f.store.seedIncomplete(1)
+			resp := s.f.m.handleWrite(nid(2), &writeReq{Size: 3, Write: s.write(e1, tc.seq, tc.prev, "w"), OwnerCommitted: c4})
+			if resp.OK || !resp.NeedCatchUp {
+				t.Fatalf("%+v", resp)
+			}
+			if st := s.f.store.state(1); !st.Incomplete || st.Committed != c3 || st.Pending == nil || string(st.Pending.Data) != "w4" {
+				t.Errorf("%+v", st)
+			}
+		})
+	}
 }

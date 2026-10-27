@@ -14,6 +14,9 @@ var (
 	errRetryLater = errors.New("partition: epoch not above the stored promise, retrying")
 	// errNotCandidate ends a takeover whose node became ineligible, or found the partition diverged, meanwhile.
 	errNotCandidate = errors.New("partition: no longer a candidate for the partition")
+	// errIncomplete ends a takeover by a node whose copy of the partition is Incomplete (State): it would own a partition
+	// whose data it does not hold. It backs off, and another node takes over.
+	errIncomplete = errors.New("partition: this node's copy of the partition is incomplete")
 )
 
 // ownershipLoop runs the ownership checks every HeartbeatInterval.
@@ -242,6 +245,9 @@ func (m *Manager) takeover(ctx context.Context, p int) error {
 	st, err := m.store.State(p)
 	if err != nil {
 		return err
+	}
+	if st.Incomplete {
+		return errIncomplete
 	}
 	if e.Compare(st.Promised) <= 0 {
 		ps.raise(st.Promised.Counter)

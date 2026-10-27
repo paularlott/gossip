@@ -151,6 +151,12 @@ type State struct {
 	Committed Pos
 	// Pending is the at most one stored write that is not known to be committed; nil if none.
 	Pending *Write
+	// Incomplete says that the partition's data is not all here: a full Import that applies its stream in batches began
+	// (and may have removed records) and has not finished. Committed and Pending stay what they were before it began
+	// (what this node stored, which every promise it gives must still report), but the data is not theirs: the node
+	// asks for a full copy when it catches up, acknowledges no write, commits nothing and does not take the partition
+	// over, until an Import ends it. A Store whose full Import is atomic never reports it.
+	Incomplete bool
 }
 
 // majority is the number of nodes that make a majority of a cluster of size nodes. It is computed from the
