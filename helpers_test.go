@@ -92,7 +92,7 @@ func (m *mockTransport) setSendError(err error) {
 // replyWith makes SendWithReply answer every request with v, marshalled with c.
 func (m *mockTransport) replyWith(c codec.Serializer, v interface{}) {
 	m.mu.Lock()
-	m.replyFn = func(node *Node, _ *Packet) (*Packet, error) {
+	m.replyFn = func(node *Node, req *Packet) (*Packet, error) {
 		payload, err := c.Marshal(v)
 		if err != nil {
 			return nil, err
@@ -101,6 +101,7 @@ func (m *mockTransport) replyWith(c codec.Serializer, v interface{}) {
 		reply.MessageType = replyMsg
 		reply.SenderID = node.ID
 		reply.MessageID = MessageID(hlc.Now())
+		reply.ReplyTo = req.MessageID
 		reply.SetCodec(c)
 		reply.SetPayload(payload)
 		return reply, nil

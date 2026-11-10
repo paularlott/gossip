@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	"github.com/paularlott/gossip/hlc"
 )
 
 // Message handler for fire and forget messages.
@@ -87,11 +85,7 @@ func (r *deferredReplier) Reply(payload interface{}, err error) {
 		packet.Release()
 		return
 	}
-	packet.MessageType = replyMsg
-	packet.SenderID = c.localNode.ID
-	packet.MessageID = MessageID(hlc.Now())
-	packet.TTL = 1
-	packet.payload = data
+	packet.makeReply(c.localNode.ID, data)
 
 	// On success the reply box owns the reference; it was refused when the requester stopped waiting.
 	if err := packet.SendReply(); err != nil {
@@ -124,17 +118,12 @@ func (mh *msgHandler) dispatch(c *Cluster, node *Node, packet *Packet) error {
 		// fire-and-forget packet may at this moment be shared with the
 		// broadcast queue for forwarding, so it must never be mutated.
 		if replyData != nil && c != nil && packet.awaitingReply() {
-			// Update the packet with the reply data
-			packet.AddRef()
-			packet.MessageType = replyMsg
-			packet.SenderID = c.localNode.ID
-			packet.MessageID = MessageID(hlc.Now())
-			packet.TTL = 1
-			packet.payload, err = packet.codec.Marshal(replyData)
+			data, err := packet.codec.Marshal(replyData)
 			if err != nil {
-				packet.Release()
 				return err
 			}
+			packet.AddRef()
+			packet.makeReply(c.localNode.ID, data)
 
 			if err := packet.SendReply(); err != nil {
 				packet.Release()

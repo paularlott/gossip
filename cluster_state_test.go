@@ -308,7 +308,8 @@ func (m *joinReplyTransport) SendWithReply(node *Node, packet *Packet) (*Packet,
 	}
 	reply := NewPacket()
 	reply.SetCodec(codec.NewJSONCodec())
-	reply.SetPayload(payload)
+	reply.makeReply(EmptyNodeID, payload)
+	reply.ReplyTo = packet.MessageID
 	return reply, nil
 }
 

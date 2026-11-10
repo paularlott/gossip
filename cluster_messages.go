@@ -3,6 +3,7 @@ package gossip
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/paularlott/gossip/hlc"
 )
@@ -154,6 +155,10 @@ func (c *Cluster) sendToWithResponseContext(ctx context.Context, dstNode *Node, 
 		return fmt.Errorf("nil response from peer")
 	}
 	defer responsePacket.Release()
+	if err := c.checkReply(packet, responsePacket, dstNode.ID); err != nil {
+		dstNode.ClearAddress()
+		return err
+	}
 
 	// Unmarshal the response payload
 	if responsePayload != nil {
@@ -165,6 +170,24 @@ func (c *Cluster) sendToWithResponseContext(ctx context.Context, dstNode *Node, 
 	}
 
 	return nil
+}
+
+// checkReply refuses a packet that is not the reply to request from the node asked (from; unknown while joining a
+// peer by its address): a reply answers the request it names. Replies are read straight off the exchange, not through
+// handleIncomingPacket's history, so without this a reply captured from an earlier exchange, sealed with the cluster
+// key, would be taken as the answer to any later request. A peer of the release before ReplyTo names no request: its
+// reply is held to MaxPacketAge, as a request is.
+func (c *Cluster) checkReply(request, reply *Packet, from NodeID) error {
+	if reply.MessageType != replyMsg || (from != EmptyNodeID && reply.SenderID != from) {
+		return fmt.Errorf("reply not from the peer asked")
+	}
+	if reply.ReplyTo == request.MessageID {
+		return nil
+	}
+	if reply.ReplyTo == 0 && (c.config.MaxPacketAge == 0 || withinAge(reply.MessageID, c.config.MaxPacketAge, time.Now())) {
+		return nil
+	}
+	return fmt.Errorf("reply does not answer the request")
 }
 
 // sendWithReply runs the transport's exchange within ctx: through ContextTransport when the transport is one,
