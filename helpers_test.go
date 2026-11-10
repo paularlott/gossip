@@ -100,8 +100,7 @@ func (m *mockTransport) replyWith(c codec.Serializer, v interface{}) {
 		reply := NewPacket()
 		reply.MessageType = replyMsg
 		reply.SenderID = node.ID
-		reply.MessageID = MessageID(hlc.Now())
-		reply.ReplyTo = req.MessageID
+		reply.MessageID = req.MessageID
 		reply.SetCodec(c)
 		reply.SetPayload(payload)
 		return reply, nil

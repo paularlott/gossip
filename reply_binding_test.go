@@ -2,18 +2,15 @@ package gossip
 
 import (
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/paularlott/gossip/hlc"
 	"github.com/stretchr/testify/require"
 )
 
-// A reply is taken only from the node asked and only when it answers this request: a reply captured from an earlier
-// exchange (sealed with the cluster key, so it decrypts) is refused. A reply that names no request (a peer of the
-// release before ReplyTo) is held to MaxPacketAge, as a request is.
+// A reply is taken only from the node asked and only when it answers this request (it carries the request's
+// MessageID): a reply captured from an earlier exchange (sealed with the cluster key, so it decrypts) is refused.
 func TestReplyBoundToItsRequest(t *testing.T) {
-	c := newUnitCluster(t, func(cfg *Config) { cfg.MaxPacketAge = 2 * time.Minute })
+	c := newUnitCluster(t)
 	peer := newNode(NodeID(uuid.New()), "127.0.0.1:1")
 	var captured MessageID // the request id of the first exchange, which the replayed reply answers
 	answer := func(edit func(req, reply *Packet)) {
@@ -22,8 +19,8 @@ func TestReplyBoundToItsRequest(t *testing.T) {
 		tr.replyFn = func(node *Node, req *Packet) (*Packet, error) {
 			reply := NewPacket()
 			reply.SetCodec(c.config.MsgCodec)
+			reply.MessageID = req.MessageID
 			reply.makeReply(node.ID, []byte(`"pong"`))
-			reply.ReplyTo = req.MessageID
 			edit(req, reply)
 			return reply, nil
 		}
@@ -37,7 +34,7 @@ func TestReplyBoundToItsRequest(t *testing.T) {
 	answer(func(req, _ *Packet) { captured = req.MessageID })
 	require.NoError(t, ask(), "the reply to this request")
 
-	answer(func(_, reply *Packet) { reply.ReplyTo = captured })
+	answer(func(_, reply *Packet) { reply.MessageID = captured })
 	require.Error(t, ask(), "a reply to an earlier request")
 
 	answer(func(_, reply *Packet) { reply.SenderID = NodeID(uuid.New()) })
@@ -45,13 +42,4 @@ func TestReplyBoundToItsRequest(t *testing.T) {
 
 	answer(func(_, reply *Packet) { reply.MessageType = UserMsg + 90 })
 	require.Error(t, ask(), "a request, not a reply")
-
-	answer(func(_, reply *Packet) { reply.ReplyTo = 0 })
-	require.NoError(t, ask(), "a fresh reply from a peer of the previous release")
-
-	answer(func(_, reply *Packet) {
-		reply.ReplyTo = 0
-		reply.MessageID = MessageID(hlc.FromTime(time.Now().Add(-time.Hour)))
-	})
-	require.Error(t, ask(), "an old reply that names no request")
 }

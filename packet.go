@@ -85,7 +85,6 @@ type Packet struct {
 	TargetNodeID *NodeID     `msgpack:"ti,omitempty" json:"ti,omitempty"`   // Optional: for direct messages
 	Tag          *string     `msgpack:"tag,omitempty" json:"tag,omitempty"` // Optional: for tag-based routing
 	MessageID    MessageID   `msgpack:"mi" json:"mi"`
-	ReplyTo      MessageID   `msgpack:"rt,omitempty" json:"rt,omitempty"` // On a reply: the MessageID of the request it answers
 	TTL          uint8       `msgpack:"ttl" json:"ttl"`
 	payload      []byte
 	codec        codec.Serializer
@@ -133,7 +132,6 @@ func (p *Packet) Release() {
 		p.SenderID = EmptyNodeID
 		p.TargetNodeID = nil
 		p.Tag = nil
-		p.ReplyTo = 0
 		p.keyed = false
 		p.reliable = false
 
@@ -149,13 +147,12 @@ func (p *Packet) Codec() codec.Serializer {
 	return p.codec
 }
 
-// makeReply turns a request into its reply from the node from, naming the request it answers (ReplyTo): the requester
-// takes no other packet as the reply, a reply captured from an earlier exchange included (checkReply).
+// makeReply turns a request into its reply from the node from. The reply keeps the request's MessageID, so it names
+// the request it answers: the requester takes no other packet as the reply, a reply captured from an earlier exchange
+// included (checkReply).
 func (p *Packet) makeReply(from NodeID, data []byte) {
 	p.MessageType = replyMsg
 	p.SenderID = from
-	p.ReplyTo = p.MessageID
-	p.MessageID = MessageID(hlc.Now())
 	p.TTL = 1
 	p.payload = data
 }
