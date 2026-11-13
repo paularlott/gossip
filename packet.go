@@ -318,7 +318,8 @@ type metadataUpdateMessage struct {
 	Metadata          map[string]interface{} `msgpack:"md" json:"md"`
 	NodeState         NodeState              `msgpack:"state" json:"state"`
 	KeyWindow         uint32                 `msgpack:"kw,omitempty" json:"kw,omitempty"`
-	Caps              uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"` // capabilities of the sender (capKeepsConnections)
+	Caps              uint32                 `msgpack:"cp,omitempty" json:"cp,omitempty"`     // capabilities of the sender (capKeepsConnections)
+	AdvertiseAddr     string                 `msgpack:"addr,omitempty" json:"addr,omitempty"` // the sender's address ("" from a node that predates it)
 }
 
 type pingMessage struct {

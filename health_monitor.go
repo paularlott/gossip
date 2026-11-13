@@ -232,11 +232,7 @@ func (hm *HealthMonitor) pingNode(node *Node) bool {
 	}
 
 	// If we got a response, update our view of the node's address if needed
-	if pongMessage.AdvertiseAddr != "" && pongMessage.AdvertiseAddr != node.AdvertisedAddr() {
-		node.SetAdvertisedAddr(pongMessage.AdvertiseAddr)
-		node.ClearAddress() // Force re-resolution
-		hm.cluster.logger.Trace("updated node address", "node_id", node.ID.String(), "new_address", pongMessage.AdvertiseAddr)
-	}
+	hm.cluster.learnAddress(node, pongMessage.AdvertiseAddr)
 
 	node.learn(pongMessage.KeyWindow, pongMessage.Caps)
 

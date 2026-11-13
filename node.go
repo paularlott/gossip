@@ -176,6 +176,20 @@ func (node *Node) SetAdvertisedAddr(addr string) {
 	node.advertiseAddr = addr
 }
 
+// updateAdvertisedAddr takes the address a node gave for itself and reports whether it differs from the one held; the
+// address resolved from the old one is then dropped, so the next send resolves the new one. An empty address (a
+// message from a node that sends none) changes nothing.
+func (node *Node) updateAdvertisedAddr(addr string) bool {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if addr == "" || addr == node.advertiseAddr {
+		return false
+	}
+	node.advertiseAddr = addr
+	node.address.Clear()
+	return true
+}
+
 // GetObservedStateTime returns the timestamp associated with the current observed state.
 func (node *Node) GetObservedStateTime() hlc.Timestamp {
 	node.mu.RLock()

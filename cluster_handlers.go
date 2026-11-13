@@ -46,9 +46,17 @@ func (c *Cluster) handleJoin(sender *Node, packet *Packet) (interface{}, error) 
 		node.observedState = joinMsg.State
 		node.mu.Unlock()
 
-		node = c.nodes.addIfNotExists(node)
+		// Known after all (added since the sender was looked up): its join says where it is.
+		existing := c.nodes.addIfNotExists(node)
+		if existing != node {
+			c.learnAddress(existing, joinMsg.AdvertiseAddr)
+		}
+		node = existing
 	} else {
 		node = sender
+		// A node we know that joins again has restarted, perhaps at another address: take the one it gives before
+		// its state, so that whoever is told of the state change already has the new address.
+		c.learnAddress(node, joinMsg.AdvertiseAddr)
 		// Tags are immutable and set at node creation, cannot update existing node tags
 		c.nodes.updateState(node.ID, joinMsg.State)
 	}
@@ -153,6 +161,12 @@ func (c *Cluster) handleMetadataUpdate(sender *Node, packet *Packet) error {
 	}
 
 	sender.learn(metadataUpdate.KeyWindow, metadataUpdate.Caps)
+	// A metadata update is the sender's own and goes out every MetadataGossipInterval, so it repairs an address that a
+	// join did not (a join that was lost, or answered before this node knew the sender). It is forwarded, so one from
+	// before the node moved can come late: only an update no older than the metadata held is taken.
+	if !metadataUpdate.MetadataTimestamp.Before(sender.metadata.GetTimestamp()) {
+		c.learnAddress(sender, metadataUpdate.AdvertiseAddr)
+	}
 	if sender.metadata.update(metadataUpdate.Metadata, metadataUpdate.MetadataTimestamp, false) {
 		c.nodes.notifyMetadataChanged(sender)
 	}
@@ -177,6 +191,7 @@ func (c *Cluster) handlePing(sender *Node, packet *Packet) (interface{}, error) 
 
 	if sender != nil {
 		sender.learn(pingMsg.KeyWindow, pingMsg.Caps)
+		c.learnAddress(sender, pingMsg.AdvertiseAddr) // a ping comes straight from the node
 	}
 
 	// If we don't know the sender, add them to our cluster view

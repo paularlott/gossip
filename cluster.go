@@ -170,6 +170,7 @@ func NewCluster(config *Config) (*Cluster, error) {
 			NodeState:         cluster.localNode.GetObservedState(),
 			KeyWindow:         cluster.keyWindow(),
 			Caps:              cluster.capabilities(),
+			AdvertiseAddr:     cluster.localNode.AdvertisedAddr(),
 		})
 	})
 
@@ -252,6 +253,21 @@ func (c *Cluster) waitForJitter(delay time.Duration) bool {
 		return true
 	case <-c.shutdownContext.Done():
 		return false
+	}
+}
+
+// learnAddress takes the address a node gave for itself, in a message of its own (a join, a join reply, a ping, a
+// pong or a metadata update), when it differs from the one held: the node restarted somewhere else under the same ID
+// (a rescheduled container that kept its data). Left as it was, this node would keep dialling the old address for as
+// long as it runs, while the node's own traffic keeps it counted alive. Addresses other nodes report (state exchange,
+// the list of a join reply) are never taken for a known node: see combineStates.
+func (c *Cluster) learnAddress(node *Node, addr string) {
+	if node == nil || node.ID == c.localNode.ID {
+		return
+	}
+	old := node.AdvertisedAddr()
+	if node.updateAdvertisedAddr(addr) {
+		c.logger.Info("node address changed", "node_id", node.ID.String(), "old_address", old, "new_address", addr)
 	}
 }
 
@@ -369,6 +385,9 @@ func (c *Cluster) joinPeer(peerAddr string) {
 	c.remembered(joinReply.NodeID)
 	node = newNodeWithTags(joinReply.NodeID, joinReply.AdvertiseAddr, joinReply.Tags)
 	node = c.nodes.addIfNotExists(node)
+	// A node already known (from before it moved, or from the list of another node's join reply, which may be out of
+	// date) has just told us its address itself.
+	c.learnAddress(node, joinReply.AdvertiseAddr)
 	// A peer held dead has just answered us itself: it is alive, as a dead-node retry that got an answer finds. Left
 	// dead, every join reply listing it queues another join to it, and two such peers listing each other keep the join
 	// worker dialling them without pause (a connection each) until the next dead-node retry.
@@ -1238,6 +1257,7 @@ func (c *Cluster) gossipMetadata() {
 			NodeState:         c.localNode.GetObservedState(),
 			KeyWindow:         c.keyWindow(),
 			Caps:              c.capabilities(),
+			AdvertiseAddr:     c.localNode.AdvertisedAddr(),
 		},
 	)
 }
